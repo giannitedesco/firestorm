@@ -1,5 +1,5 @@
-#ifndef __PKT_ETH_HEADER_INCLUDED__
-#define __PKT_ETH_HEADER_INCLUDED__
+#ifndef _PKT_ETH_HEADER_INCLUDED_
+#define _PKT_ETH_HEADER_INCLUDED_
 
 /* Ethernet II */
 struct pkt_ethhdr {
@@ -26,7 +26,7 @@ struct pkt_llchdr {
 struct pkt_snaphdr {
 	uint8_t		org[3];
 	uint16_t	proto;
-}__attribute__((packed));
+} _packed;
 
 
-#endif /* __PKT_ETH_HEADER_INCLUDED__ */
+#endif /* _PKT_ETH_HEADER_INCLUDED_ */

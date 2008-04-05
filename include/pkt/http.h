@@ -1,5 +1,5 @@
-#ifndef __PKT_HTTP_HEADER_INCLUDED__
-#define __PKT_HTTP_HEADER_INCLUDED__
+#ifndef _PKT_HTTP_HEADER_INCLUDED_
+#define _PKT_HTTP_HEADER_INCLUDED_
 
 #define HTTP_DEFAULT_PORT	80
 
@@ -49,4 +49,4 @@ struct http_flow {
 	struct http_fside server;
 };
 
-#endif /* __PKT_HTTP_HEADER_INCLUDED__ */
+#endif /* _PKT_HTTP_HEADER_INCLUDED_ */

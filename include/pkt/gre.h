@@ -1,5 +1,5 @@
-#ifndef __PKT_GRE_HEADER_INCLUDED__
-#define __PKT_GRE_HEADER_INCLUDED__
+#ifndef _PKT_GRE_HEADER_INCLUDED_
+#define _PKT_GRE_HEADER_INCLUDED_
 
 /*
 * 2 csum, res, ver
@@ -13,4 +13,4 @@ struct pkt_grehdr {
 	uint16_t	proto;
 };
 
-#endif /* __PKT_GRE_HEADER_INCLUDED__ */
+#endif /* _PKT_GRE_HEADER_INCLUDED_ */

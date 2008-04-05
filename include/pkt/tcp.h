@@ -1,5 +1,5 @@
-#ifndef __PKT_TCP_HEADER_INCLUDED__
-#define __PKT_TCP_HEADER_INCLUDED__
+#ifndef _PKT_TCP_HEADER_INCLUDED_
+#define _PKT_TCP_HEADER_INCLUDED_
 
 #define FLAG_TCP_CSUM	0x001 /* Checksum OK */
 #define FLAG_TCP_STATE	0x002 /* Valid stream */
@@ -63,7 +63,7 @@
 typedef union _tcpflags {
 	uint8_t flags;
 	struct {
-#if __BYTE_ORDER == __LITTLE_ENDIAN
+#if _BYTE_ORDER == _LITTLE_ENDIAN
 	uint8_t fin:1;
 	uint8_t syn:1;
 	uint8_t rst:1;
@@ -72,7 +72,7 @@ typedef union _tcpflags {
 	uint8_t urg:1;
 	uint8_t ece:1;
 	uint8_t cwr:1;
-#elif __BYTE_ORDER == __BIG_ENDIAN
+#elif _BYTE_ORDER == _BIG_ENDIAN
 	uint8_t cwr:1;
 	uint8_t ece:1;
 	uint8_t urg:1;
@@ -92,10 +92,10 @@ struct pkt_tcphdr
 	uint16_t	sport,dport;
 	uint32_t	seq;
 	uint32_t	ack;
-#if __BYTE_ORDER == __LITTLE_ENDIAN
+#if _BYTE_ORDER == _LITTLE_ENDIAN
 	uint8_t	res1:4;	/* ??? */
 	uint8_t	doff:4;
-#elif __BYTE_ORDER == __BIG_ENDIAN
+#elif _BYTE_ORDER == _BIG_ENDIAN
 	uint8_t	doff:4;
 	uint8_t	res1:4;	/* ??? */
 #endif
@@ -218,11 +218,11 @@ struct tcp_serial {
 };
 
 /* Wrap-safe TCP seq number comparison */
-static __inline__ int tcp_before(uint32_t s1, uint32_t s2) {
+static inline int tcp_before(uint32_t s1, uint32_t s2) {
 	return (int32_t)(s1-s2) < 0;
 }
 
-static __inline__ int tcp_after(uint32_t s1, uint32_t s2) {
+static inline int tcp_after(uint32_t s1, uint32_t s2) {
 	return (int32_t)(s2-s1) < 0;
 }
-#endif /* __PKT_TCP_HEADER_INCLUDED__ */
+#endif /* _PKT_TCP_HEADER_INCLUDED_ */

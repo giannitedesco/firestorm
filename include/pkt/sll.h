@@ -1,5 +1,5 @@
-#ifndef __PKT_SLL_HEADER_INCLUDED__
-#define __PKT_SLL_HEADER_INCLUDED__
+#ifndef _PKT_SLL_HEADER_INCLUDED_
+#define _PKT_SLL_HEADER_INCLUDED_
 
 #define LINUX_SLL_HOST		0
 #define LINUX_SLL_BROADCAST	1
@@ -19,4 +19,4 @@ struct pkt_sllhdr {
 	uint16_t	sll_protocol; /* protocol */
 };
 
-#endif /* __PKT_SLL_HEADER_INCLUDED__ */
+#endif /* _PKT_SLL_HEADER_INCLUDED_ */

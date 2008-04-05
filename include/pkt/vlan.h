@@ -1,9 +1,9 @@
-#ifndef __PKT_VLAN_HEADER_INCLUDED__
-#define __PKT_VLAN_HEADER_INCLUDED__
+#ifndef _PKT_VLAN_HEADER_INCLUDED_
+#define _PKT_VLAN_HEADER_INCLUDED_
 
 struct pkt_vlanhdr {
 	uint16_t	vlan;
 	uint16_t	proto;
 };
 
-#endif /* __PKT_VLAN_HEADER_INCLUDED__ */
+#endif /* _PKT_VLAN_HEADER_INCLUDED_ */

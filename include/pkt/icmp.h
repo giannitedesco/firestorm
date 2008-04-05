@@ -1,5 +1,5 @@
-#ifndef __PKT_ICMP_HEADER_INCLUDED__
-#define __PKT_ICMP_HEADER_INCLUDED__
+#ifndef _PKT_ICMP_HEADER_INCLUDED_
+#define _PKT_ICMP_HEADER_INCLUDED_
 
 #define ICMP_ECHOREPLY		0	/* Echo Reply			*/
 #define ICMP_DEST_UNREACH	3	/* Destination Unreachable	*/
@@ -58,4 +58,4 @@ struct pkt_icmphdr {
 	}un;
 };
 
-#endif /* __PKT_ICMP_HEADER_INCLUDED__ */
+#endif /* _PKT_ICMP_HEADER_INCLUDED_ */

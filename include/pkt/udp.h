@@ -1,5 +1,5 @@
-#ifndef __PKT_UDP_HEADER_INCLUDED__
-#define __PKT_UDP_HEADER_INCLUDED__
+#ifndef _PKT_UDP_HEADER_INCLUDED_
+#define _PKT_UDP_HEADER_INCLUDED_
 
 struct pkt_udphdr {
 	uint16_t	sport,dport;
@@ -7,4 +7,4 @@ struct pkt_udphdr {
 	uint16_t	csum;
 };
 
-#endif /* __PKT_UDP_HEADER_INCLUDED__ */
+#endif /* _PKT_UDP_HEADER_INCLUDED_ */
