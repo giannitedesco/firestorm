@@ -19,7 +19,8 @@
 #define _public __declspec(dllexport)
 #endif
 
-#if __GNUC__
+#if __GNUC__ > 1
+#define _packed __attribute__((packed))
 #define _noreturn __attribute__((noreturn))
 #define _purefn __attribute__((pure))
 #define _printf(x,y) __attribute__((format(printf,x,y)))
@@ -33,6 +34,10 @@
 
 #if __GNUC__ > 3 || (__GNUC__ == 3 && __GNUC_MINOR__ >= 4)
 #define _check_result __attribute__((warn_unused_result))
+#endif
+
+#ifndef _packed
+#define _packed
 #endif
 
 #ifndef _private
