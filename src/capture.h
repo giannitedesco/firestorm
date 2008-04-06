@@ -1,3 +1,8 @@
+/*
+ * This file is part of Firestorm NIDS.
+ * Copyright (c) 2008 Gianni Tedesco <gianni@scaramanga.co.uk>
+ * Released under the terms of the GNU GPL version 3
+*/
 #ifndef _INTERNAL_CAPTURE_HEADER_INCLUDED_
 #define _INTERNAL_CAPTURE_HEADER_INCLUDED_
 
@@ -28,5 +33,7 @@ struct _capdev {
 
 	const char *c_name;
 };
+
+void _source_end(struct _source *s) _nonull(1);
 
 #endif /* _INTERNAL_CAPTURE_HEADER_INCLUDED_ */

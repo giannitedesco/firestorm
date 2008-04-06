@@ -10,3 +10,11 @@
 #include <f_capture.h>
 
 #include "capture.h"
+
+void _source_end(struct _source *s)
+{
+	if ( s ) {
+		assert(s->s_capdev != NULL);
+		s->s_capdev->c_dtor(s);
+	}
+}
