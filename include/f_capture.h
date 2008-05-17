@@ -6,17 +6,43 @@
 #ifndef _FIRESTORM_CAPTURE_HEADER_INCLUDED_
 #define _FIRESTORM_CAPTURE_HEADER_INCLUDED_
 
-typedef struct _source *source_t;
-typedef struct _capdev *capdev_t;
-typedef struct _pipeline *pipeline_t;
+struct _source {
+	const struct _capdev *s_capdev;
+	const char *s_name;
+	linktype_t s_linktype;
+	unsigned int s_swab;
+	struct list_head s_list;
+};
 
-/* Open a tcpdump file */
-source_t capture_tcpdump_open(const char *fn);
+/** Are timestamps on packets the current system time? */
+#define CAPDEV_REALTIME	(1<<0)
+/** The only way a capture can be "asynchronous" is to use the nbio API. */
+#define CAPDEV_ASYNC	(1<<1)
 
-/* Capture / decode / analyze mainloop */
-pipeline_t pipeline_new(void) _malloc;
-void pipeline_free(pipeline_t p);
-int pipeline_add_source(pipeline_t p, source_t s);
-int pipeline_go(pipeline_t p);
+struct _capdev {
+	bitmask_t c_flags;
+
+	struct _pkt *(*c_dequeue)(struct _source *s);
+
+	off_t (*cf_index)(struct _pkt *pkt);
+	struct _pkt *(*c_query)(struct _source *s, off_t off);
+
+	void (*c_rewind)(struct _source *s);
+
+	void (*c_dtor)(struct _source *s);
+
+	const char *c_name;
+};
+
+void _source_free(struct _source *s) _nonull(1);
+
+static inline uint16_t source_swap16(struct _source *src, uint16_t i)
+{
+	return (src->s_swab) ? sys_bswap16(i) : i;
+}
+static inline uint32_t source_swap32(struct _source *src, uint32_t i)
+{
+	return (src->s_swab) ? sys_bswap32(i) : i;
+}
 
 #endif /* _FIRESTORM_CAPTURE_HEADER_INCLUDED_ */

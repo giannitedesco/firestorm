@@ -9,9 +9,7 @@
 #include <firestorm.h>
 #include <f_capture.h>
 
-#include "capture.h"
-
-void _source_end(struct _source *s)
+void _source_free(struct _source *s)
 {
 	if ( s ) {
 		assert(s->s_capdev != NULL);

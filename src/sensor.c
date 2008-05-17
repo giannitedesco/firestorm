@@ -17,8 +17,13 @@ int main(int argc, char **argv)
 	mesg(M_INFO,"This program is free software; released under "
 		"the GNU GPL v3 (see: COPYING)");
 
-	src = capture_tcpdump_open("./test.cap");
-	assert(src != NULL);
+	if ( argc > 1 ) {
+		src = capture_tcpdump_open(argv[1]);
+	}else{
+		src = capture_tcpdump_open("./test.cap");
+	}
+	if ( src == NULL )
+		return EXIT_FAILURE;
 
 	p = pipeline_new();
 	assert(p != NULL);

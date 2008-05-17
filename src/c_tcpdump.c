@@ -10,8 +10,8 @@
 */
 #include <firestorm.h>
 #include <f_capture.h>
+#include <f_packet.h>
 #include <f_fdctl.h>
-#include "capture.h"
 
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -60,9 +60,7 @@ struct tcpd_priv {
 	void		*cur;
 	int		swap;
 	size_t		phsiz;
-#if 0
-	struct proto	*protocol;
-#endif
+	unsigned int	protocol;
 	void		*map;
 	unsigned int	map_size;
 	int		fd;
@@ -119,14 +117,11 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 	/* Check what format the file is */
 	for(p->phsiz=i=0; magics[i].name; i++) {
 		if ( fh->magic == magics[i].magic ) {
-			//p->def_flags = FP_PROMISC|FP_REAL;
-
 			if ( magics[i].swap ) {
 				p->r32 = read32_swap;
-				//p->def_flags |= capdev_endian_flag(1);
+				p->src.s_swab = 1;
 			}else{
 				p->r32 = read32;
-				//p->def_flags |= capdev_endian_flag(0);
 			}
 
 			p->phsiz = magics[i].size;
@@ -147,16 +142,14 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 
 	/* Make sure we can decode this link type, not much point
 	 * carrying on if we can't decode anything ;)  */
-#if 0
-	p->protocol = decode_subproto("__pcap_dlt", p->r32(fh->linktype));
-	if ( p->protocol == NULL ) {
-		mesg(M_ERR,"tcpdump: %s: Unknown link type (0x%x)",
+	p->src.s_linktype = linktype_by_id(p->r32(fh->linktype));
+	if ( p->src.s_linktype == NULL ) {
+		mesg(M_ERR,"tcpdump: %s: Unknown linktype (0x%x)",
 			fn, p->r32(fh->linktype));
 		munmap(p->map, p->map_size);
 		fd_close(p->fd);
 		return 0;
 	}
-#endif
 	return 1;
 }
 
@@ -200,6 +193,7 @@ static struct _pkt *tcpd_dequeue(struct _source *s)
 	p->pkt.pkt_caplen = p->r32(h->caplen);
 	p->pkt.pkt_base = p->cur;
 	p->pkt.pkt_end = p->cur + p->pkt.pkt_caplen;
+	p->pkt.pkt_source = s;
 
 	/* advance the file pointer */
 	p->cur += p->pkt.pkt_caplen;

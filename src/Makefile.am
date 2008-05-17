@@ -6,12 +6,17 @@ INCLUDES = \
 bin_PROGRAMS = firestorm
 
 firestorm_SOURCES = \
-	c_tcpdump.c = \
+	c_tcpdump.c \
+	lt_ether.c \
+	lt_null.c \
+	lt_sll.c \
 	pipeline.c \
-	capture.c = \
+	capture.c \
+	decode.c \
 	s_mesg.c \
 	timers.c \
 	sensor.c \
 	fdctl.c \
 	mesg.c \
+	util.c \
 	os.c

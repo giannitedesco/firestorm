@@ -8,8 +8,7 @@
 
 #include <firestorm.h>
 #include <f_capture.h>
-
-#include "capture.h"
+#include <f_decode.h>
 
 struct _pipeline {
 	struct list_head p_sources;
@@ -33,8 +32,10 @@ void pipeline_free(pipeline_t p)
 
 	list_for_each_entry_safe(s, tmp, &p->p_sources, s_list) {
 		list_del(&s->s_list);
-		_source_end(s);
+		_source_free(s);
 	}
+
+	free(p);
 }
 
 int pipeline_add_source(pipeline_t p, source_t s)
@@ -67,13 +68,16 @@ int pipeline_go(pipeline_t p)
 	list_for_each_entry_safe(s, tmp, &p->p_sources, s_list) {
 		mesg(M_INFO, "pipeline: starting: %s[%s]",
 			s->s_capdev->c_name, s->s_name);
-		do {
+		for(;;){
 			pkt = s->s_capdev->c_dequeue(s);
-		}while(pkt);
+			if ( pkt == NULL )
+				break;
+			decode(s, pkt);
+		}
 		mesg(M_INFO, "pipeline: finishing: %s[%s]",
 			s->s_capdev->c_name, s->s_name);
 		list_del(&s->s_list);
-		_source_end(s);
+		_source_free(s);
 	}
 
 	return 1;

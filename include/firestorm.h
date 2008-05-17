@@ -24,9 +24,15 @@
 #include <f_time.h>
 #include <f_os.h>
 
+typedef struct _source *source_t;
+typedef struct _capdev *capdev_t;
+typedef struct _pipeline *pipeline_t;
+typedef struct _linktype *linktype_t;
+typedef struct _netproto *netproto_t;
 typedef struct _pkt *pkt_t;
-
 typedef uint8_t mesg_code_t;
+
+/* Message codes */
 #define M_UNSET	0 /* Unclassified */
 #define M_DEBUG	1 /* For developers */
 #define M_INFO	2 /* Informational notices */
@@ -36,6 +42,21 @@ typedef uint8_t mesg_code_t;
 #define M_MAX	6
 #define M_LIMIT 0x80 /* Ratelimit this message */
 
+/* --- Global firestorm stuff */
 void mesg(mesg_code_t code, const char *fmt, ...) _printf(2,3);
+void hex_dump(const uint8_t *tmp, size_t len, size_t llen);
+
+/* --- Data-source plugins */
+source_t capture_tcpdump_open(const char *fn);
+
+/* --- Decode API */
+linktype_t linktype_by_id(unsigned int id);
+const char *linktype_label(linktype_t l);
+
+/* --- Pipelines: the capture / decode / analyze mainloop */
+pipeline_t pipeline_new(void) _malloc;
+void pipeline_free(pipeline_t p);
+int pipeline_add_source(pipeline_t p, source_t s);
+int pipeline_go(pipeline_t p);
 
 #endif /* _FIRESTORM_HEADER_INCLUDED_ */
