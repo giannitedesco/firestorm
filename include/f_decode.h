@@ -6,21 +6,14 @@
 #ifndef _FIRESTORM_DECODE_HEADER_INCLUDED_
 #define _FIRESTORM_DECODE_HEADER_INCLUDED_
 
-struct _linktype {
-	unsigned int lt_id;
-	const char *lt_label;
-	void (*lt_decode)(struct _pkt *p);
-	struct list_head lt_list;
-};
-
 struct _netproto {
 	unsigned int np_id;
 	const char *np_label;
-	void (*nt_decode)(struct _pkt *p);
+	void (*np_decode)(struct _pkt *p);
 	struct list_head np_list;
 };
 
-void linktype_register(struct _linktype *l);
+void netproto_register(struct _netproto *l);
 void decode(struct _source *s, struct _pkt *p);
 
 #endif /* _FIRESTORM_DECODE_HEADER_INCLUDED_ */

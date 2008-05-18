@@ -28,7 +28,7 @@ struct tcpd_file_header {
 	int			thiszone;
 	unsigned int		sigfigs;
 	unsigned int		snaplen;
-	unsigned int		linktype;
+	unsigned int		netproto;
 };
 
 #define pcap_pkthdr tcpd_pkthdr
@@ -142,10 +142,10 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 
 	/* Make sure we can decode this link type, not much point
 	 * carrying on if we can't decode anything ;)  */
-	p->src.s_linktype = linktype_by_id(p->r32(fh->linktype));
+	p->src.s_linktype = netproto_by_id(p->r32(fh->netproto));
 	if ( p->src.s_linktype == NULL ) {
-		mesg(M_ERR,"tcpdump: %s: Unknown linktype (0x%x)",
-			fn, p->r32(fh->linktype));
+		mesg(M_ERR,"tcpdump: %s: Unknown netproto (0x%x)",
+			fn, p->r32(fh->netproto));
 		munmap(p->map, p->map_size);
 		fd_close(p->fd);
 		return 0;

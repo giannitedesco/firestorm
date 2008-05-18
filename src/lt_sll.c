@@ -30,13 +30,13 @@ static void sll_decode(struct _pkt *p)
 		source_swap16(p->pkt_source, sll->sll_proto));
 }
 
-static struct _linktype lt = {
-	.lt_id = 0x71,
-	.lt_label = "Linux Cooked (SLL)",
-	.lt_decode = sll_decode,
+static struct _netproto proto = {
+	.np_id = 0x71,
+	.np_label = "Linux Cooked (SLL)",
+	.np_decode = sll_decode,
 };
 
 static void __attribute__((constructor)) _ctor(void)
 {
-	linktype_register(&lt);
+	netproto_register(&proto);
 }

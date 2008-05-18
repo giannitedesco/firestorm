@@ -24,13 +24,13 @@ static void null_decode(struct _pkt *p)
 	mesg(M_DEBUG, "Null packet");
 }
 
-static struct _linktype lt = {
-	.lt_id = 0,
-	.lt_label = "Null Link",
-	.lt_decode = null_decode,
+static struct _netproto proto = {
+	.np_id = 0,
+	.np_label = "Null Link",
+	.np_decode = null_decode,
 };
 
 static void __attribute__((constructor)) _ctor(void)
 {
-	linktype_register(&lt);
+	netproto_register(&proto);
 }

@@ -9,7 +9,7 @@
 struct _source {
 	const struct _capdev *s_capdev;
 	const char *s_name;
-	linktype_t s_linktype;
+	netproto_t s_linktype;
 	unsigned int s_swab;
 	struct list_head s_list;
 };

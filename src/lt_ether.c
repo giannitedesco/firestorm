@@ -61,13 +61,13 @@ static void eth_decode(struct _pkt *p)
 
 #define DLT_EN10MB 1
 
-static struct _linktype lt = {
-	.lt_id = DLT_EN10MB,
-	.lt_label = "Ethernet II",
-	.lt_decode = eth_decode,
+static struct _netproto proto = {
+	.np_id = DLT_EN10MB,
+	.np_label = "Ethernet II",
+	.np_decode = eth_decode,
 };
 
 static void __attribute__((constructor)) _ctor(void)
 {
-	linktype_register(&lt);
+	netproto_register(&proto);
 }

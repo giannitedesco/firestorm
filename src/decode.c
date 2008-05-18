@@ -11,35 +11,35 @@
 #include <f_packet.h>
 #include <f_decode.h>
 
-static LIST_HEAD(linktypes);
+static LIST_HEAD(netprotos);
 
-linktype_t linktype_by_id(unsigned int id)
+netproto_t netproto_by_id(unsigned int id)
 {
-	struct _linktype *l;
+	struct _netproto *l;
 
-	list_for_each_entry(l, &linktypes, lt_list)
-		if ( l->lt_id == id )
+	list_for_each_entry(l, &netprotos, np_list)
+		if ( l->np_id == id )
 			return l;
 
 	return NULL;
 }
 
-const char *linktype_label(linktype_t l)
+const char *netproto_label(netproto_t l)
 {
-	assert(l->lt_label != NULL);
-	return l->lt_label;
+	assert(l->np_label != NULL);
+	return l->np_label;
 }
 
-void linktype_register(struct _linktype *l)
+void netproto_register(struct _netproto *l)
 {
-	assert(l != NULL && l->lt_label != NULL);
-	mesg(M_INFO, "linktype: registered: %s (id 0x%x)",
-		l->lt_label, l->lt_id);
-	list_add_tail(&l->lt_list, &linktypes);
+	assert(l != NULL && l->np_label != NULL);
+	mesg(M_INFO, "netproto: registered: %s (id 0x%x)",
+		l->np_label, l->np_id);
+	list_add_tail(&l->np_list, &netprotos);
 }
 
 void decode(struct _source *s, struct _pkt *p)
 {
 	p->pkt_nxthdr = p->pkt_base;
-	s->s_linktype->lt_decode(p);
+	s->s_linktype->np_decode(p);
 }
