@@ -36,4 +36,5 @@ void _ipx_decode(struct _pkt *p)
 		return;
 
 	mesg(M_DEBUG, "IPX type = 0x%.2x", ipxh->type);
+	_decode_next(p, &p_nw, ipxh->type);
 }

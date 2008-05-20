@@ -10,6 +10,7 @@ firestorm_SOURCES = \
 	lt_ether.c \
 	lt_ipx.c \
 	np_ipv4.c \
+	np_ipv6.c \
 	lt_null.c \
 	lt_sll.c \
 	pipeline.c \

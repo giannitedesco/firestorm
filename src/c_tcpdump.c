@@ -78,13 +78,11 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 	struct pcap_file_header *fh;
 	int i;
 
-	/* Interface for us is just the filename  */
 	if ( (p->fd = open(fn, O_RDONLY)) < 0 ) {
 		mesg(M_ERR,"tcpdump: %s: open(): %s", fn, os_err());
 		return 0;
 	}
 
-	/* get the size of the file so we can map it in  */
 	if ( fstat(p->fd, &st) ) {
 		mesg(M_ERR,"tcpdump: %s: fstat(): %s", fn, os_err());
 		fd_close(p->fd);
@@ -93,27 +91,26 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 
 	p->map_size = (size_t)st.st_size;
 
-	/* Check the file is actually even big enough */
 	if ( p->map_size < sizeof(struct pcap_file_header) ) {
 		mesg(M_ERR,"tcpdump: %s: Not a valid libpcap file", fn);
 		fd_close(p->fd);
 		return 0;
 	}
 
-	/* Memory map that sucker */
 	if ( (p->map=mmap(NULL, p->map_size, PROT_READ,
 		MAP_SHARED, p->fd, 0))==MAP_FAILED) {
 		mesg(M_ERR,"tcpdump: %s: mmap(): %s", fn, os_err());
 		fd_close(p->fd);
 		return 0;
 	}
+
 	p->end = p->map + p->map_size;
 
 #if HAVE_MADVISE && defined(MADV_SEQUENTIAL)
 	madvise(p->map, p->map_size, MADV_SEQUENTIAL);
 #endif
 
-	fh=(struct pcap_file_header *)p->map;
+	fh = (struct pcap_file_header *)p->map;
 
 	/* Check what format the file is */
 	for(p->phsiz=i=0; magics[i].name; i++) {

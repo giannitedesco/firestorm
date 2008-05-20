@@ -20,6 +20,9 @@ static struct _namespace namespace[NS_MAX] = {
 	[NS_ETHER] {.ns_label = "ETHER"},
 	[NS_INET] {.ns_label = "INET"},
 	[NS_INET6] {.ns_label = "INET6"},
+	[NS_IPX] {.ns_label = "IPX"},
+	[NS_APPLE] {.ns_label = "APPLE"},
+	[NS_CISCO] {.ns_label = "CISCO"},
 	[NS_USTREAM] {.ns_label = "STREAM"},
 	[NS_UDGRAM] {.ns_label = "DGRAM"},
 };

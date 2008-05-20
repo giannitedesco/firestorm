@@ -16,7 +16,7 @@
 static void sll_decode(struct _pkt *p);
 
 static struct _proto p_sll = {
-	.p_label = "SLL",
+	.p_label = "sll",
 	.p_namespace = NS_ETHER,
 };
 

@@ -18,7 +18,7 @@ static struct _decoder eth_decoder = {
 };
 
 static struct _proto p_eth = {
-	.p_label = "Ethernet II",
+	.p_label = "ether",
 	.p_namespace = NS_ETHER,
 };
 

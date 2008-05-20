@@ -83,4 +83,5 @@ static inline void _decode_next(pkt_t pkt, struct _proto *p, proto_id_t id)
 	if ( d != NULL )
 		d->d_decode(pkt);
 }
+
 #endif /* _FIRESTORM_DECODE_HEADER_INCLUDED_ */
