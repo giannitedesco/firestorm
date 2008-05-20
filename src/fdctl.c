@@ -178,9 +178,9 @@ again:
 
 	*sz += (size_t)ret;
 
-	/* This can happen if a long I/O is interrupted for example
-	 * on NFS in soft/interruptable mode in the Linux kernel. Or
-	 * on sockets.
+	/* This can happen on a regular file if a long I/O is interrupted
+	 * for example on NFS in soft/interruptable mode in the Linux kernel.
+	 * It can also happen on sockets and character devices.
 	 */
 	if ( (size_t)ret < len ) {
 		buf += (size_t)ret;
@@ -222,9 +222,9 @@ again:
 		return 0;
 	}
 
-	/* This can happen if a long I/O is interrupted for example
-	 * on NFS in soft/interruptable mode in the Linux kernel. Or
-	 * on sockets.
+	/* This can happen on a regular file if a long I/O is interrupted
+	 * for example on NFS in soft/interruptable mode in the Linux kernel.
+	 * It can also happen on sockets and character devices.
 	 */
 	if ( (size_t)ret < len ) {
 		buf += (size_t)ret;
