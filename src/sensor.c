@@ -17,6 +17,8 @@ int main(int argc, char **argv)
 	mesg(M_INFO,"This program is free software; released under "
 		"the GNU GPL v3 (see: COPYING)");
 
+	decode_init();
+
 	if ( argc > 1 ) {
 		src = capture_tcpdump_open(argv[1]);
 	}else{

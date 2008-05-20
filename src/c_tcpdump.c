@@ -11,6 +11,7 @@
 #include <firestorm.h>
 #include <f_capture.h>
 #include <f_packet.h>
+#include <f_decode.h>
 #include <f_fdctl.h>
 
 #include <sys/mman.h>
@@ -28,7 +29,7 @@ struct tcpd_file_header {
 	int			thiszone;
 	unsigned int		sigfigs;
 	unsigned int		snaplen;
-	unsigned int		netproto;
+	unsigned int		proto;
 };
 
 #define pcap_pkthdr tcpd_pkthdr
@@ -142,10 +143,10 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 
 	/* Make sure we can decode this link type, not much point
 	 * carrying on if we can't decode anything ;)  */
-	p->src.s_linktype = netproto_by_id(p->r32(fh->netproto));
-	if ( p->src.s_linktype == NULL ) {
-		mesg(M_ERR,"tcpdump: %s: Unknown netproto (0x%x)",
-			fn, p->r32(fh->netproto));
+	p->src.s_decoder = decoder_get(NS_DLT, p->r32(fh->proto));
+	if ( p->src.s_decoder == NULL ) {
+		mesg(M_ERR,"tcpdump: %s: Unknown proto (0x%x)",
+			fn, p->r32(fh->proto));
 		munmap(p->map, p->map_size);
 		fd_close(p->fd);
 		return 0;
@@ -163,7 +164,7 @@ static void tcpd_free(struct _source *s)
 	if ( p->fd >= 0 )
 		fd_close(p->fd);
 
-	free(p);
+	free(s);
 }
 
 static struct _pkt *tcpd_dequeue(struct _source *s)
@@ -220,6 +221,7 @@ source_t capture_tcpdump_open(const char *fn)
 	p->fd = -1;
 
 	if ( !open_file(p, fn) ) {
+		free(p);
 		return 0;
 	}
 

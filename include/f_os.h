@@ -15,6 +15,10 @@ const char *os_error(int);
 const char *os_err(void);
 const char *os_err2(const char *);
 
+/* Byte-swapping macros. Note that constant versions must actually be passed
+ * literals as arguments! This is due to pre-processor badness. You have been
+ * warned!
+ */
 #define const_bswap16(x) \
 	((uint16_t)( \
 		(((uint16_t)(x) & (uint16_t)0x00ffU) << 8) | \

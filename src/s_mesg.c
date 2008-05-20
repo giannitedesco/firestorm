@@ -38,11 +38,12 @@ void _mesg(mesg_code_t code, const char *str, size_t len)
 		f = stdout;
 
 	gettimeofday(&tv, NULL);
-	tm = gmtime(&tv.tv_sec);
+	tm = localtime(&tv.tv_sec);
 	//strftime(tbuf, sizeof(tbuf), "%Y-%M-%d %H:%M:%S", tm);
 	strftime(tbuf, sizeof(tbuf), "%H:%M:%S", tm);
 
-	printf("%s: %s: %s\n", tbuf, code_str[code], str);
+	//printf("%s: %s: %s\n", tbuf, code_str[code], str);
+	printf("%s: %s\n", code_str[code], str);
 
 	fflush(stdout);
 }

@@ -27,7 +27,10 @@
 typedef struct _source *source_t;
 typedef struct _capdev *capdev_t;
 typedef struct _pipeline *pipeline_t;
-typedef struct _netproto *netproto_t;
+typedef struct _decoder *decoder_t;
+typedef struct _proto *proto_t;
+typedef unsigned int proto_ns_t;
+typedef unsigned int proto_id_t;
 typedef struct _pkt *pkt_t;
 typedef uint8_t mesg_code_t;
 
@@ -49,8 +52,9 @@ void hex_dump(const uint8_t *tmp, size_t len, size_t llen);
 source_t capture_tcpdump_open(const char *fn);
 
 /* --- Decode API */
-netproto_t netproto_by_id(unsigned int id);
-const char *netproto_label(netproto_t l);
+void decode_init(void);
+decoder_t decoder_get(proto_ns_t ns, proto_id_t id);
+const char *decoder_label(decoder_t l);
 
 /* --- Pipelines: the capture / decode / analyze mainloop */
 pipeline_t pipeline_new(void) _malloc;

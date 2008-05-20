@@ -9,7 +9,7 @@
 struct _source {
 	const struct _capdev *s_capdev;
 	const char *s_name;
-	netproto_t s_linktype;
+	decoder_t s_decoder;
 	unsigned int s_swab;
 	struct list_head s_list;
 };
@@ -36,13 +36,21 @@ struct _capdev {
 
 void _source_free(struct _source *s) _nonull(1);
 
-static inline uint16_t source_swap16(struct _source *src, uint16_t i)
+static inline uint16_t source_h16(struct _source *src, uint16_t i)
 {
 	return (src->s_swab) ? sys_bswap16(i) : i;
 }
-static inline uint32_t source_swap32(struct _source *src, uint32_t i)
+static inline uint32_t source_h32(struct _source *src, uint32_t i)
 {
 	return (src->s_swab) ? sys_bswap32(i) : i;
+}
+static inline uint16_t source_n16(struct _source *src, uint16_t i)
+{
+	return (src->s_swab) ? i : sys_bswap16(i);
+}
+static inline uint32_t source_n32(struct _source *src, uint32_t i)
+{
+	return (src->s_swab) ? i : sys_bswap32(i);
 }
 
 #endif /* _FIRESTORM_CAPTURE_HEADER_INCLUDED_ */

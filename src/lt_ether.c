@@ -10,6 +10,50 @@
 #include <pkt/eth.h>
 #include <pkt/vlan.h>
 
+#define DLT_EN10MB 1
+
+static void eth_decode(struct _pkt *p);
+
+static struct _decoder decoder = {
+	.d_label = "Ethernet",
+	.d_decode = eth_decode,
+};
+
+static struct _proto p_eth = {
+	.p_label = "Ethernet II",
+	.p_namespace = NS_ETHER,
+};
+
+static struct _proto p_802 = {
+	.p_label = "802.3",
+	.p_namespace = NS_ETHER,
+};
+
+static struct _proto p_nw = {
+	.p_label = "802.3-netware",
+	.p_namespace = NS_ETHER,
+};
+
+static struct _proto p_vlan = {
+	.p_label = "802.1q",
+	.p_namespace = NS_ETHER,
+};
+
+static void __attribute__((constructor)) _ctor(void)
+{
+	decoder_add(&decoder);
+	decoder_register(&decoder, NS_DLT, DLT_EN10MB);
+	proto_add(&decoder, &p_eth);
+	proto_add(&decoder, &p_802);
+	proto_add(&decoder, &p_nw);
+	proto_add(&decoder, &p_vlan);
+}
+
+static void netware_decode(struct _pkt *p)
+{
+	mesg(M_DEBUG, "802.3-netware");
+}
+
 static void mac_decode(struct _pkt *p)
 {
 	const struct pkt_machdr *mac;
@@ -30,6 +74,8 @@ static void vlan_decode(struct _pkt *p)
 
 	mesg(M_DEBUG, "vlan id = 0x%.4x, proto = 0x%.4x",
 		sys_be16(vlan->vlan), sys_be16(vlan->proto));
+	
+	_decode_next(p, &p_vlan, vlan->proto);
 }
 
 static void eth_decode(struct _pkt *p)
@@ -46,7 +92,12 @@ static void eth_decode(struct _pkt *p)
 
 	switch(proto) {
 	case 64 ... 1500:
-		mac_decode(p);
+		if ( (p->pkt_nxthdr + 2 <= p->pkt_end) &&
+			*(uint16_t *)p->pkt_nxthdr == 0xffff ) {
+			netware_decode(p);
+		}else{
+			mac_decode(p);
+		}
 		return;
 	case 0x8100:
 		vlan_decode(p);
@@ -56,18 +107,5 @@ static void eth_decode(struct _pkt *p)
 	}
 
 	mesg(M_DEBUG, "ethernet II - 0x%.4x", proto);
-	//hex_dump(p->pkt_base, p->pkt_caplen, 16);
-}
-
-#define DLT_EN10MB 1
-
-static struct _netproto proto = {
-	.np_id = DLT_EN10MB,
-	.np_label = "Ethernet II",
-	.np_decode = eth_decode,
-};
-
-static void __attribute__((constructor)) _ctor(void)
-{
-	netproto_register(&proto);
+	_decode_next(p, &p_eth, eth->proto);
 }
