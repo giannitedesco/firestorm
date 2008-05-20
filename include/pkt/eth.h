@@ -1,6 +1,10 @@
 #ifndef _PKT_ETH_HEADER_INCLUDED_
 #define _PKT_ETH_HEADER_INCLUDED_
 
+#define SNAP_ORG_APPLE 0x8007
+#define SNAP_ORG_CISCO 0xc
+#define SNAP_ORG_ETHER 0x0
+
 /* Ethernet II */
 struct pkt_ethhdr {
 	uint8_t		dst[6];
@@ -19,7 +23,7 @@ struct pkt_machdr {
 struct pkt_llchdr {
 	uint8_t		dsap,lsap;
 	uint8_t		ctrl;
-};
+} _packed;
 
 /* Sub-Network Access protocol */
 /* XXX: Packed to stop gcc padding the 3 byte array to 4 bytes */
@@ -28,5 +32,6 @@ struct pkt_snaphdr {
 	uint16_t	proto;
 } _packed;
 
+void _eth_decode(struct _pkt *p);
 
 #endif /* _PKT_ETH_HEADER_INCLUDED_ */

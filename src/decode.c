@@ -168,6 +168,15 @@ void decoder_register(struct _decoder *d, proto_ns_t ns, proto_id_t id)
 
 void decode(struct _source *s, struct _pkt *p)
 {
+	static unsigned int i;
+
+	mesg(M_DEBUG, "packet %u", ++i);
+
 	p->pkt_nxthdr = p->pkt_base;
 	s->s_decoder->d_decode(p);
+
+	if ( p->pkt_nxthdr < p->pkt_end )
+		hex_dump(p->pkt_nxthdr, p->pkt_end - p->pkt_nxthdr, 16);
+	else
+		printf("\n");
 }

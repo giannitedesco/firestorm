@@ -8,20 +8,18 @@ struct ipx_addr {
 	uint32_t net;
 	uint8_t node[IPX_NODE_LEN];
 	uint16_t sock;
-};
+} _packed;
 
 /* IPX transport header */
-struct pkt_ipxhdr
-{
-	uint16_t checksum _packed;
-	uint16_t pktsize _packed;
+struct pkt_ipxhdr {
+	uint16_t checksum;
+	uint16_t pktsize;
 	uint8_t tctrl;	/* Transport Control (i.e. hop count) */
 	uint8_t type; /* Packet Type (i.e. level 2 protocol) */
-	struct ipx_addr dst _packed;
-	struct ipx_addr src _packed;
-};
+	struct ipx_addr dst;
+	struct ipx_addr src;
+} _packed;
 
-#define ipxSize 30
-
+void _ipx_decode(struct _pkt *p);
 
 #endif /* _PKT_IPX_HEADER_INCLUDED_ */

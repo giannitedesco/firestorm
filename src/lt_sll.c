@@ -10,6 +10,8 @@
 #include <f_decode.h>
 
 #include <pkt/sll.h>
+#include <pkt/eth.h>
+#include <pkt/ipx.h>
 
 static void sll_decode(struct _pkt *p);
 
@@ -49,8 +51,10 @@ static void sll_decode(struct _pkt *p)
 
 	switch(proto) {
 	case const_be16(LINUX_SLL_P_802_3):
+		_ipx_decode(p);
 		break;
 	case const_be16(LINUX_SLL_P_802_2):
+		_eth_decode(p);
 		break;
 	case const_be16(LINUX_SLL_P_PPPHDLC):
 		break;

@@ -29,12 +29,20 @@ static void __attribute__((constructor)) _ctor(void)
 static void ipv4_decode(struct _pkt *p)
 {
 	struct pkt_iphdr *iph;
+	uint16_t len;
 
 	iph = (struct pkt_iphdr *)p->pkt_nxthdr;
 
 	p->pkt_nxthdr += sizeof(*iph);
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
+
+	len = sys_be16(iph->tot_len);
+	p->pkt_nxthdr = ((uint8_t *)iph) + len;
+	if ( p->pkt_nxthdr > p->pkt_end ) {
+		mesg(M_WARN, "truncated IP packet");
+		return;
+	}
 
 	mesg(M_DEBUG, "IPv4 proto = 0x%.2x", iph->protocol);
 }

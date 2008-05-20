@@ -12,6 +12,9 @@ enum {
 	NS_ETHER, /* ethernet namespace: 0x0800 = ip, etc.. */
 	NS_INET, /* IPv4 protocol id's, 7 = udp etc.. */
 	NS_INET6, /* IPv6 protocol id's */
+	NS_IPX, /* Novell Netware's IPX */
+	NS_CISCO, /* Cisco SNAP id's */
+	NS_APPLE, /* Apple SNAP id's */
 	NS_USTREAM, /* User stream protocol (any stream protocol) */
 	NS_UDGRAM, /* User datagram protocol (not udp per se, but anything) */
 	NS_MAX
