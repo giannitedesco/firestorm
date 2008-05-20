@@ -3,7 +3,7 @@
 
 struct ip6_addr {
 	union {
-		uint8_t addr8[16];
+		uint8_t addr[16];
 		uint16_t addr16[8];
 		uint32_t addr32[4];
 		uint64_t addr64[2];
@@ -12,7 +12,7 @@ struct ip6_addr {
 
 struct pkt_ip6hdr {
 	uint32_t ip6_flowlabel;
-	uint16_t ip6_totlen;
+	uint16_t ip6_plen;
 	uint8_t ip6_proto;
 	uint8_t ip6_ttl;
 	struct ip6_addr ip6_src, ip6_dst;

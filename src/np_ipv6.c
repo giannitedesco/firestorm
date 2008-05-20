@@ -29,14 +29,15 @@ static void ipv6_decode(struct _pkt *p)
 	struct pkt_ip6hdr *iph;
 	uint16_t len;
 
-	iph = (struct pkt_iphdr *)p->pkt_nxthdr;
+	iph = (struct pkt_ip6hdr *)p->pkt_nxthdr;
 
 	p->pkt_nxthdr += sizeof(*iph);
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 
-	len = sys_be16(iph->ip6_totlen);
-	p->pkt_nxthdr = ((uint8_t *)iph) + len;
+	len = sys_be16(iph->ip6_plen);
+	mesg(M_DEBUG, "len = %u", len);
+	p->pkt_nxthdr += len;
 	if ( p->pkt_nxthdr > p->pkt_end ) {
 		mesg(M_WARN, "truncated IP packet");
 		return;
