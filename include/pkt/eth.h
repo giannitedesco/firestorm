@@ -10,14 +10,14 @@ struct pkt_ethhdr {
 	uint8_t		dst[6];
 	uint8_t		src[6];
 	uint16_t	proto;
-};
+} _packed;
 
 /* 802.3 MAC header */
 struct pkt_machdr {
 	uint8_t		dst[6];
 	uint8_t		src[6];
 	uint16_t	len;
-};
+} _packed;
 
 /* 802.2 Logical Link control */
 struct pkt_llchdr {

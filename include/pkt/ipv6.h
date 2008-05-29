@@ -8,7 +8,7 @@ struct ip6_addr {
 		uint32_t addr32[4];
 		uint64_t addr64[2];
 	}ip6_u;
-};
+} _packed;
 
 struct pkt_ip6hdr {
 	uint32_t ip6_flowlabel;
@@ -16,6 +16,6 @@ struct pkt_ip6hdr {
 	uint8_t ip6_proto;
 	uint8_t ip6_ttl;
 	struct ip6_addr ip6_src, ip6_dst;
-};
+} _packed;
 
 #endif /* __PKT_IPV6_HEADER_INCLUDED__ */

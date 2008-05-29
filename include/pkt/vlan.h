@@ -4,6 +4,6 @@
 struct pkt_vlanhdr {
 	uint16_t	vlan;
 	uint16_t	proto;
-};
+} _packed;
 
 #endif /* _PKT_VLAN_HEADER_INCLUDED_ */

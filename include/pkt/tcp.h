@@ -103,7 +103,7 @@ struct pkt_tcphdr
 	uint16_t	win;
 	uint16_t	csum;
 	uint16_t	urp;
-};
+} _packed;
 
 /* Possible TCP states */
 enum{

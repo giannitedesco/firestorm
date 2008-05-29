@@ -7,7 +7,7 @@ struct pkt_arphdr {
 	uint8_t		hln;
 	uint8_t		pln;
 	uint16_t	op;
-};
+} _packed;
 
 #define ARP_OP_REQUEST		0x1
 #define ARP_OP_REPLY		0x2

@@ -21,7 +21,7 @@ struct pkt_sllhdr {
 	uint16_t	sll_halen; /* link-layer address length */
 	uint8_t	sll_addr[SLL_ADDRLEN]; /* link-layer address */
 	uint16_t	sll_protocol; /* protocol */
-};
+} _packed;
 
 struct pkt_linuxhdr {
 	unsigned short	sll_family;
@@ -31,6 +31,6 @@ struct pkt_linuxhdr {
 	unsigned char	sll_pkttype;
 	unsigned char	sll_halen;
 	unsigned char	sll_addr[8];
-};
+} _packed;
 
 #endif /* _PKT_SLL_HEADER_INCLUDED_ */

@@ -10,6 +10,6 @@ struct pkt_sap {
 	uint8_t node[6];	/* Node address */
 	uint16_t sock;		/* Socket address */
 	uint16_t hops;	/* source net */
-}__attribute__((packed));
+} _packed;
 
 #endif /* __PKT_SAP_HEADER_INCLUDED__ */

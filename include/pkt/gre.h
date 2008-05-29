@@ -11,6 +11,6 @@
 struct pkt_grehdr {
 	uint16_t	c_res_ver;
 	uint16_t	proto;
-};
+} _packed;
 
 #endif /* _PKT_GRE_HEADER_INCLUDED_ */

@@ -55,12 +55,12 @@ struct pkt_ahhdr {
 	uint8_t ahl;
 	uint32_t spi;
 	uint32_t seq;
-}_packed;
+} _packed;
 
 struct pkt_esphdr {
 	uint32_t spi;
 	uint32_t seq;
-}_packed;
+} _packed;
 
 /* Keeps each individual fragment */
 struct ipfrag {
