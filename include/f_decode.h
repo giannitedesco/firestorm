@@ -19,7 +19,6 @@ enum {
 	NS_UDGRAM, /* User datagram protocol (not udp per se, but anything) */
 	NS_USEQPKT, /* User sequenced datagram protocol (eg. sctp) */
 	NS_MAX,
-	NS_NONE = NS_MAX,
 };
 
 struct _decoder {
