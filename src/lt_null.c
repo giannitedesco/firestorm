@@ -9,6 +9,7 @@
 #include <f_packet.h>
 #include <f_decode.h>
 
+/* TODO: loopback: NS_ETHER / 0x9000 */
 static void null_decode(struct _pkt *p);
 
 static struct _decoder decoder = {
@@ -18,7 +19,6 @@ static struct _decoder decoder = {
 
 static struct _proto p_null = {
 	.p_label = "null",
-	.p_namespace = NS_UNIXPF,
 };
 
 static void __attribute__((constructor)) _ctor(void)
@@ -41,5 +41,5 @@ static void null_decode(struct _pkt *p)
 
 	proto = source_h32(p->pkt_source, *null);
 	mesg(M_DEBUG, "Null packet 0x%.8x", proto);
-	_decode_next(p, &p_null, proto);
+	_decode_next(p, NS_UNIXPF, proto);
 }

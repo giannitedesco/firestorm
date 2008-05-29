@@ -21,6 +21,14 @@
 #define IPOPT_SATID	0x88
 #define IPOPT_SSRR	0x89
 
+#define IP_PROTO_ICMP	0x01
+#define IP_PROTO_IGMP	0x02
+#define IP_PROTO_IPIP	0x04
+#define IP_PROTO_TCP	0x06
+#define IP_PROTO_UDP	0x11
+#define IP_PROTO_ESP	0x32
+#define IP_PROTO_AH	0x33
+
 struct pkt_iphdr {
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 	uint8_t	ihl:4;
@@ -40,7 +48,19 @@ struct pkt_iphdr {
 	uint16_t	csum;
 	uint32_t	saddr;
 	uint32_t	daddr;
-};
+}_packed;
+
+struct pkt_ahhdr {
+	uint8_t protocol;
+	uint8_t ahl;
+	uint32_t spi;
+	uint32_t seq;
+}_packed;
+
+struct pkt_esphdr {
+	uint32_t spi;
+	uint32_t seq;
+}_packed;
 
 /* Keeps each individual fragment */
 struct ipfrag {

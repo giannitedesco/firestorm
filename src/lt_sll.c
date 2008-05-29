@@ -17,7 +17,6 @@ static void sll_decode(struct _pkt *p);
 
 static struct _proto p_sll = {
 	.p_label = "sll",
-	.p_namespace = NS_ETHER,
 };
 
 static struct _decoder decoder = {
@@ -59,6 +58,6 @@ static void sll_decode(struct _pkt *p)
 	case const_be16(LINUX_SLL_P_PPPHDLC):
 		break;
 	default:
-		_decode_next(p, &p_sll, proto);
+		_decode_next(p, NS_ETHER, proto);
 	}
 }

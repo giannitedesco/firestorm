@@ -40,8 +40,8 @@ struct tcpd_pkthdr {
 };
 #endif /* lib_pcap_h */
 
-static struct {
-	char *name;
+static const struct {
+	char * const name;
 	unsigned int magic;
 	size_t size;
 	int swap;
@@ -69,8 +69,15 @@ struct tcpd_priv {
 	unsigned int	(*r32)(unsigned int);
 };
 
-static uint32_t read32(uint32_t x){return x;}
-static uint32_t read32_swap(uint32_t x){return sys_bswap32(x);}
+static uint32_t read32(uint32_t x)
+{
+	return x;
+}
+
+static uint32_t read32_swap(uint32_t x)
+{
+	return sys_bswap32(x);
+}
 
 static int open_file(struct tcpd_priv *p, const char *fn)
 {
@@ -78,30 +85,28 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 	struct pcap_file_header *fh;
 	int i;
 
-	if ( (p->fd = open(fn, O_RDONLY)) < 0 ) {
+	p->fd = open(fn, O_RDONLY);
+	if ( p->fd < 0 ) {
 		mesg(M_ERR,"tcpdump: %s: open(): %s", fn, os_err());
-		return 0;
+		goto err;
 	}
 
 	if ( fstat(p->fd, &st) ) {
 		mesg(M_ERR,"tcpdump: %s: fstat(): %s", fn, os_err());
-		fd_close(p->fd);
-		return 0;
+		goto err_close;
 	}
 
 	p->map_size = (size_t)st.st_size;
 
 	if ( p->map_size < sizeof(struct pcap_file_header) ) {
 		mesg(M_ERR,"tcpdump: %s: Not a valid libpcap file", fn);
-		fd_close(p->fd);
-		return 0;
+		goto err_close;
 	}
 
-	if ( (p->map=mmap(NULL, p->map_size, PROT_READ,
-		MAP_SHARED, p->fd, 0))==MAP_FAILED) {
+	p->map = mmap(NULL, p->map_size, PROT_READ, MAP_SHARED, p->fd, 0);
+	if ( p->map == MAP_FAILED) {
 		mesg(M_ERR,"tcpdump: %s: mmap(): %s", fn, os_err());
-		fd_close(p->fd);
-		return 0;
+		goto err_close;
 	}
 
 	p->end = p->map + p->map_size;
@@ -113,7 +118,7 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 	fh = (struct pcap_file_header *)p->map;
 
 	/* Check what format the file is */
-	for(p->phsiz=i=0; magics[i].name; i++) {
+	for(p->phsiz = i = 0; magics[i].name; i++) {
 		if ( fh->magic == magics[i].magic ) {
 			if ( magics[i].swap ) {
 				p->r32 = read32_swap;
@@ -133,9 +138,7 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 	if ( !p->phsiz ) {
 		mesg(M_ERR,"tcpdump: %s: Bad voodoo magic (0x%x)",
 			fn, fh->magic);
-		munmap(p->map, p->map_size);
-		fd_close(p->fd);
-		return 0;
+		goto err_unmap;
 	}
 
 	/* Make sure we can decode this link type, not much point
@@ -144,11 +147,17 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 	if ( p->src.s_decoder == NULL ) {
 		mesg(M_ERR,"tcpdump: %s: Unknown proto (0x%x)",
 			fn, p->r32(fh->proto));
-		munmap(p->map, p->map_size);
-		fd_close(p->fd);
-		return 0;
+		goto err_unmap;
 	}
+
 	return 1;
+
+err_unmap:
+	munmap(p->map, p->map_size);
+err_close:
+	fd_close(p->fd);
+err:
+	return 0;
 }
 
 /* Stop the capture and cleanup our process */
@@ -158,6 +167,7 @@ static void tcpd_free(struct _source *s)
 
 	if ( p->map )
 		munmap(p->map, p->map_size);
+
 	if ( p->fd >= 0 )
 		fd_close(p->fd);
 

@@ -16,7 +16,6 @@ static struct _decoder ipx_decoder = {
 
 static struct _proto p_nw = {
 	.p_label = "ipx",
-	.p_namespace = NS_IPX,
 };
 
 static void __attribute__((constructor)) _ctor(void)
@@ -36,5 +35,5 @@ void _ipx_decode(struct _pkt *p)
 		return;
 
 	mesg(M_DEBUG, "IPX type = 0x%.2x", ipxh->type);
-	_decode_next(p, &p_nw, ipxh->type);
+	_decode_next(p, NS_IPX, ipxh->type);
 }

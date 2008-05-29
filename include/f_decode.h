@@ -17,7 +17,9 @@ enum {
 	NS_APPLE, /* Apple SNAP id's */
 	NS_USTREAM, /* User stream protocol (any stream protocol) */
 	NS_UDGRAM, /* User datagram protocol (not udp per se, but anything) */
-	NS_MAX
+	NS_USEQPKT, /* User sequenced datagram protocol (eg. sctp) */
+	NS_MAX,
+	NS_NONE = NS_MAX,
 };
 
 struct _decoder {
@@ -39,12 +41,11 @@ struct _namespace {
 };
 
 struct _proto {
-	const struct _ns_entry *p_ns;
-	unsigned int p_num_ns;
-	proto_ns_t p_namespace;
 	struct _proto *p_next;
 	const char *p_label;
 };
+
+extern struct _namespace _ns_arr[NS_MAX];
 
 /* Decoders */
 void decoder_add(struct _decoder *d);
@@ -76,10 +77,10 @@ _ns_entry_search(const struct _ns_entry *p, unsigned int n, proto_id_t id)
 	return NULL;
 }
 
-static inline void _decode_next(pkt_t pkt, struct _proto *p, proto_id_t id)
+static inline void _decode_next(pkt_t pkt, proto_ns_t ns, proto_id_t id)
 {
 	struct _decoder *d;
-	d = _ns_entry_search(p->p_ns, p->p_num_ns, id);
+	d = _ns_entry_search(_ns_arr[ns].ns_reg, _ns_arr[ns].ns_num_reg, id);
 	if ( d != NULL )
 		d->d_decode(pkt);
 }

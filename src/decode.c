@@ -14,7 +14,7 @@
 #define NAMESPACE_ALLOC_CHUNK	16
 #define NAMESPACE_ALLOC_MASK	(NAMESPACE_ALLOC_CHUNK-1)
 
-static struct _namespace namespace[NS_MAX] = {
+struct _namespace _ns_arr[NS_MAX] = {
 	[NS_DLT] {.ns_label = "DLT"},
 	[NS_UNIXPF] {.ns_label = "UNIX"},
 	[NS_ETHER] {.ns_label = "ETHER"},
@@ -25,6 +25,7 @@ static struct _namespace namespace[NS_MAX] = {
 	[NS_CISCO] {.ns_label = "CISCO"},
 	[NS_USTREAM] {.ns_label = "STREAM"},
 	[NS_UDGRAM] {.ns_label = "DGRAM"},
+	[NS_USEQPKT] {.ns_label = "SEQPKT"},
 };
 
 static unsigned int num_decoders;
@@ -34,7 +35,6 @@ void proto_add(struct _decoder *d, struct _proto *p)
 {
 	assert(p != NULL && p->p_label != NULL);
 	assert(d != NULL && d->d_label != NULL);
-	assert(p->p_namespace < NS_MAX);
 
 	p->p_next = d->d_protos;
 	d->d_protos = p;
@@ -43,8 +43,8 @@ void proto_add(struct _decoder *d, struct _proto *p)
 decoder_t decoder_get(proto_ns_t ns, proto_id_t id)
 {
 	assert(ns < NS_MAX);
-	return _ns_entry_search(namespace[ns].ns_reg,
-				namespace[ns].ns_num_reg, id);
+	return _ns_entry_search(_ns_arr[ns].ns_reg,
+				_ns_arr[ns].ns_num_reg, id);
 }
 
 static int nsentry_cmp(const void *A, const void *B)
@@ -72,25 +72,22 @@ void decode_init(void)
 	for(i = 0; i < NS_MAX; i++) {
 		unsigned int j;
 
-		qsort(namespace[i].ns_reg,
-			namespace[i].ns_num_reg,
-			sizeof(*namespace[i].ns_reg),
+		qsort(_ns_arr[i].ns_reg,
+			_ns_arr[i].ns_num_reg,
+			sizeof(*_ns_arr[i].ns_reg),
 			nsentry_cmp);
 
-		fprintf(f, "\t\"ns_%s\" [label=\"%s\" "
-			"fillcolor=\"#b0b0ff\"];\n",
-			namespace[i].ns_label,
-			namespace[i].ns_label);
-		fprintf(f, "\t\"ns2_%s\" [label=\"%s\" "
-			"fillcolor=\"#b0b0b0\"];\n",
-			namespace[i].ns_label,
-			namespace[i].ns_label);
-		for(j = 0; j < namespace[i].ns_num_reg; j++)
+		if ( _ns_arr[i].ns_num_reg )
+			fprintf(f, "\t\"ns_%s\" [label=\"%s\" "
+				"fillcolor=\"#b0b0ff\"];\n",
+				_ns_arr[i].ns_label,
+				_ns_arr[i].ns_label);
+		for(j = 0; j < _ns_arr[i].ns_num_reg; j++)
 			fprintf(f, "\t\"ns_%s\" -> \"d_%s\" "
 				"[label=\"id 0x%x\"];\n",
-				namespace[i].ns_label,
-				namespace[i].ns_reg[j].nse_decoder->d_label,
-				namespace[i].ns_reg[j].nse_id);
+				_ns_arr[i].ns_label,
+				_ns_arr[i].ns_reg[j].nse_decoder->d_label,
+				_ns_arr[i].ns_reg[j].nse_id);
 	}
 
 	for(d = decoders; d; d = d->d_next) {
@@ -98,16 +95,11 @@ void decode_init(void)
 			"fillcolor=\"#b0ffb0\"];\n",
 			d->d_label, d->d_label);
 		for(p = d->d_protos; p; p = p->p_next) {
-			assert(p->p_namespace < NS_MAX);
-			p->p_ns = namespace[p->p_namespace].ns_reg;
-			p->p_num_ns = namespace[p->p_namespace].ns_num_reg;
 			fprintf(f, "\t\"d_%s\" -> \"p_%s\";\n",
 				d->d_label, p->p_label);
 			fprintf(f, "\t\"p_%s\" [label=\"%s\" "
 				"fillcolor=\"#ffb0b0\"\n];",
 				p->p_label, p->p_label);
-			fprintf(f, "\t\"p_%s\" -> \"ns2_%s\";\n",
-				p->p_label, namespace[p->p_namespace].ns_label);
 		}
 	}
 
@@ -152,19 +144,19 @@ void decoder_register(struct _decoder *d, proto_ns_t ns, proto_id_t id)
 	unsigned int i;
 	assert(ns < NS_MAX);
 
-	for(i = id; i < namespace[ns].ns_num_reg; i++) {
-		if ( namespace[ns].ns_reg[i].nse_id == id ) {
+	for(i = id; i < _ns_arr[ns].ns_num_reg; i++) {
+		if ( _ns_arr[ns].ns_reg[i].nse_id == id ) {
 			mesg(M_WARN, "decode: %s: %s / 0x%x registered by %s",
-				d->d_label, namespace[ns].ns_label, id,
-				namespace[ns].ns_reg[i].nse_decoder->d_label);
+				d->d_label, _ns_arr[ns].ns_label, id,
+				_ns_arr[ns].ns_reg[i].nse_decoder->d_label);
 			return;
 		}
 	}
 
-	assert(ns_assure(&namespace[ns]));
-	namespace[ns].ns_reg[namespace[ns].ns_num_reg].nse_id = id;
-	namespace[ns].ns_reg[namespace[ns].ns_num_reg].nse_decoder = d;
-	namespace[ns].ns_num_reg++;
+	assert(ns_assure(&_ns_arr[ns]));
+	_ns_arr[ns].ns_reg[_ns_arr[ns].ns_num_reg].nse_id = id;
+	_ns_arr[ns].ns_reg[_ns_arr[ns].ns_num_reg].nse_decoder = d;
+	_ns_arr[ns].ns_num_reg++;
 
 	return;
 }
