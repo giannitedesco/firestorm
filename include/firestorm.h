@@ -29,6 +29,7 @@ typedef struct _capdev *capdev_t;
 typedef struct _pipeline *pipeline_t;
 typedef struct _decoder *decoder_t;
 typedef struct _proto *proto_t;
+typedef struct _dcb *dcb_t;
 typedef unsigned int proto_ns_t;
 typedef unsigned int proto_id_t;
 typedef struct _pkt *pkt_t;

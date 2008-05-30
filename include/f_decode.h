@@ -6,6 +6,8 @@
 #ifndef _FIRESTORM_DECODE_HEADER_INCLUDED_
 #define _FIRESTORM_DECODE_HEADER_INCLUDED_
 
+#define DECODE_DEFAULT_MIN_LAYERS	8
+
 enum {
 	NS_DLT, /* pcap DLT_* namespace */
 	NS_UNIXPF, /* UNIX PF_* namespace */
@@ -41,6 +43,8 @@ struct _namespace {
 
 struct _proto {
 	struct _proto *p_next;
+	struct _decoder *p_owner;
+	size_t p_dcb_sz;
 	const char *p_label;
 };
 
@@ -55,6 +59,7 @@ void proto_add(struct _decoder *d, struct _proto *p);
 
 /* Decoding */
 void decode(struct _source *s, struct _pkt *p);
+int decode_pkt_realloc(struct _pkt *p, unsigned int min_layers);
 
 static inline struct _decoder * _constfn
 _ns_entry_search(const struct _ns_entry *p, unsigned int n, proto_id_t id)
@@ -82,6 +87,40 @@ static inline void _decode_next(pkt_t pkt, proto_ns_t ns, proto_id_t id)
 	d = _ns_entry_search(_ns_arr[ns].ns_reg, _ns_arr[ns].ns_num_reg, id);
 	if ( d != NULL )
 		d->d_decode(pkt);
+}
+
+static inline struct _dcb *_decode_dcb_alloc(pkt_t p, size_t sz)
+{
+	struct _dcb *ret = p->pkt_dcb_top;
+	uint8_t *ptr = (uint8_t *)ret;
+
+	p->pkt_dcb_top = (struct _dcb *)(ptr + sz);
+
+	if ( p->pkt_dcb_top > p->pkt_dcb_end )
+		return NULL;
+
+	ret->dcb_next = p->pkt_dcb_top;
+
+	return (struct _dcb *)ret;
+}
+
+static inline struct _dcb *_decode_layer(pkt_t pkt, struct _proto *p)
+{
+	struct _dcb *ret;
+	ret = _decode_dcb_alloc(pkt, p->p_dcb_sz);
+	if ( ret )
+		ret->dcb_proto = p;
+	return ret;
+}
+
+static inline struct _dcb *_decode_layer2(pkt_t pkt,
+						struct _proto *p, size_t sz)
+{
+	struct _dcb *ret;
+	ret = _decode_dcb_alloc(pkt, sz);
+	if ( ret )
+		ret->dcb_proto = p;
+	return ret;
 }
 
 #endif /* _FIRESTORM_DECODE_HEADER_INCLUDED_ */

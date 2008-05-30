@@ -11,7 +11,7 @@
 #include <f_packet.h>
 #include <f_decode.h>
 
-#define NAMESPACE_ALLOC_CHUNK	16
+#define NAMESPACE_ALLOC_CHUNK	(1<<4)
 #define NAMESPACE_ALLOC_MASK	(NAMESPACE_ALLOC_CHUNK-1)
 
 struct _namespace _ns_arr[NS_MAX] = {
@@ -31,13 +31,22 @@ struct _namespace _ns_arr[NS_MAX] = {
 static unsigned int num_decoders;
 static struct _decoder *decoders;
 
+static unsigned int num_protos;
+
+static size_t max_dcb;
+
 void proto_add(struct _decoder *d, struct _proto *p)
 {
 	assert(p != NULL && p->p_label != NULL);
 	assert(d != NULL && d->d_label != NULL);
+	assert(p->p_next == NULL && p->p_owner == NULL);
 
+	if ( p->p_dcb_sz == 0 )
+		p->p_dcb_sz = sizeof(struct _dcb);
+	p->p_owner = d;
 	p->p_next = d->d_protos;
 	d->d_protos = p;
+	num_protos++;
 }
 
 decoder_t decoder_get(proto_ns_t ns, proto_id_t id)
@@ -55,11 +64,15 @@ static int nsentry_cmp(const void *A, const void *B)
 
 void decode_init(void)
 {
-	static const char * const fn = "decode.dot";
+	static char * const fn = "decode.dot";
 	struct _decoder *d;
 	struct _proto *p;
 	unsigned int i;
 	FILE *f;
+	static int called;
+
+	assert(called == 0);
+	called = 1;
 
 	f = fopen(fn, "w");
 	assert(f != NULL);
@@ -72,6 +85,7 @@ void decode_init(void)
 	for(i = 0; i < NS_MAX; i++) {
 		unsigned int j;
 
+		/* for binary search */
 		qsort(_ns_arr[i].ns_reg,
 			_ns_arr[i].ns_num_reg,
 			sizeof(*_ns_arr[i].ns_reg),
@@ -94,7 +108,11 @@ void decode_init(void)
 		fprintf(f, "\t\"d_%s\" [label=\"%s\" "
 			"fillcolor=\"#b0ffb0\"];\n",
 			d->d_label, d->d_label);
+
 		for(p = d->d_protos; p; p = p->p_next) {
+			if ( p->p_dcb_sz > max_dcb )
+				max_dcb = p->p_dcb_sz;
+
 			fprintf(f, "\t\"d_%s\" -> \"p_%s\";\n",
 				d->d_label, p->p_label);
 			fprintf(f, "\t\"p_%s\" [label=\"%s\" "
@@ -105,7 +123,11 @@ void decode_init(void)
 
 	fprintf(f, "}\n");
 	fclose(f);
+
 	mesg(M_INFO, "decode: %s: dumped protocol graph", fn);
+	mesg(M_INFO, "decode: %u decoders, %u protocols, max dcb = %u bytes",
+		num_decoders, num_protos, max_dcb);
+	mesg(M_INFO, "packet = %u bytes", sizeof(struct _pkt));
 }
 
 const char *decoder_label(decoder_t d)
@@ -161,6 +183,28 @@ void decoder_register(struct _decoder *d, proto_ns_t ns, proto_id_t id)
 	return;
 }
 
+int decode_pkt_realloc(struct _pkt *p, unsigned int min_layers)
+{
+	uint8_t *new;
+
+	new = realloc(p->pkt_dcb, min_layers * max_dcb);
+	if ( min_layers && new == NULL )
+		return 0;
+	
+	p->pkt_dcb = (void *)new;
+	p->pkt_dcb_end = (void *)(new + (min_layers * max_dcb));
+	return 1;
+}
+
+static void decode_dump(struct _pkt *p)
+{
+	struct _dcb *cur;
+
+	for(cur = p->pkt_dcb; cur < p->pkt_dcb_top; cur = cur->dcb_next) {
+		mesg(M_DEBUG, "DECODED: %s", cur->dcb_proto->p_label);
+	}
+}
+
 void decode(struct _source *s, struct _pkt *p)
 {
 	static unsigned int i;
@@ -168,7 +212,10 @@ void decode(struct _source *s, struct _pkt *p)
 	mesg(M_DEBUG, "packet %u", ++i);
 
 	p->pkt_nxthdr = p->pkt_base;
+	p->pkt_dcb_top = p->pkt_dcb;
 	s->s_decoder->d_decode(p);
+
+	decode_dump(p);
 
 	if ( p->pkt_nxthdr < p->pkt_end )
 		hex_dump(p->pkt_nxthdr, p->pkt_end - p->pkt_nxthdr, 16);

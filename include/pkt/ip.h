@@ -26,8 +26,10 @@
 #define IP_PROTO_IPIP	0x04
 #define IP_PROTO_TCP	0x06
 #define IP_PROTO_UDP	0x11
+#define IP_PROTO_DCCP	0x21
 #define IP_PROTO_ESP	0x32
 #define IP_PROTO_AH	0x33
+#define IP_PROTO_SCTP	0x84
 
 struct pkt_iphdr {
 #if __BYTE_ORDER == __LITTLE_ENDIAN

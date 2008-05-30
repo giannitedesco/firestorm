@@ -111,6 +111,9 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 
 	p->end = p->map + p->map_size;
 
+	fd_close(p->fd);
+	p->fd = -1;
+
 #if HAVE_MADVISE && defined(MADV_SEQUENTIAL)
 	madvise(p->map, p->map_size, MADV_SEQUENTIAL);
 #endif
@@ -150,6 +153,9 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 		goto err_unmap;
 	}
 
+	p->cur = p->map;
+	p->cur += sizeof(struct pcap_file_header);
+
 	return 1;
 
 err_unmap:
@@ -164,6 +170,8 @@ err:
 static void tcpd_free(struct _source *s)
 {
 	struct tcpd_priv *p = (struct tcpd_priv *)s;
+
+	decode_pkt_realloc(&p->pkt, 0);
 
 	if ( p->map )
 		munmap(p->map, p->map_size);
@@ -223,20 +231,21 @@ source_t capture_tcpdump_open(const char *fn)
 
 	p = calloc(1, sizeof(*p));
 	if ( p == NULL )
-		return 0;
-
-	p->fd = -1;
-
-	if ( !open_file(p, fn) ) {
-		free(p);
-		return 0;
-	}
-
-	/* Initialise final few fields from header */
-	p->cur = p->map;
-	p->cur += sizeof(struct pcap_file_header);
+		goto err;
 
 	p->src.s_name = fn;
 	p->src.s_capdev = &capdev;
+	p->fd = -1;
+
+	if ( !decode_pkt_realloc(&p->pkt, DECODE_DEFAULT_MIN_LAYERS) )
+		goto err;
+
+	if ( !open_file(p, fn) )
+		goto err;
+
 	return &p->src;
+
+err:
+	tcpd_free(&p->src);
+	return NULL;
 }

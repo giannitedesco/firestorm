@@ -8,6 +8,7 @@
 
 #include <firestorm.h>
 #include <f_capture.h>
+#include <f_packet.h>
 #include <f_decode.h>
 
 struct _pipeline {

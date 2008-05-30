@@ -51,6 +51,7 @@ static void snap_decode(struct _pkt *p)
 		return;
 
 	org = (snap->org[0] << 12) | (snap->org[1] << 8) | snap->org[2];
+	_decode_layer(p, &p_snap);
 	switch(org) {
 	case SNAP_ORG_ETHER:
 		mesg(M_DEBUG, "802.3: SNAP: Ethernet 0x%.4x",
@@ -73,11 +74,9 @@ static void snap_decode(struct _pkt *p)
 			org, sys_be16(snap->proto));
 		break;
 	}
-
-	return;
 }
 
-static void mac_decode(struct _pkt *p)
+static void llc_decode(struct _pkt *p)
 {
 	const struct pkt_llchdr *llc;
 
@@ -94,15 +93,14 @@ static void mac_decode(struct _pkt *p)
 
 	switch(llc->lsap) {
 	case 0xe0: /* ipx */
-		break;
 	case 0xf0: /* netbios */
-		break;
 	case 0x42: /* stp */
+	default:
+		_decode_layer(p, &p_llc);
+		mesg(M_DEBUG, "802.3: LLC dsap = %.2x, lsap = %.2x",
+			llc->dsap, llc->lsap);
 		break;
 	}
-
-	mesg(M_DEBUG, "802.3: LLC dsap = %.2x, lsap = %.2x",
-		llc->dsap, llc->lsap);
 }
 
 static void vlan_decode(struct _pkt *p)
@@ -116,18 +114,17 @@ static void vlan_decode(struct _pkt *p)
 		return;
 
 	proto = sys_be16(vlan->proto);
-	mesg(M_DEBUG, "802.1q proto = 0x%.4x", proto);
-
 	/* protocols can still be lengths with 802.1q */
 	switch(proto) {
 	case 0 ... 1500:
-		mac_decode(p);
+		llc_decode(p);
 		return;
 	default:
+		mesg(M_DEBUG, "802.1q proto = 0x%.4x", proto);
+		_decode_layer(p, &p_eth);
+		_decode_next(p, NS_ETHER, vlan->proto);
 		break;
 	}
-
-	_decode_next(p, NS_ETHER, vlan->proto);
 }
 
 void _eth_decode(struct _pkt *p)
@@ -145,15 +142,15 @@ void _eth_decode(struct _pkt *p)
 	/* Check if it's a length or a protocol */
 	switch(proto) {
 	case 0 ... 1500:
-		mac_decode(p);
-		return;
+		llc_decode(p);
+		break;
 	case 0x8100:
 		vlan_decode(p);
-		return;
+		break;
 	default:
+		mesg(M_DEBUG, "ethernet II - 0x%.4x", proto);
+		_decode_layer(p, &p_eth);
+		_decode_next(p, NS_ETHER, eth->proto);
 		break;
 	}
-
-	mesg(M_DEBUG, "ethernet II - 0x%.4x", proto);
-	_decode_next(p, NS_ETHER, eth->proto);
 }
