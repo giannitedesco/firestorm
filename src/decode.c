@@ -32,20 +32,27 @@ static unsigned int num_decoders;
 static struct _decoder *decoders;
 
 static unsigned int num_protos;
+static struct _proto *special_protos;
 
 static size_t max_dcb;
 
 void proto_add(struct _decoder *d, struct _proto *p)
 {
 	assert(p != NULL && p->p_label != NULL);
-	assert(d != NULL && d->d_label != NULL);
+	assert(d == NULL || d->d_label != NULL);
 	assert(p->p_next == NULL && p->p_owner == NULL);
 
 	if ( p->p_dcb_sz == 0 )
 		p->p_dcb_sz = sizeof(struct _dcb);
 	p->p_owner = d;
-	p->p_next = d->d_protos;
-	d->d_protos = p;
+
+	if ( d ) {
+		p->p_next = d->d_protos;
+		d->d_protos = p;
+	}else{
+		p->p_next = special_protos;
+		special_protos = p;
+	}
 	num_protos++;
 }
 
@@ -121,13 +128,19 @@ void decode_init(void)
 		}
 	}
 
+	for(p = special_protos; p; p = p->p_next) {
+		if ( p->p_dcb_sz > max_dcb )
+			max_dcb = p->p_dcb_sz;
+	}
+
 	fprintf(f, "}\n");
 	fclose(f);
 
 	mesg(M_INFO, "decode: %s: dumped protocol graph", fn);
 	mesg(M_INFO, "decode: %u decoders, %u protocols, max dcb = %u bytes",
 		num_decoders, num_protos, max_dcb);
-	mesg(M_INFO, "packet = %u bytes", sizeof(struct _pkt));
+	mesg(M_INFO, "packet = %u + %u bytes", sizeof(struct _pkt),
+		max_dcb * DECODE_DEFAULT_MIN_LAYERS);
 }
 
 const char *decoder_label(decoder_t d)
@@ -205,14 +218,34 @@ static void decode_dump(struct _pkt *p)
 	}
 }
 
+struct cap_dcb {
+	struct _dcb dcb;
+	struct _source *source;
+};
+
+static struct _proto p_capture = {
+	.p_label = "capture",
+	.p_dcb_sz = sizeof(struct cap_dcb),
+};
+
+static void __attribute__((constructor)) _ctor(void)
+{
+	proto_add(NULL, &p_capture);
+}
+
 void decode(struct _source *s, struct _pkt *p)
 {
 	static unsigned int i;
+	struct _dcb *dcb;
 
-	mesg(M_DEBUG, "packet %u", ++i);
+	mesg(M_DEBUG, "packet %u, len = %u/%u",
+		++i, p->pkt_caplen, p->pkt_len);
 
 	p->pkt_nxthdr = p->pkt_base;
 	p->pkt_dcb_top = p->pkt_dcb;
+
+	dcb = _decode_layer(p, &p_capture);
+
 	s->s_decoder->d_decode(p);
 
 	decode_dump(p);

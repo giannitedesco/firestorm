@@ -40,7 +40,6 @@ static void null_decode(struct _pkt *p)
 		return;
 
 	proto = source_h32(p->pkt_source, *null);
-	mesg(M_DEBUG, "Null packet 0x%.8x", proto);
 	_decode_layer(p, &p_null);
 	_decode_next(p, NS_UNIXPF, proto);
 }

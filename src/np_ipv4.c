@@ -18,6 +18,10 @@ static struct _proto p_fragment = {
 	.p_label = "ipfrag",
 };
 
+static struct _proto p_tunnel = {
+	.p_label = "iptunnel",
+};
+
 static struct _proto p_icmp = {
 	.p_label = "icmp",
 };
@@ -57,6 +61,7 @@ static void __attribute__((constructor)) _ctor(void)
 	decoder_register(&decoder, NS_ETHER, const_be16(0x0800));
 	decoder_register(&decoder, NS_UNIXPF, 2);
 	proto_add(&decoder, &p_fragment);
+	proto_add(&decoder, &p_tunnel);
 	proto_add(&decoder, &p_icmp);
 	proto_add(&decoder, &p_igmp);
 	proto_add(&decoder, &p_sctp);
@@ -84,7 +89,8 @@ static uint16_t ip_csum(const struct pkt_iphdr *iph)
 	return ~sum & 0xffff;
 }
 
-static void esp_decode(struct _pkt *p)
+static void esp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
+			const struct pkt_ahhdr *ah)
 {
 	const struct pkt_esphdr *esp;
 
@@ -92,12 +98,12 @@ static void esp_decode(struct _pkt *p)
 	p->pkt_nxthdr += sizeof(*esp);
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
-	mesg(M_DEBUG, "ESP spi=0x%.8x", sys_be32(esp->spi));
+	//mesg(M_DEBUG, "ESP spi=0x%.8x", sys_be32(esp->spi));
 	_decode_layer(p, &p_esp);
 	/* XXX: Need to know iph */
 }
 
-static void ah_decode(struct _pkt *p)
+static void ah_decode(struct _pkt *p, const struct pkt_iphdr *iph)
 {
 	const struct pkt_ahhdr *ah;
 
@@ -126,6 +132,7 @@ static void ah_decode(struct _pkt *p)
 		_decode_layer(p, &p_igmp);
 		break;
 	case IP_PROTO_IPIP:
+		_decode_layer(p, &p_tunnel);
 		ipv4_decode(p);
 		break;
 	case IP_PROTO_TCP:
@@ -138,7 +145,7 @@ static void ah_decode(struct _pkt *p)
 		_decode_layer(p, &p_dccp);
 		break;
 	case IP_PROTO_ESP:
-		esp_decode(p);
+		esp_decode(p, iph, ah);
 		break;
 	case IP_PROTO_SCTP:
 		_decode_layer(p, &p_sctp);
@@ -147,6 +154,8 @@ static void ah_decode(struct _pkt *p)
 		mesg(M_DEBUG, "ipv4(ah) proto = 0x%.2x", ah->protocol);
 		break;
 	}
+
+	p->pkt_nxthdr = (uint8_t *)iph + sys_be32(iph->tot_len);
 }
 
 static void ipv4_decode(struct _pkt *p)
@@ -201,6 +210,7 @@ static void ipv4_decode(struct _pkt *p)
 		p->pkt_nxthdr = (uint8_t *)iph + len;
 		break;
 	case IP_PROTO_IPIP:
+		_decode_layer(p, &p_tunnel);
 		ipv4_decode(p);
 		break;
 	case IP_PROTO_TCP:
@@ -216,10 +226,10 @@ static void ipv4_decode(struct _pkt *p)
 		p->pkt_nxthdr = (uint8_t *)iph + len;
 		break;
 	case IP_PROTO_ESP:
-		esp_decode(p);
+		esp_decode(p, iph, NULL);
 		break;
 	case IP_PROTO_AH:
-		ah_decode(p);
+		ah_decode(p, iph);
 		break;
 	case IP_PROTO_SCTP:
 		_decode_layer(p, &p_sctp);

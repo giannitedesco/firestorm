@@ -34,7 +34,6 @@ void _ipx_decode(struct _pkt *p)
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 
-	mesg(M_DEBUG, "IPX type = 0x%.2x", ipxh->type);
 	_decode_layer(p, &p_ipx);
 	_decode_next(p, NS_IPX, ipxh->type);
 }

@@ -43,11 +43,6 @@ static void sll_decode(struct _pkt *p)
 
 	proto = source_n16(p->pkt_source, sll->sll_protocol);
 
-	mesg(M_DEBUG, "Linux: type=0x%.4x, hatype=0x%.4x, proto=0x%.4x",
-		source_h16(p->pkt_source, sll->sll_pkttype),
-		source_h16(p->pkt_source, sll->sll_hatype),
-		source_h16(p->pkt_source, sll->sll_protocol));
-
 	_decode_layer(p, &p_sll);
 
 	switch(proto) {
