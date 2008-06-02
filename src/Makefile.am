@@ -19,6 +19,7 @@ firestorm_SOURCES = \
 	s_mesg.c \
 	timers.c \
 	sensor.c \
+	mpool.c \
 	fdctl.c \
 	mesg.c \
 	util.c \
