@@ -56,8 +56,6 @@ static inline void mpool_free(struct mpool *m, void *obj)
 {
 	if ( unlikely(obj == NULL) )
 		return;
-	if ( unlikely(m->obj_size < sizeof(void *)) )
-		return;
 	*(void **)obj = m->free;
 	m->free = obj;
 }
