@@ -24,9 +24,11 @@ static char *code_str[] = {
 void _mesg(mesg_code_t code, const char *str, size_t len);
 void _mesg(mesg_code_t code, const char *str, size_t len)
 {
+#if _SMESG_TIMESTAMP
 	static char tbuf[64];
 	struct timeval tv;
 	struct tm *tm;
+#endif
 	FILE *f;
 
 	if ( code > M_MAX )
@@ -37,13 +39,14 @@ void _mesg(mesg_code_t code, const char *str, size_t len)
 	else
 		f = stdout;
 
+#if _SMESG_TIMESTAMP
 	gettimeofday(&tv, NULL);
 	tm = localtime(&tv.tv_sec);
-	//strftime(tbuf, sizeof(tbuf), "%Y-%M-%d %H:%M:%S", tm);
+	strftime(tbuf, sizeof(tbuf), "%Y-%M-%d %H:%M:%S", tm);
 	strftime(tbuf, sizeof(tbuf), "%H:%M:%S", tm);
 
-	//printf("%s: %s: %s\n", tbuf, code_str[code], str);
+	printf("%s: %s: %s\n", tbuf, code_str[code], str);
+#else
 	printf("%s: %s\n", code_str[code], str);
-
-	fflush(stdout);
+#endif
 }
