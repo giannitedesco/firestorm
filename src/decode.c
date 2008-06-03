@@ -36,6 +36,16 @@ static struct _proto *special_protos;
 
 static size_t max_dcb;
 
+unsigned int decode_num_protocols(void)
+{
+	return num_protos;
+}
+
+size_t decode_max_dcb_size(void)
+{
+	return max_dcb;
+}
+
 void proto_add(struct _decoder *d, struct _proto *p)
 {
 	assert(p != NULL && p->p_label != NULL);
@@ -44,7 +54,9 @@ void proto_add(struct _decoder *d, struct _proto *p)
 
 	if ( p->p_dcb_sz == 0 )
 		p->p_dcb_sz = sizeof(struct _dcb);
+
 	p->p_owner = d;
+	p->p_idx = num_protos++;
 
 	if ( d ) {
 		p->p_next = d->d_protos;
@@ -53,7 +65,6 @@ void proto_add(struct _decoder *d, struct _proto *p)
 		p->p_next = special_protos;
 		special_protos = p;
 	}
-	num_protos++;
 }
 
 decoder_t decoder_get(proto_ns_t ns, proto_id_t id)
@@ -131,6 +142,9 @@ void decode_init(void)
 	for(p = special_protos; p; p = p->p_next) {
 		if ( p->p_dcb_sz > max_dcb )
 			max_dcb = p->p_dcb_sz;
+		fprintf(f, "\t\"p_%s\" [label=\"%s\" "
+			"fillcolor=\"#ffb0b0\"\n];",
+			p->p_label, p->p_label);
 	}
 
 	fprintf(f, "}\n");
@@ -196,6 +210,27 @@ void decoder_register(struct _decoder *d, proto_ns_t ns, proto_id_t id)
 	return;
 }
 
+int decode_foreach_protocol(int(*cbfn)(struct _proto *p, void *priv),
+				void *priv)
+{
+	struct _decoder *d;
+	struct _proto *p;
+
+	for(d = decoders; d; d = d->d_next) {
+		for(p = d->d_protos; p; p = p->p_next) {
+			if ( !(*cbfn)(p, priv) )
+				return 0;
+		}
+	}
+
+	for(p = special_protos; p; p = p->p_next) {
+		if ( !(*cbfn)(p, priv) )
+			return 0;
+	}
+
+	return 1;
+}
+
 int decode_pkt_realloc(struct _pkt *p, unsigned int min_layers)
 {
 	uint8_t *new;
@@ -218,33 +253,15 @@ static void decode_dump(struct _pkt *p)
 	}
 }
 
-struct cap_dcb {
-	struct _dcb dcb;
-	struct _source *source;
-};
-
-static struct _proto p_capture = {
-	.p_label = "capture",
-	.p_dcb_sz = sizeof(struct cap_dcb),
-};
-
-static void __attribute__((constructor)) _ctor(void)
-{
-	proto_add(NULL, &p_capture);
-}
-
 void decode(struct _source *s, struct _pkt *p)
 {
 	static unsigned int i;
-	struct _dcb *dcb;
 
 	mesg(M_DEBUG, "packet %u, len = %u/%u",
 		++i, p->pkt_caplen, p->pkt_len);
 
 	p->pkt_nxthdr = p->pkt_base;
 	p->pkt_dcb_top = p->pkt_dcb;
-
-	dcb = _decode_layer(p, &p_capture);
 
 	s->s_decoder->d_decode(p);
 
