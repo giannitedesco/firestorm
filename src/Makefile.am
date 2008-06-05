@@ -7,6 +7,7 @@ bin_PROGRAMS = firestorm
 
 firestorm_SOURCES = \
 	c_tcpdump.c \
+	ft_ipfrag.c \
 	lt_ether.c \
 	lt_ipx.c \
 	np_ipv4.c \
@@ -22,6 +23,7 @@ firestorm_SOURCES = \
 	sensor.c \
 	mpool.c \
 	fdctl.c \
+	flow.c \
 	mesg.c \
 	util.c \
 	os.c

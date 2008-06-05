@@ -215,20 +215,23 @@ int decode_foreach_protocol(int(*cbfn)(struct _proto *p, void *priv),
 {
 	struct _decoder *d;
 	struct _proto *p;
+	int ret = 1;
 
 	for(d = decoders; d; d = d->d_next) {
 		for(p = d->d_protos; p; p = p->p_next) {
-			if ( !(*cbfn)(p, priv) )
+			ret = (*cbfn)(p, priv);
+			if ( ret == 0 )
 				return 0;
 		}
 	}
 
 	for(p = special_protos; p; p = p->p_next) {
-		if ( !(*cbfn)(p, priv) )
+		ret = (*cbfn)(p, priv);
+		if ( ret == 0 )
 			return 0;
 	}
 
-	return 1;
+	return ret;
 }
 
 int decode_pkt_realloc(struct _pkt *p, unsigned int min_layers)

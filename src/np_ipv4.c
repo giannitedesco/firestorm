@@ -8,7 +8,9 @@
 #include <f_capture.h>
 #include <f_packet.h>
 #include <f_decode.h>
+#include <f_flow.h>
 #include <pkt/ip.h>
+#include "p_ipv4.h"
 
 static const uint16_t ipfmask = const_be16(IP_MF|IP_OFFMASK);
 
@@ -55,6 +57,13 @@ static struct _decoder decoder = {
 	.d_decode = ipv4_decode,
 };
 
+static struct _flow_tracker ipfrag = {
+	.ft_proto = &p_fragment,
+	.ft_ctor = _ipfrag_ctor,
+	.ft_dtor = _ipfrag_dtor,
+	.ft_track = _ipfrag_track,
+};
+
 static void __attribute__((constructor)) _ctor(void)
 {
 	decoder_add(&decoder);
@@ -69,6 +78,7 @@ static void __attribute__((constructor)) _ctor(void)
 	proto_add(&decoder, &p_tcp);
 	proto_add(&decoder, &p_udp);
 	proto_add(&decoder, &p_esp);
+	flow_tracker_add(&ipfrag);
 }
 
 static uint16_t ip_csum(const struct pkt_iphdr *iph)
