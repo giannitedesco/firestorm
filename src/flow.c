@@ -11,7 +11,7 @@ static struct _flow_tracker *ft_list;
 
 void flow_tracker_add(struct _flow_tracker *ft)
 {
-	assert(ft != NULL && ft->ft_proto != NULL);
+	assert(ft != NULL && ft->ft_proto != NULL && ft->ft_label != NULL);
 	ft->ft_next = ft_list;
 	ft_list = ft;
 }

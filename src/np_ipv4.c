@@ -18,6 +18,7 @@ static void ipv4_decode(struct _pkt *p);
 
 static struct _proto p_fragment = {
 	.p_label = "ipfrag",
+	.p_dcb_sz = sizeof(struct ipfrag_dcb),
 };
 
 static struct _proto p_tunnel = {
@@ -57,7 +58,8 @@ static struct _decoder decoder = {
 	.d_decode = ipv4_decode,
 };
 
-static struct _flow_tracker ipfrag = {
+struct _flow_tracker ipfrag = {
+	.ft_label = "ipdefrag",
 	.ft_proto = &p_fragment,
 	.ft_ctor = _ipfrag_ctor,
 	.ft_dtor = _ipfrag_dtor,
@@ -205,7 +207,11 @@ static void ipv4_decode(struct _pkt *p)
 	}
 
 	if ( iph->frag_off & ipfmask ) {
-		_decode_layer(p, &p_fragment);
+		struct ipfrag_dcb *dcb;
+		dcb = (struct ipfrag_dcb *)_decode_layer(p, &p_fragment);
+		if ( dcb ) {
+			dcb->ip_iph = iph;
+		}
 		p->pkt_nxthdr = (uint8_t *)iph + len;
 		return;
 	}

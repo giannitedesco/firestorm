@@ -6,6 +6,17 @@
 #ifndef _P_IPV4_HEADER_INCLUDED_
 #define _P_IPV4_HEADER_INCLUDED_
 
+struct ipfrag_dcb {
+	struct _dcb ip_dcb;
+	const struct pkt_iphdr *ip_iph;
+};
+
+struct ip_dcb {
+	struct _dcb ip_dcb;
+	const struct pkt_iphdr *ip_iph;
+	const struct pkt_ahhdr *ip_ah;
+};
+
 /* Keeps each individual fragment */
 struct ipfrag {
 	struct ipfrag		*next;
@@ -49,6 +60,6 @@ struct ipq {
 
 flow_state_t _ipfrag_ctor(void);
 void _ipfrag_dtor(flow_state_t s);
-void _ipfrag_track(struct _pkt *pkt, struct _dcb *dcb);
+void _ipfrag_track(flow_state_t s, struct _pkt *pkt, struct _dcb *dcb);
 
 #endif /* _P_IPV4_HEADER_INCLUDED_ */

@@ -4,8 +4,6 @@
  * Released under the terms of the GNU GPL version 3
 */
 
-#include <stdio.h>
-
 #include <firestorm.h>
 #include <f_capture.h>
 

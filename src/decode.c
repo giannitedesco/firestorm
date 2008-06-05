@@ -258,20 +258,8 @@ static void decode_dump(struct _pkt *p)
 
 void decode(struct _source *s, struct _pkt *p)
 {
-	static unsigned int i;
-
-	mesg(M_DEBUG, "packet %u, len = %u/%u",
-		++i, p->pkt_caplen, p->pkt_len);
-
 	p->pkt_nxthdr = p->pkt_base;
 	p->pkt_dcb_top = p->pkt_dcb;
 
 	s->s_decoder->d_decode(p);
-
-	decode_dump(p);
-
-	if ( p->pkt_nxthdr < p->pkt_end )
-		hex_dump(p->pkt_nxthdr, p->pkt_end - p->pkt_nxthdr, 16);
-	else
-		printf("\n");
 }

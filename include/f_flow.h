@@ -8,10 +8,11 @@
 
 struct _flow_tracker {
 	struct _proto *ft_proto;
-	void (*ft_track)(struct _pkt *pkt, struct _dcb *dcb);
+	void (*ft_track)(flow_state_t s, struct _pkt *pkt, struct _dcb *dcb);
 	flow_state_t (*ft_ctor)(void);
 	void (*ft_dtor)(flow_state_t s);
 	struct _flow_tracker *ft_next;
+	const char * const ft_label;
 };
 
 void flow_tracker_add(struct _flow_tracker *ft);

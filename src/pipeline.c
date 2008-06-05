@@ -4,15 +4,15 @@
  * Released under the terms of the GNU GPL version 3
 */
 
-#include <stdio.h>
-
 #include <firestorm.h>
 #include <f_capture.h>
 #include <f_packet.h>
 #include <f_decode.h>
+#include <f_flow.h>
 
 struct per_proto {
-	void *pp_state;
+	struct _flow_tracker *pp_ft;
+	flow_state_t pp_flow;
 };
 
 struct _pipeline {
@@ -21,9 +21,23 @@ struct _pipeline {
 	struct per_proto p_proto[0];
 };
 
-static int pp_init(struct _proto *proto, void *priv)
+static int ft_init(struct _flow_tracker *ft, void *priv)
 {
-	//struct _pipeline *p = priv;
+	struct _pipeline *p = priv;
+	struct per_proto *pp;
+
+	mesg(M_DEBUG, "flow: init %s", ft->ft_label);
+	pp = &p->p_proto[ft->ft_proto->p_idx];
+	if ( pp->pp_ft != NULL )
+		return 0;
+
+	pp->pp_ft = ft;
+	if ( ft->ft_ctor ) {
+		pp->pp_flow = ft->ft_ctor();
+		if ( pp->pp_flow == NULL )
+			return 0;
+	}
+
 	return 1;
 }
 
@@ -40,13 +54,14 @@ pipeline_t pipeline_new(void)
 
 	INIT_LIST_HEAD(&p->p_sources);
 
-	if ( !decode_foreach_protocol(pp_init, p) )
+	if ( !flow_tracker_foreach(ft_init, p) )
 		goto out_free;
 
 	goto out;
 
 out_free:
 	free(p);
+	p = NULL;
 out:
 	return p;
 }
@@ -85,8 +100,22 @@ int pipeline_add_source(pipeline_t p, source_t s)
 	return 1;
 }
 
+static void analyze(struct _pipeline *p, struct _pkt *pkt)
+{
+	struct _dcb *cur;
+	struct per_proto *pp;
+
+	for(cur = pkt->pkt_dcb; cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
+		pp = &p->p_proto[cur->dcb_proto->p_idx];
+		if ( pp->pp_ft && pp->pp_ft->ft_track )
+			pp->pp_ft->ft_track(pp->pp_flow, pkt, cur);
+		//mesg(M_DEBUG, "DECODED: %s", cur->dcb_proto->p_label);
+	}
+}
+
 int pipeline_go(pipeline_t p)
 {
+//	static unsigned int i;
 	struct _source *s, *tmp;
 	pkt_t pkt;
 
@@ -97,7 +126,19 @@ int pipeline_go(pipeline_t p)
 			pkt = s->s_capdev->c_dequeue(s);
 			if ( pkt == NULL )
 				break;
+#if 0
+			mesg(M_DEBUG, "packet %u, len = %u/%u",
+				++i, p->pkt_caplen, p->pkt_len);
+#endif
 			decode(s, pkt);
+			analyze(p, pkt);
+#if 0
+			if ( pkt->pkt_nxthdr < pkt->pkt_end )
+				hex_dump(pkt->pkt_nxthdr,
+					pkt->pkt_end - pkt->pkt_nxthdr, 16);
+			else
+				printf("\n");
+#endif
 		}
 		mesg(M_INFO, "pipeline: finishing: %s[%s]",
 			s->s_capdev->c_name, s->s_name);
