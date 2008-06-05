@@ -11,19 +11,43 @@
 #include <f_packet.h>
 #include <f_decode.h>
 
+struct per_proto {
+	void *pp_state;
+};
+
 struct _pipeline {
 	struct list_head p_sources;
 	unsigned int p_type;
+	struct per_proto p_proto[0];
 };
+
+static int pp_init(struct _proto *proto, void *priv)
+{
+	//struct _pipeline *p = priv;
+	return 1;
+}
 
 pipeline_t pipeline_new(void)
 {
-	struct _pipeline *p;
+	struct _pipeline *p = NULL;
+	unsigned int num;
 
-	p = calloc(1, sizeof(*p));
-	if ( p ) {
-		INIT_LIST_HEAD(&p->p_sources);
-	}
+	num = decode_num_protocols();
+
+	p = calloc(1, sizeof(*p) + sizeof(*p->p_proto) * num);
+	if ( p == NULL )
+		goto out;
+
+	INIT_LIST_HEAD(&p->p_sources);
+
+	if ( !decode_foreach_protocol(pp_init, p) )
+		goto out_free;
+
+	goto out;
+
+out_free:
+	free(p);
+out:
 	return p;
 }
 

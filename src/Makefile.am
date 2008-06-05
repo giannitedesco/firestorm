@@ -15,6 +15,7 @@ firestorm_SOURCES = \
 	lt_sll.c \
 	pipeline.c \
 	capture.c \
+	packet.c \
 	decode.c \
 	s_mesg.c \
 	timers.c \

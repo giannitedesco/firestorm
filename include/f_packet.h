@@ -20,11 +20,17 @@ struct _pkt {
 	struct _dcb	*pkt_dcb_top;
 	struct _dcb	*pkt_dcb;
 	struct _dcb	*pkt_dcb_end;
+
+	/** Destructor function. Responsible for freeing up dcb and payload. */
+	void (*pkt_dtor)(struct _pkt *pkt);
 };
 
 struct _dcb {
 	struct _proto *dcb_proto;
 	struct _dcb *dcb_next;
 };
+
+pkt_t pkt_alloc(source_t source) _malloc;
+void pkt_free(pkt_t pkt);
 
 #endif /* _FIRESTORM_PACKET_HEADER_INCLUDED_ */
