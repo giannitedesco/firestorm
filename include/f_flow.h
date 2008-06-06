@@ -15,8 +15,7 @@ struct _flow_tracker {
 	const char * const ft_label;
 };
 
-void flow_tracker_add(struct _flow_tracker *ft);
-int flow_tracker_foreach(int(*cbfn)(struct _flow_tracker *f, void *priv),
-				void *priv);
+void flow_tracker_add(proto_t p, flow_tracker_t ft);
+int flow_tracker_foreach(int(*cbfn)(flow_tracker_t f, void *priv), void *priv);
 
 #endif /* _FIRESTORM_FLOW_HEADER_INCLUDED_ */

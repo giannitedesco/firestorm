@@ -59,11 +59,8 @@ struct ipq {
 };
 
 extern struct _decoder _ipv4_decoder;
+extern struct _flow_tracker _ipv4_ipdefrag;
 
 uint16_t _ip_csum(const struct pkt_iphdr *iph);
-
-flow_state_t _ipfrag_ctor(void);
-void _ipfrag_dtor(flow_state_t s);
-pkt_t _ipfrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb);
 
 #endif /* _P_IPV4_HEADER_INCLUDED_ */

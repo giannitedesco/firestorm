@@ -5,19 +5,23 @@
 */
 
 #include <firestorm.h>
+#include <f_packet.h>
+#include <f_decode.h>
 #include <f_flow.h>
 
 static struct _flow_tracker *ft_list;
 
-void flow_tracker_add(struct _flow_tracker *ft)
+void flow_tracker_add(proto_t p, flow_tracker_t ft)
 {
-	assert(ft != NULL && ft->ft_proto != NULL && ft->ft_label != NULL);
+	assert(ft != NULL && ft->ft_label != NULL);
+	assert(p != NULL && p->p_ft == NULL);
+	p->p_ft = ft;
+	ft->ft_proto = p;
 	ft->ft_next = ft_list;
 	ft_list = ft;
 }
 
-int flow_tracker_foreach(int(*cbfn)(struct _flow_tracker *f, void *priv),
-				void *priv)
+int flow_tracker_foreach(int(*cbfn)(flow_tracker_t, void *), void *priv)
 {
 	struct _flow_tracker *ft;
 	int ret = 1;

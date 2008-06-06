@@ -566,7 +566,7 @@ static int queue_fragment(struct ipdefrag *ipd,
 	return 0;
 }
 
-pkt_t _ipfrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
+static pkt_t ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
 {
 	struct ipdefrag *ipd = s;
 	const struct pkt_iphdr *iph;
@@ -594,7 +594,7 @@ pkt_t _ipfrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
 	return ret;
 }
 
-void _ipfrag_dtor(flow_state_t s)
+static void ipdefrag_dtor(flow_state_t s)
 {
 	struct ipdefrag *ipd = s;
 
@@ -608,7 +608,7 @@ void _ipfrag_dtor(flow_state_t s)
 	free(s);
 }
 
-flow_state_t _ipfrag_ctor(void)
+static flow_state_t ipdefrag_ctor(void)
 {
 	struct ipdefrag *ipd;
 
@@ -637,3 +637,10 @@ flow_state_t _ipfrag_ctor(void)
 
 	return ipd;
 }
+
+struct _flow_tracker _ipv4_ipdefrag = {
+	.ft_label = "ipdefrag",
+	.ft_ctor = ipdefrag_ctor,
+	.ft_dtor = ipdefrag_dtor,
+	.ft_track = ipdefrag_track,
+};

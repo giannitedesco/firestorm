@@ -58,14 +58,6 @@ struct _decoder _ipv4_decoder = {
 	.d_decode = ipv4_decode,
 };
 
-struct _flow_tracker ipfrag = {
-	.ft_label = "ipdefrag",
-	.ft_proto = &p_fragment,
-	.ft_ctor = _ipfrag_ctor,
-	.ft_dtor = _ipfrag_dtor,
-	.ft_track = _ipfrag_track,
-};
-
 static void __attribute__((constructor)) _ctor(void)
 {
 	decoder_add(&_ipv4_decoder);
@@ -80,7 +72,7 @@ static void __attribute__((constructor)) _ctor(void)
 	proto_add(&_ipv4_decoder, &p_tcp);
 	proto_add(&_ipv4_decoder, &p_udp);
 	proto_add(&_ipv4_decoder, &p_esp);
-	flow_tracker_add(&ipfrag);
+	flow_tracker_add(&p_fragment, &_ipv4_ipdefrag);
 }
 
 uint16_t _ip_csum(const struct pkt_iphdr *iph)

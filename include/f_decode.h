@@ -46,7 +46,13 @@ struct _proto {
 	struct _proto *p_next;
 	struct _decoder *p_owner;
 	size_t p_dcb_sz;
+	flow_tracker_t p_ft;
 	const char *p_label;
+};
+
+struct _dcb {
+	struct _proto *dcb_proto;
+	struct _dcb *dcb_next;
 };
 
 extern struct _namespace _ns_arr[NS_MAX];
@@ -54,15 +60,14 @@ extern struct _namespace _ns_arr[NS_MAX];
 /* ===[ Front end API: decoding ]=== */
 unsigned int decode_num_protocols(void);
 size_t decode_max_dcb_size(void);
-void decode(struct _pkt *p, struct _decoder *d) _nonull(1, 2);
-int decode_pkt_realloc(struct _pkt *p, unsigned int min_layers) _nonull(1);
-int decode_foreach_protocol(int(*cbfn)(struct _proto *p, void *priv),
-				void *priv) _nonull(1);
+int decode_foreach_protocol(int(*cbfn)(proto_t p, void *priv), void *priv)
+				_nonull(1);
 
-/* ===[ Backend API for protocol/decoder plugins ]=== */
+/* ===[ Backend API: for protocol/decoder plugins ]=== */
 void decoder_add(struct _decoder *d);
 void decoder_register(struct _decoder *d, proto_ns_t ns, proto_id_t id);
-void proto_add(struct _decoder *d, struct _proto *p) _nonull(1,2);
+void proto_add(struct _decoder *d, struct _proto *p)
+		_nonull(1,2);
 
 static inline struct _decoder * _constfn
 _ns_entry_search(const struct _ns_entry *p, unsigned int n, proto_id_t id)

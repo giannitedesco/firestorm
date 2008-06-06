@@ -56,6 +56,10 @@ typedef uint8_t mesg_code_t;
 void mesg(mesg_code_t code, const char *fmt, ...) _printf(2,3);
 void hex_dump(const uint8_t *tmp, size_t len, size_t llen);
 
+/* --- Packet routines */
+pkt_t pkt_alloc(source_t source) _malloc;
+void pkt_free(pkt_t pkt);
+
 /* --- Data-source plugins */
 source_t capture_tcpdump_open(const char *fn);
 
@@ -63,6 +67,8 @@ source_t capture_tcpdump_open(const char *fn);
 void decode_init(void);
 decoder_t decoder_get(proto_ns_t ns, proto_id_t id);
 const char *decoder_label(decoder_t l);
+void decode(pkt_t p, decoder_t d) _nonull(1, 2);
+int decode_pkt_realloc(pkt_t p, unsigned int min_layers) _nonull(1);
 
 /* --- Pipelines: the capture / decode / analyze mainloop */
 pipeline_t pipeline_new(void) _malloc;

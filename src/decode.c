@@ -248,15 +248,6 @@ int decode_pkt_realloc(struct _pkt *p, unsigned int min_layers)
 	return 1;
 }
 
-static void decode_dump(struct _pkt *p)
-{
-	struct _dcb *cur;
-
-	for(cur = p->pkt_dcb; cur < p->pkt_dcb_top; cur = cur->dcb_next) {
-		mesg(M_DEBUG, "DECODED: %s", cur->dcb_proto->p_label);
-	}
-}
-
 void decode(struct _pkt *p, struct _decoder *d)
 {
 	p->pkt_nxthdr = p->pkt_base;
