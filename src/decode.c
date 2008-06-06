@@ -244,6 +244,7 @@ int decode_pkt_realloc(struct _pkt *p, unsigned int min_layers)
 	
 	p->pkt_dcb = (void *)new;
 	p->pkt_dcb_end = (void *)(new + (min_layers * max_dcb));
+
 	return 1;
 }
 
@@ -256,10 +257,9 @@ static void decode_dump(struct _pkt *p)
 	}
 }
 
-void decode(struct _source *s, struct _pkt *p)
+void decode(struct _pkt *p, struct _decoder *d)
 {
 	p->pkt_nxthdr = p->pkt_base;
 	p->pkt_dcb_top = p->pkt_dcb;
-
-	s->s_decoder->d_decode(p);
+	d->d_decode(p);
 }

@@ -15,6 +15,7 @@ struct _pkt {
 	const uint8_t	*pkt_end;
 
 	const uint8_t	*pkt_nxthdr;
+
 	source_t	pkt_source;
 
 	struct _dcb	*pkt_dcb_top;

@@ -53,7 +53,7 @@ static struct _proto p_udp = {
 	.p_label = "udp",
 };
 
-static struct _decoder decoder = {
+struct _decoder _ipv4_decoder = {
 	.d_label = "IPv4",
 	.d_decode = ipv4_decode,
 };
@@ -68,18 +68,18 @@ struct _flow_tracker ipfrag = {
 
 static void __attribute__((constructor)) _ctor(void)
 {
-	decoder_add(&decoder);
-	decoder_register(&decoder, NS_ETHER, const_be16(0x0800));
-	decoder_register(&decoder, NS_UNIXPF, 2);
-	proto_add(&decoder, &p_fragment);
-	proto_add(&decoder, &p_tunnel);
-	proto_add(&decoder, &p_icmp);
-	proto_add(&decoder, &p_igmp);
-	proto_add(&decoder, &p_sctp);
-	proto_add(&decoder, &p_dccp);
-	proto_add(&decoder, &p_tcp);
-	proto_add(&decoder, &p_udp);
-	proto_add(&decoder, &p_esp);
+	decoder_add(&_ipv4_decoder);
+	decoder_register(&_ipv4_decoder, NS_ETHER, const_be16(0x0800));
+	decoder_register(&_ipv4_decoder, NS_UNIXPF, 2);
+	proto_add(&_ipv4_decoder, &p_fragment);
+	proto_add(&_ipv4_decoder, &p_tunnel);
+	proto_add(&_ipv4_decoder, &p_icmp);
+	proto_add(&_ipv4_decoder, &p_igmp);
+	proto_add(&_ipv4_decoder, &p_sctp);
+	proto_add(&_ipv4_decoder, &p_dccp);
+	proto_add(&_ipv4_decoder, &p_tcp);
+	proto_add(&_ipv4_decoder, &p_udp);
+	proto_add(&_ipv4_decoder, &p_esp);
 	flow_tracker_add(&ipfrag);
 }
 

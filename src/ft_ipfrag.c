@@ -61,10 +61,6 @@ static unsigned int err_mem;
 static unsigned int err_timeout;
 static unsigned int reassembled;
 
-/* Reassembly */
-static uint8_t *reasm_buf;
-static size_t reasm_len;
-
 static struct ipfrag *fragstruct_alloc(struct ipdefrag *ipd)
 {
 	struct ipfrag *ret;
@@ -151,71 +147,88 @@ static void ipq_kill(struct ipdefrag *ipd, struct ipq *qp)
 	ipd->mem -= sizeof(struct ipq);
 }
 
+static void frankenpkt_dtor(struct _pkt *pkt)
+{
+	decode_pkt_realloc(pkt, 0);
+	free(pkt->pkt_base);
+}
+
 /* Reassemble a complete set of fragments */
-static void reassemble(struct ipdefrag *ipd, struct ipq *qp)
+static struct _pkt *reassemble(struct ipdefrag *ipd, struct ipq *qp, source_t s)
 {
 	struct ipfrag *f;
 	struct pkt_iphdr *iph;
-	size_t olen = qp->len;
-	size_t len = 0;
-	uint8_t *buf;
-	uint8_t *tmp;
+	int len = 0;
+	uint8_t *buf, *ptr;
+	struct _pkt *ret = NULL;
 
-	assert(olen <= 0xffff);
+	assert(qp->len <= 0xffff);
 
-	if ( !qp->fragments ) {
-		err_reasm++;
-		return;
-	}
+	if ( !qp->fragments )
+		goto err;
 
 	iph = qp->fragments->fdata;
-	olen += iph->ihl << 2;
+	qp->len += iph->ihl << 2;
 
 	/* Allocate the frankenpacket buffer */
-	if ( olen > reasm_len ) {
-		tmp = realloc(reasm_buf, olen);
-		if ( tmp == NULL ) {
-			olen = reasm_len;
-			dmesg(M_DEBUG, "ipfrag: reassemble error!");
-			err_reasm++;
-			return;
-		}else{
-			reasm_buf = tmp;
-			reasm_len = qp->len;
-		}
-	}
+	ptr = buf = malloc(qp->len);
+	if ( buf == NULL )
+		goto err;
 
 	/* Copy all the fragments in to the new buffer */
-	dmesg(M_DEBUG, "Reassemble: %u bytes", olen);
-	buf = reasm_buf;
+	dmesg(M_DEBUG, "Reassemble: %u bytes", qp->len);
 
 	/* Do the header */
 	dmesg(M_DEBUG, " * %u byte header", iph->ihl << 2);
-	memcpy(buf, qp->fragments->fdata, iph->ihl << 2);
-	buf += iph->ihl << 2;
+	memcpy(ptr, qp->fragments->fdata, iph->ihl << 2);
+	ptr += iph->ihl << 2;
 	len += iph->ihl << 2;
 
 	for(f = qp->fragments; f; f = f->next) {
 		dmesg(M_DEBUG, " * %u bytes @ %u", f->len, f->offset);
-		memcpy(buf, f->data, f->len);
-		buf += f->len;
+		memcpy(ptr, f->data, f->len);
+		ptr += f->len;
 		len += f->len;
-		if ( len >= olen )
+		if ( len >= qp->len )
 			break;
 	}
 
 	/* Fixup the IP header */
+	iph = (void *)buf;
 	iph->frag_off = 0;
 	iph->tot_len = sys_be16(len);
 	iph->csum = 0;
 	iph->csum = _ip_csum(iph);
 
-	dhex_dump(reasm_buf, len, 16);
+	dhex_dump(buf, qp->len, 16);
+
+	ret = pkt_alloc(s);
+	if ( ret == NULL )
+		goto err_free_buf;
+
+	ret->pkt_ts = qp->time;
+	ret->pkt_base = buf;
+	ret->pkt_len = ret->pkt_caplen = qp->len;
+	ret->pkt_end = ret->pkt_base + ret->pkt_len;
+
+	if ( !decode_pkt_realloc(ret, DECODE_DEFAULT_MIN_LAYERS) )
+		goto err_free_pkt;
+
+	ret->pkt_dtor = frankenpkt_dtor;
 
 	/* TODO: Inject the packet back in to the flow */
+	decode(ret, &_ipv4_decoder);
 	reassembled++;
 
-	return;
+	return ret;
+
+err_free_pkt:
+	pkt_free(ret);
+err_free_buf:
+	free(buf);
+err:
+	err_reasm++;
+	return ret;
 }
 
 static struct ipq *ip_frag_create(struct ipdefrag *ipd, unsigned int hash,
@@ -358,7 +371,7 @@ static void hash_mtf(struct ipdefrag *ipd, unsigned int hash, struct ipq *qp)
 	qp->pprev = &ipd->hash[hash];
 }
 
-static void queue_fragment(struct ipdefrag *ipd,
+static int queue_fragment(struct ipdefrag *ipd,
 				unsigned int hash,
 				struct ipq *qp,
 				struct _pkt *pkt,
@@ -370,7 +383,7 @@ static void queue_fragment(struct ipdefrag *ipd,
 	int chop = 0;
 
 	if ( !check_timeouts(ipd, pkt, qp) )
-		return;
+		return 0;
 
 	hash_mtf(ipd, hash, qp);
 
@@ -393,7 +406,7 @@ static void queue_fragment(struct ipdefrag *ipd,
 		if ( (end < qp->len) ||
 			((qp->last_in & LAST_IN) && (end != qp->len))) {
 			alert_teardrop(pkt);
-			return;
+			return 0;
 		}
 		qp->last_in |= LAST_IN;
 		qp->len = end;
@@ -412,7 +425,7 @@ static void queue_fragment(struct ipdefrag *ipd,
 		if ( end > qp->len ) {
 			if (qp->last_in & LAST_IN) {
 				alert_attack(pkt);
-				return;
+				return 0;
 			}
 			qp->len = end;
 		}
@@ -420,7 +433,7 @@ static void queue_fragment(struct ipdefrag *ipd,
 
 	if ( end == offset ) {
 		alert_attack(pkt);
-		return;
+		return 0;
 	}
 
 	/* Don't bother wasting any more resources
@@ -428,13 +441,13 @@ static void queue_fragment(struct ipdefrag *ipd,
 	if ( qp->len > 0xffff ) {
 		/* FIXME: isn't this a bug? */
 		alert_oversize(pkt);
-		return;
+		return 0;
 	}
 
 	/* Insert data into fragment chain */
 	me = fragstruct_alloc(ipd);
 	if ( me == NULL )
-		return;
+		return 0;
 
 	/* Find out where to insert this fragment in the list */
 	for(prev = NULL, next = qp->fragments; next; next = next->next) {
@@ -454,7 +467,7 @@ static void queue_fragment(struct ipdefrag *ipd,
 
 			if ( end <= offset ) {
 				alert_attack(pkt);
-				return;
+				return 0;
 			}
 		}
 	}
@@ -508,7 +521,7 @@ static void queue_fragment(struct ipdefrag *ipd,
 		me->fdata = malloc(alen);
 		if ( me->fdata == NULL ) {
 			fragstruct_free(ipd, me);
-			return;
+			return 0;
 		}
 
 		ipd->mem += alen;
@@ -547,38 +560,39 @@ static void queue_fragment(struct ipdefrag *ipd,
 		(unsigned int)qp,
 		qp->meat, qp->len);
 
-	if ( qp->last_in == (FIRST_IN|LAST_IN) &&
-		qp->meat == qp->len ) {
-		reassemble(ipd, qp);
-		ipq_kill(ipd, qp);
-	}
+	if ( qp->last_in == (FIRST_IN|LAST_IN) && qp->meat == qp->len )
+		return 1;
 
-	return;
+	return 0;
 }
 
-void _ipfrag_track(flow_state_t s, struct _pkt *pkt, struct _dcb *dcb_ptr)
+pkt_t _ipfrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
 {
 	struct ipdefrag *ipd = s;
 	const struct pkt_iphdr *iph;
 	struct ipfrag_dcb *dcb;
 	unsigned int hash;
 	struct ipq *q;
+	pkt_t ret = NULL;
 
 	dcb = (struct ipfrag_dcb *)dcb_ptr;
 	iph = dcb->ip_iph;
 
 	/* Ignore packets with ttl < min_ttl */
 	if ( iph->ttl < minttl )
-		return;
+		return ret;
 
 	q = ip_find(ipd, iph, &hash, pkt);
 	if ( q == NULL )
-		return;
+		return ret;
 
-	queue_fragment(ipd, hash, q, pkt, iph);
+	if ( queue_fragment(ipd, hash, q, pkt, iph) ) {
+		ret = reassemble(ipd, q, pkt->pkt_source);
+		ipq_kill(ipd, q);
+	}
+
+	return ret;
 }
-
-static int use;
 
 void _ipfrag_dtor(flow_state_t s)
 {
@@ -592,13 +606,6 @@ void _ipfrag_dtor(flow_state_t s)
 
 	/* FIXME: memory leak */
 	free(s);
-
-	--use;
-	assert(use >= 0);
-	if ( use == 0 ) {
-		free(reasm_buf);
-		reasm_buf = NULL;
-	}
 }
 
 flow_state_t _ipfrag_ctor(void)
@@ -628,6 +635,5 @@ flow_state_t _ipfrag_ctor(void)
 			"you will be vulnerable to attack!");
 	}
 
-	use++;
 	return ipd;
 }

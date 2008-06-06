@@ -117,14 +117,21 @@ int pipeline_add_source(pipeline_t p, source_t s)
 
 static void analyze(struct _pipeline *p, struct _pkt *pkt)
 {
+	struct _pkt *reasm;
 	struct _dcb *cur;
 	struct per_proto *pp;
 
 	for(cur = pkt->pkt_dcb; cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
 		dmesg(M_DEBUG, "DECODED: %s", cur->dcb_proto->p_label);
 		pp = &p->p_proto[cur->dcb_proto->p_idx];
-		if ( pp->pp_ft && pp->pp_ft->ft_track )
-			pp->pp_ft->ft_track(pp->pp_flow, pkt, cur);
+		if ( pp->pp_ft && pp->pp_ft->ft_track ) {
+			reasm = pp->pp_ft->ft_track(pp->pp_flow, pkt, cur);
+			if ( reasm ) {
+				dmesg(M_DEBUG, "REASSEMBLYGRAM");
+				analyze(p, reasm);
+				pkt_free(reasm);
+			}
+		}
 	}
 }
 
@@ -145,7 +152,7 @@ int pipeline_go(pipeline_t p)
 			n++;
 			dmesg(M_DEBUG, "packet %u, len = %u/%u",
 				n, pkt->pkt_caplen, pkt->pkt_len);
-			decode(s, pkt);
+			decode(pkt, s->s_decoder);
 			analyze(p, pkt);
 			if ( pkt->pkt_nxthdr < pkt->pkt_end ) {
 				dhex_dump(pkt->pkt_nxthdr,

@@ -15,11 +15,16 @@ static void __attribute__((constructor)) _ctor(void)
 	mpool_init(&pkt_pool, sizeof(struct _pkt), 0);
 }
 
+static void __attribute__((destructor)) _dtor(void)
+{
+	mpool_fini(&pkt_pool);
+}
+
 pkt_t pkt_alloc(source_t source)
 {
 	struct _pkt *ret;
 
-	ret = mpool_alloc(&pkt_pool);
+	ret = mpool_alloc0(&pkt_pool);
 	if ( ret )
 		ret->pkt_source = source;
 

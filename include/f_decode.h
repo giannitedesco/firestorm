@@ -54,7 +54,7 @@ extern struct _namespace _ns_arr[NS_MAX];
 /* ===[ Front end API: decoding ]=== */
 unsigned int decode_num_protocols(void);
 size_t decode_max_dcb_size(void);
-void decode(struct _source *s, struct _pkt *p) _nonull(1,2);
+void decode(struct _pkt *p, struct _decoder *d) _nonull(1, 2);
 int decode_pkt_realloc(struct _pkt *p, unsigned int min_layers) _nonull(1);
 int decode_foreach_protocol(int(*cbfn)(struct _proto *p, void *priv),
 				void *priv) _nonull(1);
