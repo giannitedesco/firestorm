@@ -1,25 +1,10 @@
 /*
  * This file is part of Firestorm NIDS
- * Copyright (c) Gianni Tedesco 2002,2003,2004.
- * This program is released under the terms of the GNU GPL version 2
- */
-#include <firestorm.h>
-#include <f_packet.h>
-#include <f_decode.h>
-#include <f_flow.h>
-#include <pkt/ip.h>
-#include "p_ipv4.h"
-
-#if 1
-#define dmesg mesg
-#else
-#define dmesg(x...) do{}while(0);
-#endif
-
-/*
+ * Copyright (c) Gianni Tedesco 2002,2003,2004.2008
+ * This program is released under the terms of the GNU GPL version 3
+ *
  * IP Defragmentation for firestorm
  * ================================
- *
  * This code is a reworking of ip_fragment.c from Linux 2.4.18,
  * it should be relatively straight forward to understand. It's
  * pretty well tested.
@@ -31,42 +16,54 @@
  *  Timed out packets
  *
  * TODO:
- *  o Audit and document
- *  o Per-ip accounting (timeouts/etc..)
- *  o Use more efficient search to insert fragments
- *  o Coalesce fragments in incomplete packets (?)
+ *  o Fixup configuration args
+ *    o per-ip accounting of timeouts
+ *    o make everything else global
+ *  o Share TCP block allocator (would mean using tree not hash)
  *  o Detect ICMP_TIME_EXCEEDED/ICMP_EXC_FRAGTIME (??)
- */
+*/
+#include <firestorm.h>
+#include <f_packet.h>
+#include <f_decode.h>
+#include <f_flow.h>
+#include <pkt/ip.h>
+#include "p_ipv4.h"
 
-#define IPHASH (1<<7) /* Must be a power of two */
+#if 0
+#define dmesg mesg
+#define dhex_dump hex_dump
+#else
+#define dmesg(x...) do{}while(0);
+#define dhex_dump(x...) do{}while(0);
+#endif
+
+#define IPHASH (1 << 7) /* Must be a power of two */
 struct ipdefrag {
 	struct ipq *ipq_latest;
 	struct ipq *ipq_oldest;
-
-	unsigned int mem;
-
+	size_t mem;
 	struct ipq *hash[IPHASH]; /* IP fragment hash table */
-
-	/* config: high and low memory water marks */
-	unsigned int mem_hi;
-	unsigned int mem_lo;
-
-	/* config: Timeout (in seconds) */
-	timestamp_t timeout;
-
-	/* config: Don't decode fragments with too low ttl */
-	unsigned int minttl;
-
-	/* Statistics */
-	unsigned int err_reasm;
-	unsigned int err_mem;
-	unsigned int err_timeout;
-	unsigned int reassembled;
 };
 
+/* config: high and low memory water marks */
+static const size_t mem_hi = 4 << 20;
+static const size_t mem_lo = 3 << 20;
+
+/* config: Timeout (in seconds) */
+static const timestamp_t timeout = 60 * TIMESTAMP_HZ;
+
+/* config: Don't decode fragments with too low ttl */
+static const unsigned int minttl = 1;
+
+/* Statistics */
+static unsigned int err_reasm;
+static unsigned int err_mem;
+static unsigned int err_timeout;
+static unsigned int reassembled;
+
 /* Reassembly */
-static char *reasm_buf;
-static unsigned int reasm_len;
+static uint8_t *reasm_buf;
+static size_t reasm_len;
 
 static struct ipfrag *fragstruct_alloc(struct ipdefrag *ipd)
 {
@@ -92,7 +89,6 @@ static unsigned int ipq_hashfn(uint16_t id,
 				uint8_t proto)
 {
 	unsigned int h = saddr ^ daddr;
-
 	h ^= (h >> 16) ^ id;
 	h ^= (h >> 8) ^ proto;
 	return h & (IPHASH - 1);
@@ -111,9 +107,6 @@ static void alert_attack(struct _pkt *p)
 {
 }
 static void alert_boink(struct _pkt *p)
-{
-}
-static void alert_truncated(struct _pkt *p)
 {
 }
 static void alert_oom(struct _pkt *p)
@@ -158,26 +151,20 @@ static void ipq_kill(struct ipdefrag *ipd, struct ipq *qp)
 	ipd->mem -= sizeof(struct ipq);
 }
 
-/* Reassemble a complete set of fragments, decode the
- * new packet, and send it back through the preprocessor
- * list, we won't touch it next time round */
-static void reassemble(struct ipdefrag *ipd, struct ipq *qp, struct _pkt *pkt)
+/* Reassemble a complete set of fragments */
+static void reassemble(struct ipdefrag *ipd, struct ipq *qp)
 {
 	struct ipfrag *f;
 	struct pkt_iphdr *iph;
-	unsigned int olen = qp->len;
-	unsigned int len = 0;
-	char *buf;
-	char *tmp;
+	size_t olen = qp->len;
+	size_t len = 0;
+	uint8_t *buf;
+	uint8_t *tmp;
 
-	/* Kill oversize packets */
-	if ( olen > 0xffff ) {
-		ipd->err_reasm++;
-		return;
-	}
+	assert(olen <= 0xffff);
 
 	if ( !qp->fragments ) {
-		ipd->err_reasm++;
+		err_reasm++;
 		return;
 	}
 
@@ -190,7 +177,7 @@ static void reassemble(struct ipdefrag *ipd, struct ipq *qp, struct _pkt *pkt)
 		if ( tmp == NULL ) {
 			olen = reasm_len;
 			dmesg(M_DEBUG, "ipfrag: reassemble error!");
-			ipd->err_reasm++;
+			err_reasm++;
 			return;
 		}else{
 			reasm_buf = tmp;
@@ -208,40 +195,25 @@ static void reassemble(struct ipdefrag *ipd, struct ipq *qp, struct _pkt *pkt)
 	buf += iph->ihl << 2;
 	len += iph->ihl << 2;
 
-	for(f=qp->fragments; f; f=f->next) {
+	for(f = qp->fragments; f; f = f->next) {
 		dmesg(M_DEBUG, " * %u bytes @ %u", f->len, f->offset);
 		memcpy(buf, f->data, f->len);
 		buf += f->len;
 		len += f->len;
-		if ( len >= olen ) break;
+		if ( len >= olen )
+			break;
 	}
-	dmesg(M_DEBUG, ".");
-
-#if 0
-	/* Build the packet */
-	packet_reinject_prepare(&ipfr, pkt);
-
-	/* Fill in the timestamp (time of last packet seen for this frag) */
-	ipfr.time = qp->time;
-	ipfr.len = len;
-	ipfr.caplen = len;
-	ipfr.llen = 0;
-	ipfr.layer[0].proto = &ipv4_p;
-	ipfr.layer[0].h.raw = reasm_buf;
-	ipfr.layer[0].flags = FLAG_IP_REASM | FLAG_IP_CSUM;
-	ipfr.layer[0].session = NULL;
-	ipfr.base = reasm_buf;
-	ipfr.end = ipfr.base + olen;
 
 	/* Fixup the IP header */
-	ipfr.layer[0].h.ip->frag_off = 0;
-	ipfr.layer[0].h.ip->tot_len = ntohs(len);
-	ipfrag_csum(ipfr.layer[0].h.ip);
+	iph->frag_off = 0;
+	iph->tot_len = sys_be16(len);
+	iph->csum = 0;
+	iph->csum = _ip_csum(iph);
 
-	/* Inject the packet back in to the flow */
-	ipfrag_reassembled++;
-	ipfr.layer[0].proto->decode(&ipfr);
-#endif
+	dhex_dump(reasm_buf, len, 16);
+
+	/* TODO: Inject the packet back in to the flow */
+	reassembled++;
 
 	return;
 }
@@ -253,7 +225,7 @@ static struct ipq *ip_frag_create(struct ipdefrag *ipd, unsigned int hash,
 
 	q = calloc(1, sizeof(struct ipq));
 	if ( q == NULL ) {
-		ipd->err_mem++;
+		err_mem++;
 		return NULL;
 	}
 	ipd->mem += sizeof(struct ipq);
@@ -297,10 +269,10 @@ static struct ipq *ip_find(struct ipdefrag *ipd,
 }
 
 /* If a fragment is too old then zap it */
-static int expired(struct ipdefrag *ipd, struct _pkt *pkt, struct ipq *qp)
+static int expired(struct _pkt *pkt, struct ipq *qp)
 {
-	if ( time_after(pkt->pkt_ts, qp->time + ipd->timeout) ) {
-		ipd->err_timeout++;
+	if ( time_after(pkt->pkt_ts, qp->time + timeout) ) {
+		err_timeout++;
 		return 0;
 	}
 
@@ -313,27 +285,30 @@ static void ip_evictor(struct ipdefrag *ipd, struct _pkt *pkt, struct ipq *cq)
 	dmesg(M_DEBUG, "Running the ipfrag evictor! %u(%i) %i",
 		ipd->mem, ipd->mem, sizeof(struct ipfrag));
 	alert_oom(pkt);
-	ipd->err_mem++;
+	err_mem++;
 
-	while ( (ipd->mem > ipd->mem_lo) ) {
+	while ( (ipd->mem > mem_lo) ) {
 		if ( !ipd->ipq_oldest || (ipd->ipq_oldest == cq) )
 			return;
 		ipq_kill(ipd, ipd->ipq_oldest);
 	}
 }
 
-static int queue_fragment(struct ipdefrag *ipd,
-				unsigned int hash,
-				struct ipq *qp,
-				struct _pkt *pkt,
-				const struct pkt_iphdr *iph)
+static int check_timeouts(struct ipdefrag *ipd,
+				struct _pkt *pkt, struct ipq *qp)
 {
-	struct ipfrag *prev, *next, *me;
-	int flags, offset;
-	int ihl, end, len;
-	int chop=0;
+	/* Check our timeout */
+	if ( !expired(pkt, qp) ) {
+		/* We alert if we actually see a fragment
+		 * arrive after the timeout because that
+		 * is suspicious (read: evasive)
+		*/
+		alert_timedout(pkt);
+		ipq_kill(ipd, qp);
+		return 0;
+	}
 
-	/* Move to head of LRU list */
+	/* Move qp to head of LRU list */
 	if ( qp->next_time)
 		qp->next_time->prev_time = qp->prev_time;
 	if ( qp->prev_time)
@@ -350,34 +325,16 @@ static int queue_fragment(struct ipdefrag *ipd,
 		ipd->ipq_latest->prev_time = qp;
 	ipd->ipq_latest = qp;
 
-	/* Check our timeout */
-	if ( !expired(ipd, pkt, qp) ) {
-		/* We alert if we actually see a fragment
-		 * arrive after the timeout because that
-		 * is suspicious (read: evasive) */
-		alert_timedout(pkt);
-		ipq_kill(ipd, qp);
-		return 1;
-	}
-
-	/* Check other timeouts */
+	/* Check timeouts on other fragment queues */
 	while ( ipd->ipq_oldest ){
-	       	if ( expired(ipd, pkt, ipd->ipq_oldest) )
+		if ( expired(pkt, ipd->ipq_oldest) )
 			break;
 
 		/* this can't kill qp from under us because
 		 * we already know we haven't timed out */
 		ipq_kill(ipd, ipd->ipq_oldest);
+		return 0;
 	}
-
-	/* Move to front heuristic */
-	if ( qp->next )
-		qp->next->pprev = qp->pprev;
-	*qp->pprev = qp->next;
-	if ( (qp->next = ipd->hash[hash]) )
-		qp->next->pprev = &qp->next;
-	ipd->hash[hash] = qp;
-	qp->pprev = &ipd->hash[hash];
 
 	/* The time for the reassembled packet is equal
 	 * to the time of the last packet recieved. This
@@ -386,18 +343,44 @@ static int queue_fragment(struct ipdefrag *ipd,
 	 */
 	qp->time = pkt->pkt_ts;
 
+	return 1;
+}
+
+static void hash_mtf(struct ipdefrag *ipd, unsigned int hash, struct ipq *qp)
+{
+	/* Move to front heuristic */
+	if ( qp->next )
+		qp->next->pprev = qp->pprev;
+	*qp->pprev = qp->next;
+	if ( (qp->next = ipd->hash[hash]) )
+		qp->next->pprev = &qp->next;
+	ipd->hash[hash] = qp;
+	qp->pprev = &ipd->hash[hash];
+}
+
+static void queue_fragment(struct ipdefrag *ipd,
+				unsigned int hash,
+				struct ipq *qp,
+				struct _pkt *pkt,
+				const struct pkt_iphdr *iph)
+{
+	struct ipfrag *prev, *next, *me;
+	int flags, offset;
+	int ihl, end, len;
+	int chop = 0;
+
+	if ( !check_timeouts(ipd, pkt, qp) )
+		return;
+
+	hash_mtf(ipd, hash, qp);
+
 	/* Kill off LRU ipqs, we are OOM */
-	if ( ipd->mem > ipd->mem_hi )
+	if ( ipd->mem > mem_hi )
 		ip_evictor(ipd, pkt, qp);
 
 	/* Now we can get on with queueing the packet.. */
 	ihl = iph->ihl << 2;
 	len = sys_be16(iph->tot_len);
-
-	if ( ((uint8_t *)iph) + len > pkt->pkt_end ) {
-		alert_truncated(pkt);
-		return 1;
-	}
 
 	offset = sys_be16(iph->frag_off);
 	flags = offset & ~IP_OFFMASK;
@@ -410,7 +393,7 @@ static int queue_fragment(struct ipdefrag *ipd,
 		if ( (end < qp->len) ||
 			((qp->last_in & LAST_IN) && (end != qp->len))) {
 			alert_teardrop(pkt);
-			return 1;
+			return;
 		}
 		qp->last_in |= LAST_IN;
 		qp->len = end;
@@ -429,7 +412,7 @@ static int queue_fragment(struct ipdefrag *ipd,
 		if ( end > qp->len ) {
 			if (qp->last_in & LAST_IN) {
 				alert_attack(pkt);
-				return 1;
+				return;
 			}
 			qp->len = end;
 		}
@@ -437,7 +420,7 @@ static int queue_fragment(struct ipdefrag *ipd,
 
 	if ( end == offset ) {
 		alert_attack(pkt);
-		return 1;
+		return;
 	}
 
 	/* Don't bother wasting any more resources
@@ -445,16 +428,16 @@ static int queue_fragment(struct ipdefrag *ipd,
 	if ( qp->len > 0xffff ) {
 		/* FIXME: isn't this a bug? */
 		alert_oversize(pkt);
-		return 1;
+		return;
 	}
 
 	/* Insert data into fragment chain */
 	me = fragstruct_alloc(ipd);
 	if ( me == NULL )
-		return 1;
+		return;
 
 	/* Find out where to insert this fragment in the list */
-	for(prev=NULL, next=qp->fragments; next; next=next->next) {
+	for(prev = NULL, next = qp->fragments; next; next = next->next) {
 		if ( next->offset >= offset )
 			break;
 		prev = next;
@@ -471,7 +454,7 @@ static int queue_fragment(struct ipdefrag *ipd,
 
 			if ( end <= offset ) {
 				alert_attack(pkt);
-				return 1;
+				return;
 			}
 		}
 	}
@@ -515,8 +498,8 @@ static int queue_fragment(struct ipdefrag *ipd,
 		chop = 0;
 	}
 
-	/* XXX: IP defragmentation can be zerocopy */
-	if ( 1 ) {
+#if 1
+	do {
 		unsigned int alen = me->len;
 
 		if ( !offset )
@@ -525,21 +508,25 @@ static int queue_fragment(struct ipdefrag *ipd,
 		me->fdata = malloc(alen);
 		if ( me->fdata == NULL ) {
 			fragstruct_free(ipd, me);
-			return 1;
+			return;
 		}
 
 		ipd->mem += alen;
 		memcpy(me->fdata, ((char *)iph) + chop, alen);
 		me->free = 1;
 		me->flen = alen;
-	}else {
-		me->fdata = ((void *)iph) + chop;
-		me->free = 0;
-	}
+	}while(0);
+#else
+	/* FIXME: IP defragmentation could be zerocopy for
+	 * mmapped tcpdump files, but then the ip header
+	 * can't be fixed up at reassemble time...
+	*/
+	me->fdata = ((void *)iph) + chop;
+	me->free = 0;
+#endif
 
 	me->data = me->fdata;
 
-	/* FIXME: looks wrong */
 	if ( !offset )
 		me->data += ihl;
 
@@ -560,7 +547,13 @@ static int queue_fragment(struct ipdefrag *ipd,
 		(unsigned int)qp,
 		qp->meat, qp->len);
 
-	return 1;
+	if ( qp->last_in == (FIRST_IN|LAST_IN) &&
+		qp->meat == qp->len ) {
+		reassemble(ipd, qp);
+		ipq_kill(ipd, qp);
+	}
+
+	return;
 }
 
 void _ipfrag_track(flow_state_t s, struct _pkt *pkt, struct _dcb *dcb_ptr)
@@ -575,72 +568,66 @@ void _ipfrag_track(flow_state_t s, struct _pkt *pkt, struct _dcb *dcb_ptr)
 	iph = dcb->ip_iph;
 
 	/* Ignore packets with ttl < min_ttl */
-	if ( iph->ttl < ipd->minttl )
+	if ( iph->ttl < minttl )
 		return;
 
 	q = ip_find(ipd, iph, &hash, pkt);
 	if ( q == NULL )
 		return;
 
-	if ( !queue_fragment(ipd, hash, q, pkt, iph) )
-		return;
-
-	if ( q->last_in == (FIRST_IN|LAST_IN) &&
-		q->meat == q->len ) {
-		reassemble(ipd, q, pkt);
-	}
+	queue_fragment(ipd, hash, q, pkt, iph);
 }
+
+static int use;
 
 void _ipfrag_dtor(flow_state_t s)
 {
 	struct ipdefrag *ipd = s;
 
 	mesg(M_INFO, "ipfrag: %u reassembled packets, "
-	       "%u reasm errors, %u timeouts",
-		ipd->reassembled,
-		ipd->err_reasm,
-		ipd->err_timeout);
+		"%u reasm errors, %u timeouts",
+		reassembled, err_reasm, err_timeout);
 	mesg(M_INFO, "ipfrag: %u times out of memory, %uKB still used",
-		ipd->err_mem,
-		ipd->mem >> 10);
+		err_mem, ipd->mem >> 10);
 
 	/* FIXME: memory leak */
 	free(s);
+
+	--use;
+	assert(use >= 0);
+	if ( use == 0 ) {
+		free(reasm_buf);
+		reasm_buf = NULL;
+	}
 }
 
 flow_state_t _ipfrag_ctor(void)
 {
 	struct ipdefrag *ipd;
 
-	ipd = calloc(1, sizeof(*ipd));
-	if ( ipd != NULL ) {
-		ipd->mem_hi = 4 << 20;
-		ipd->mem_lo = 3 << 20;
-		ipd->minttl = 1;
-		ipd->timeout = 30 * TIMESTAMP_HZ;
-
-		mesg(M_INFO, "ipfrag: mem_hi=%u mem_lo=%u "
-			"minttl=%u timeout=%llus",
-			ipd->mem_hi, ipd->mem_lo,
-			ipd->minttl, ipd->timeout / TIMESTAMP_HZ);
-
-	}
-#if 0
-	if ( ipd->mem_hi <= ipd->mem_lo ) {
+	if ( mem_hi <= mem_lo ) {
 		mesg(M_ERR, "ipfrag: mem_hi must be bigger than mem_lo");
-		return 0;
+		return NULL;
 	}
 
-	if ( ipfrag_minttl > 255 ) {
+	if ( minttl > 255 ) {
 		mesg(M_ERR, "ipfrag: minttl must be < 256");
-		return 0;
+		return NULL;
 	}
 
-	if (ipd->timeout < 10 || ipd->timeout > 120) {
+	ipd = calloc(1, sizeof(*ipd));
+	if ( ipd == NULL )
+		return NULL;
+
+	mesg(M_INFO, "ipfrag: mem_hi=%u mem_lo=%u minttl=%u timeout=%llus",
+		mem_hi, mem_lo, minttl, timeout / TIMESTAMP_HZ);
+
+	if ( timeout < (10 * TIMESTAMP_HZ) ||
+		timeout > (120 * TIMESTAMP_HZ) ) {
 		mesg(M_WARN, "ipfrag: timeout is unreasonable - "
 			"you will be vulnerable to attack!");
 	}
 
-#endif
+	use++;
 	return ipd;
 }

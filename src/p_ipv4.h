@@ -58,6 +58,8 @@ struct ipq {
 	timestamp_t	time;
 };
 
+uint16_t _ip_csum(const struct pkt_iphdr *iph);
+
 flow_state_t _ipfrag_ctor(void);
 void _ipfrag_dtor(flow_state_t s);
 void _ipfrag_track(flow_state_t s, struct _pkt *pkt, struct _dcb *dcb);

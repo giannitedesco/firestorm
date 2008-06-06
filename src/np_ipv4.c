@@ -83,7 +83,7 @@ static void __attribute__((constructor)) _ctor(void)
 	flow_tracker_add(&ipfrag);
 }
 
-static uint16_t ip_csum(const struct pkt_iphdr *iph)
+uint16_t _ip_csum(const struct pkt_iphdr *iph)
 {
 	uint16_t *tmp = (uint16_t *)iph;
 	uint32_t sum = 0;
@@ -201,7 +201,7 @@ static void ipv4_decode(struct _pkt *p)
 		return;
 	}
 
-	if ( ip_csum(iph) ) {
+	if ( _ip_csum(iph) ) {
 		mesg(M_WARN, "bad checksum");
 		return;
 	}
