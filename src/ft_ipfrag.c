@@ -150,7 +150,7 @@ static void ipq_kill(struct ipdefrag *ipd, struct ipq *qp)
 static void frankenpkt_dtor(struct _pkt *pkt)
 {
 	decode_pkt_realloc(pkt, 0);
-	free(pkt->pkt_base);
+	free((void *)pkt->pkt_base);
 }
 
 /* Reassemble a complete set of fragments */
@@ -485,7 +485,7 @@ static int queue_fragment(struct ipdefrag *ipd,
 			next->data += i;
 			break;
 		}else{
-			struct ipfrag *free_it=next;
+			struct ipfrag *free_it = next;
 
 			/* Old fragment is completely overriden
 			 * with new one. Drop it */
