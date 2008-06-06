@@ -69,10 +69,17 @@ out:
 void pipeline_free(pipeline_t p)
 {
 	struct _source *s, *tmp;
+	unsigned int i;
 
 	list_for_each_entry_safe(s, tmp, &p->p_sources, s_list) {
 		list_del(&s->s_list);
 		_source_free(s);
+	}
+
+	for(i = 0; i < decode_num_protocols(); i++) {
+		if ( p->p_proto[i].pp_ft &&
+			p->p_proto[i].pp_ft->ft_dtor )
+			p->p_proto[i].pp_ft->ft_dtor(p->p_proto[i].pp_flow);
 	}
 
 	free(p);
@@ -100,22 +107,30 @@ int pipeline_add_source(pipeline_t p, source_t s)
 	return 1;
 }
 
+#if 1
+#define dmesg mesg
+#define dhex_dump hex_dump
+#else
+#define dmesg(x...) do{}while(0);
+#define dhex_dump(x...) do{}while(0);
+#endif
+
 static void analyze(struct _pipeline *p, struct _pkt *pkt)
 {
 	struct _dcb *cur;
 	struct per_proto *pp;
 
 	for(cur = pkt->pkt_dcb; cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
+		dmesg(M_DEBUG, "DECODED: %s", cur->dcb_proto->p_label);
 		pp = &p->p_proto[cur->dcb_proto->p_idx];
 		if ( pp->pp_ft && pp->pp_ft->ft_track )
 			pp->pp_ft->ft_track(pp->pp_flow, pkt, cur);
-		//mesg(M_DEBUG, "DECODED: %s", cur->dcb_proto->p_label);
 	}
 }
 
 int pipeline_go(pipeline_t p)
 {
-//	static unsigned int i;
+	static unsigned int n;
 	struct _source *s, *tmp;
 	pkt_t pkt;
 
@@ -126,19 +141,18 @@ int pipeline_go(pipeline_t p)
 			pkt = s->s_capdev->c_dequeue(s);
 			if ( pkt == NULL )
 				break;
-#if 0
-			mesg(M_DEBUG, "packet %u, len = %u/%u",
-				++i, p->pkt_caplen, p->pkt_len);
-#endif
+
+			n++;
+			dmesg(M_DEBUG, "packet %u, len = %u/%u",
+				n, pkt->pkt_caplen, pkt->pkt_len);
 			decode(s, pkt);
 			analyze(p, pkt);
-#if 0
-			if ( pkt->pkt_nxthdr < pkt->pkt_end )
-				hex_dump(pkt->pkt_nxthdr,
+			if ( pkt->pkt_nxthdr < pkt->pkt_end ) {
+				dhex_dump(pkt->pkt_nxthdr,
 					pkt->pkt_end - pkt->pkt_nxthdr, 16);
-			else
-				printf("\n");
-#endif
+			}else{
+				dmesg(M_DEBUG, ".\n");
+			}
 		}
 		mesg(M_INFO, "pipeline: finishing: %s[%s]",
 			s->s_capdev->c_name, s->s_name);
@@ -146,5 +160,6 @@ int pipeline_go(pipeline_t p)
 		_source_free(s);
 	}
 
+	mesg(M_DEBUG, "%u packets in total", n);
 	return 1;
 }
