@@ -107,7 +107,7 @@ int pipeline_add_source(pipeline_t p, source_t s)
 	return 1;
 }
 
-#if 1
+#if 0
 #define dmesg mesg
 #define dhex_dump hex_dump
 #else

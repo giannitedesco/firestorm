@@ -17,6 +17,27 @@ struct ip_dcb {
 	const struct pkt_ahhdr *ip_ah;
 };
 
+struct tcp_dcb {
+	struct _dcb tcp_dcb;
+	const struct pkt_iphdr *tcp_iph;
+	const struct pkt_ahhdr *tcp_ah;
+	const struct pkt_tcphdr *tcp_hdr;
+};
+
+struct udp_dcb {
+	struct _dcb udp_dcb;
+	const struct pkt_iphdr *udp_iph;
+	const struct pkt_ahhdr *udp_ah;
+	const struct pkt_udphdr *udp_hdr;
+};
+
+struct icmp_dcb {
+	struct _dcb icmp_dcb;
+	const struct pkt_iphdr *icmp_iph;
+	const struct pkt_ahhdr *icmp_ah;
+	const struct pkt_icmphdr *icmp_hdr;
+};
+
 /* Keeps each individual fragment */
 struct ipfrag {
 	struct ipfrag		*next;

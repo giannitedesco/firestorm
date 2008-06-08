@@ -1,6 +1,6 @@
 /*
  * This file is part of Firestorm NIDS
- * Copyright (c) Gianni Tedesco 2002,2003,2004.2008
+ * Copyright (c) Gianni Tedesco 2002,2003,2004,2008
  * This program is released under the terms of the GNU GPL version 3
  *
  * IP Defragmentation for firestorm
@@ -632,7 +632,7 @@ static flow_state_t ipdefrag_ctor(void)
 	if ( timeout < (10 * TIMESTAMP_HZ) ||
 		timeout > (120 * TIMESTAMP_HZ) ) {
 		mesg(M_WARN, "ipfrag: timeout is unreasonable - "
-			"you will be vulnerable to attack!");
+			"you will be vulnerable to evasion!");
 	}
 
 	return ipd;
