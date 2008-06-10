@@ -37,7 +37,7 @@ static struct _proto p_snap = {
 	.p_label = "llc",
 };
 
-static void __attribute__((constructor)) _ctor(void)
+__attribute__((constructor)) static void _ctor(void)
 {
 	decoder_add(&eth_decoder);
 	decoder_register(&eth_decoder, NS_DLT, DLT_EN10MB);

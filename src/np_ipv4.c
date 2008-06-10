@@ -15,7 +15,7 @@
 #include <pkt/udp.h>
 #include "p_ipv4.h"
 
-#if 1
+#if 0
 #define dmesg mesg
 #else
 #define dmesg(x...) do{}while(0);
@@ -94,6 +94,7 @@ static void __attribute__((constructor)) _ctor(void)
 	proto_add(&_ipv4_decoder, &p_udp);
 	proto_add(&_ipv4_decoder, &p_esp);
 	flow_tracker_add(&p_fragment, &_ipv4_ipdefrag);
+	flow_tracker_add(&p_tcp, &_ipv4_tcpflow);
 }
 
 uint16_t _ip_csum(const struct pkt_iphdr *iph)
@@ -170,8 +171,11 @@ static void tcp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 	const struct pkt_tcphdr *tcph;
 	struct tcp_dcb *dcb;
 
+	if ( p->pkt_nxthdr + sizeof(*tcph) > p->pkt_end )
+		return;
+
 	tcph = (const struct pkt_tcphdr *)p->pkt_nxthdr;
-	p->pkt_nxthdr += sizeof(*tcph);
+	p->pkt_nxthdr += tcph->doff << 2;
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 

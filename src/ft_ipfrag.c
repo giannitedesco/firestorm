@@ -295,7 +295,7 @@ static int expired(struct _pkt *pkt, struct ipq *qp)
 /* Trim down to low memory watermark */
 static void ip_evictor(struct ipdefrag *ipd, struct _pkt *pkt, struct ipq *cq)
 {
-	dmesg(M_DEBUG, "Running the ipfrag evictor! %u(%i) %i",
+	dmesg(M_DEBUG, "Running the ipdefrag evictor! %u(%i) %i",
 		ipd->mem, ipd->mem, sizeof(struct ipfrag));
 	alert_oom(pkt);
 	err_mem++;
@@ -598,10 +598,10 @@ static void ipdefrag_dtor(flow_state_t s)
 {
 	struct ipdefrag *ipd = s;
 
-	mesg(M_INFO, "ipfrag: %u reassembled packets, "
+	mesg(M_INFO, "ipdefrag: %u reassembled packets, "
 		"%u reasm errors, %u timeouts",
 		reassembled, err_reasm, err_timeout);
-	mesg(M_INFO, "ipfrag: %u times out of memory, %uKB still used",
+	mesg(M_INFO, "ipdefrag: %u times out of memory, %uKB still used",
 		err_mem, ipd->mem >> 10);
 
 	/* FIXME: memory leak */
@@ -613,12 +613,12 @@ static flow_state_t ipdefrag_ctor(void)
 	struct ipdefrag *ipd;
 
 	if ( mem_hi <= mem_lo ) {
-		mesg(M_ERR, "ipfrag: mem_hi must be bigger than mem_lo");
+		mesg(M_ERR, "ipdefrag: mem_hi must be bigger than mem_lo");
 		return NULL;
 	}
 
 	if ( minttl > 255 ) {
-		mesg(M_ERR, "ipfrag: minttl must be < 256");
+		mesg(M_ERR, "ipdefrag: minttl must be < 256");
 		return NULL;
 	}
 
@@ -626,12 +626,12 @@ static flow_state_t ipdefrag_ctor(void)
 	if ( ipd == NULL )
 		return NULL;
 
-	mesg(M_INFO, "ipfrag: mem_hi=%u mem_lo=%u minttl=%u timeout=%llus",
-		mem_hi, mem_lo, minttl, timeout / TIMESTAMP_HZ);
+	mesg(M_INFO, "ipdefrag: mem_hi=%uK mem_lo=%uK minttl=%u timeout=%llus",
+		mem_hi >> 10, mem_lo >> 10, minttl, timeout / TIMESTAMP_HZ);
 
 	if ( timeout < (10 * TIMESTAMP_HZ) ||
 		timeout > (120 * TIMESTAMP_HZ) ) {
-		mesg(M_WARN, "ipfrag: timeout is unreasonable - "
+		mesg(M_WARN, "ipdefrag: timeout is unreasonable - "
 			"you will be vulnerable to evasion!");
 	}
 
