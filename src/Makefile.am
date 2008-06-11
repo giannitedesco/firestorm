@@ -6,15 +6,15 @@ INCLUDES = \
 bin_PROGRAMS = firestorm
 
 firestorm_SOURCES = \
+	ft_ipdefrag.c \
 	ft_tcpflow.c \
-	ft_ipfrag.c \
 	c_tcpdump.c \
-	lt_ether.c \
-	lt_ipx.c \
-	np_ipv4.c \
-	np_ipv6.c \
-	lt_null.c \
-	lt_sll.c \
+	p_ether.c \
+	p_ipx.c \
+	p_ipv4.c \
+	p_ipv6.c \
+	p_null.c \
+	p_sll.c \
 	\
 	memchunk.c \
 	capture.c \
@@ -28,6 +28,6 @@ firestorm_SOURCES = \
 	util.c \
 	os.c \
 	\
-	pipeline.c \
+	s_pipeline.c \
 	sensor.c \
 	s_mesg.c
