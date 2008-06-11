@@ -148,6 +148,11 @@ union tcp_union {
 	struct tcp_session s;
 };
 
+/* sizeof("255.255.255.255\0") */
+#define IPSTR_SZ 16
+typedef char ipstr_t[IPSTR_SZ];
+void iptostr(ipstr_t str, uint32_t ip);
+
 extern struct _decoder _ipv4_decoder;
 extern struct _flow_tracker _ipv4_ipdefrag;
 extern struct _flow_tracker _ipv4_tcpflow;

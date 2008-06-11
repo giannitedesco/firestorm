@@ -15,6 +15,10 @@
 #include <pkt/udp.h>
 #include "p_ipv4.h"
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 #if 0
 #define dmesg mesg
 #else
@@ -95,6 +99,13 @@ static void __attribute__((constructor)) _ctor(void)
 	proto_add(&_ipv4_decoder, &p_esp);
 	flow_tracker_add(&p_fragment, &_ipv4_ipdefrag);
 	flow_tracker_add(&p_tcp, &_ipv4_tcpflow);
+}
+
+void iptostr(ipstr_t str, uint32_t ip)
+{
+	struct in_addr in;
+	in.s_addr = ip;
+	strncpy(str, inet_ntoa(in), IPSTR_SZ);
 }
 
 uint16_t _ip_csum(const struct pkt_iphdr *iph)

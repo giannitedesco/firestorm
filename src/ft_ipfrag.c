@@ -37,12 +37,14 @@
 #define dhex_dump(x...) do{}while(0);
 #endif
 
-#define IPHASH (1 << 7) /* Must be a power of two */
+#define IPHASH 113 /* Must be a power of two */
 struct ipdefrag {
 	struct ipq *ipq_latest;
 	struct ipq *ipq_oldest;
 	size_t mem;
 	struct ipq *hash[IPHASH]; /* IP fragment hash table */
+	obj_cache_t ipq_cache;
+	obj_cache_t frag_cache;
 };
 
 /* config: high and low memory water marks */
@@ -65,7 +67,7 @@ static struct ipfrag *fragstruct_alloc(struct ipdefrag *ipd)
 {
 	struct ipfrag *ret;
 
-	ret = malloc(sizeof(*ret));
+	ret = objcache_alloc(ipd->frag_cache);
 	if ( ret )
 		ipd->mem += sizeof(*ret);
 
@@ -74,7 +76,7 @@ static struct ipfrag *fragstruct_alloc(struct ipdefrag *ipd)
 
 static void fragstruct_free(struct ipdefrag *ipd, struct ipfrag *x)
 {
-	free(x);
+	objcache_free(ipd->frag_cache, x);
 	ipd->mem -= sizeof(*x);
 }
 
@@ -87,7 +89,7 @@ static unsigned int ipq_hashfn(uint16_t id,
 	unsigned int h = saddr ^ daddr;
 	h ^= (h >> 16) ^ id;
 	h ^= (h >> 8) ^ proto;
-	return h & (IPHASH - 1);
+	return h % IPHASH;
 }
 
 /*
@@ -95,21 +97,27 @@ static unsigned int ipq_hashfn(uint16_t id,
  */
 static void alert_teardrop(struct _pkt *p)
 {
+	mesg(M_WARN, "ipdefrag: teardrop");
 }
 static void alert_oversize(struct _pkt *p)
 {
+	mesg(M_WARN, "ipdefrag: oversize fragments");
 }
 static void alert_attack(struct _pkt *p)
 {
+	mesg(M_WARN, "ipdefrag: frag attack");
 }
 static void alert_boink(struct _pkt *p)
 {
+	mesg(M_WARN, "ipdefrag: boink");
 }
 static void alert_oom(struct _pkt *p)
 {
+	mesg(M_WARN, "ipdefrag: oom");
 }
 static void alert_timedout(struct _pkt *p)
 {
+	mesg(M_WARN, "ipdefrag: timeout");
 }
 
 static void ipq_kill(struct ipdefrag *ipd, struct ipq *qp)
@@ -143,7 +151,7 @@ static void ipq_kill(struct ipdefrag *ipd, struct ipq *qp)
 		ipd->ipq_latest = qp->next_time;
 
 	/* Free the ipq itself */
-	free(qp);
+	objcache_free(ipd->ipq_cache, qp);
 	ipd->mem -= sizeof(struct ipq);
 }
 
@@ -236,7 +244,7 @@ static struct ipq *ip_frag_create(struct ipdefrag *ipd, unsigned int hash,
 {
 	struct ipq *q;
 
-	q = calloc(1, sizeof(struct ipq));
+	q = objcache_alloc0(ipd->ipq_cache);
 	if ( q == NULL ) {
 		err_mem++;
 		return NULL;
@@ -608,7 +616,7 @@ static void ipdefrag_dtor(flow_state_t s)
 	free(s);
 }
 
-static flow_state_t ipdefrag_ctor(void)
+static flow_state_t ipdefrag_ctor(memchunk_t mc)
 {
 	struct ipdefrag *ipd;
 
@@ -634,6 +642,14 @@ static flow_state_t ipdefrag_ctor(void)
 		mesg(M_WARN, "ipdefrag: timeout is unreasonable - "
 			"you will be vulnerable to evasion!");
 	}
+
+	ipd->ipq_cache = objcache_init(mc, "ipq", sizeof(struct ipq));
+	ipd->frag_cache = objcache_init(mc, "ipfrag", sizeof(struct ipfrag));
+	if ( ipd->ipq_cache == NULL || ipd->frag_cache == NULL ) {
+		free(ipd);
+		return NULL;
+	}
+
 
 	return ipd;
 }

@@ -9,7 +9,7 @@
 struct _flow_tracker {
 	struct _proto *ft_proto;
 	pkt_t (*ft_track)(flow_state_t s, pkt_t pkt, dcb_t dcb);
-	flow_state_t (*ft_ctor)(void);
+	flow_state_t (*ft_ctor)(memchunk_t mc);
 	void (*ft_dtor)(flow_state_t s);
 	struct _flow_tracker *ft_next;
 	const char * const ft_label;

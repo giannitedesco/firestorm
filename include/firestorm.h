@@ -37,6 +37,9 @@ typedef struct _dcb *dcb_t;
 typedef unsigned int proto_ns_t;
 typedef unsigned int proto_id_t;
 
+typedef struct _memchunk *memchunk_t;
+typedef struct _obj_cache *obj_cache_t;
+
 typedef struct _flow_tracker *flow_tracker_t;
 typedef void *flow_state_t;
 
@@ -59,6 +62,17 @@ void hex_dump(const uint8_t *tmp, size_t len, size_t llen);
 /* --- Packet routines */
 pkt_t pkt_alloc(source_t source) _malloc;
 void pkt_free(pkt_t pkt);
+
+/* -- Memchunk routines */
+memchunk_t memchunk_init(size_t numchunks) _malloc;
+void memchunk_fini(memchunk_t m);
+
+obj_cache_t objcache_init(memchunk_t m, const char *l, size_t obj_sz) _malloc;
+void objcache_fini(obj_cache_t o);
+void *objcache_alloc(obj_cache_t o) _malloc;
+void *objcache_alloc0(obj_cache_t o) _malloc;
+void objcache_free(obj_cache_t o, void *obj);
+void memchunk_free_obj(memchunk_t m, void *chunk);
 
 /* --- Data-source plugins */
 source_t capture_tcpdump_open(const char *fn);

@@ -18,6 +18,7 @@ struct per_proto {
 struct _pipeline {
 	struct list_head p_sources;
 	unsigned int p_type;
+	memchunk_t p_mem;
 	struct per_proto p_proto[0];
 };
 
@@ -26,14 +27,13 @@ static int ft_init(struct _flow_tracker *ft, void *priv)
 	struct _pipeline *p = priv;
 	struct per_proto *pp;
 
-	mesg(M_DEBUG, "flow: init %s", ft->ft_label);
 	pp = &p->p_proto[ft->ft_proto->p_idx];
 	if ( pp->pp_ft != NULL )
 		return 0;
 
 	pp->pp_ft = ft;
 	if ( ft->ft_ctor ) {
-		pp->pp_flow = ft->ft_ctor();
+		pp->pp_flow = ft->ft_ctor(p->p_mem);
 		if ( pp->pp_flow == NULL )
 			return 0;
 	}
@@ -52,13 +52,19 @@ pipeline_t pipeline_new(void)
 	if ( p == NULL )
 		goto out;
 
+	p->p_mem = memchunk_init(256);
+	if ( p->p_mem == NULL )
+		goto out_free;
+
 	INIT_LIST_HEAD(&p->p_sources);
 
 	if ( !flow_tracker_foreach(ft_init, p) )
-		goto out_free;
+		goto out_free_chunk;
 
 	goto out;
 
+out_free_chunk:
+	memchunk_fini(p->p_mem);
 out_free:
 	free(p);
 	p = NULL;
@@ -71,6 +77,9 @@ void pipeline_free(pipeline_t p)
 	struct _source *s, *tmp;
 	unsigned int i;
 
+	if ( p == NULL )
+		return;
+
 	list_for_each_entry_safe(s, tmp, &p->p_sources, s_list) {
 		list_del(&s->s_list);
 		_source_free(s);
@@ -81,6 +90,8 @@ void pipeline_free(pipeline_t p)
 			p->p_proto[i].pp_ft->ft_dtor )
 			p->p_proto[i].pp_ft->ft_dtor(p->p_proto[i].pp_flow);
 	}
+
+	memchunk_fini(p->p_mem);
 
 	free(p);
 }
@@ -167,6 +178,6 @@ int pipeline_go(pipeline_t p)
 		_source_free(s);
 	}
 
-	mesg(M_DEBUG, "%u packets in total", n);
+	mesg(M_INFO, "pipeline: %u packets in total", n);
 	return 1;
 }

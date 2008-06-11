@@ -134,7 +134,7 @@ void decode_init(void)
 			fprintf(f, "\t\"d_%s\" -> \"p_%s\";\n",
 				d->d_label, p->p_label);
 			fprintf(f, "\t\"p_%s\" [label=\"%s\" "
-				"fillcolor=\"#ffb0b0\"\n];",
+				"fillcolor=\"#ffb0b0\"];\n",
 				p->p_label, p->p_label);
 		}
 	}
