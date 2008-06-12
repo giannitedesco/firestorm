@@ -47,45 +47,18 @@
 #define TCP_ECE		0x40	/* ECN echo */
 #define TCP_CWR		0x80	/* Congestion window reduced */
 
-typedef union _tcpflags {
-	uint8_t flags;
-	struct {
-#if _BYTE_ORDER == _LITTLE_ENDIAN
-	uint8_t fin:1;
-	uint8_t syn:1;
-	uint8_t rst:1;
-	uint8_t psh:1;
-	uint8_t ack:1;
-	uint8_t urg:1;
-	uint8_t ece:1;
-	uint8_t cwr:1;
-#elif _BYTE_ORDER == _BIG_ENDIAN
-	uint8_t cwr:1;
-	uint8_t ece:1;
-	uint8_t urg:1;
-	uint8_t ack:1;
-	uint8_t psh:1;
-	uint8_t rst:1;
-	uint8_t syn:1;
-	uint8_t fin:1;
-#else
-#error "Couldn't determine endianness"
-#endif
-	}bits;
-}tcpflags;
-
 struct pkt_tcphdr {
 	uint16_t	sport,dport;
 	uint32_t	seq;
 	uint32_t	ack;
 #if _BYTE_ORDER == _LITTLE_ENDIAN
-	uint8_t	res1:4;	/* ??? */
-	uint8_t	doff:4;
+	uint8_t		res1:4;	/* ??? */
+	uint8_t		doff:4;
 #elif _BYTE_ORDER == _BIG_ENDIAN
-	uint8_t	doff:4;
-	uint8_t	res1:4;	/* ??? */
+	uint8_t		doff:4;
+	uint8_t		res1:4;	/* ??? */
 #endif
-	tcpflags	flags;
+	uint8_t 	flags;
 	uint16_t	win;
 	uint16_t	csum;
 	uint16_t	urp;

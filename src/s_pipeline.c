@@ -52,7 +52,7 @@ pipeline_t pipeline_new(void)
 	if ( p == NULL )
 		goto out;
 
-	p->p_mem = memchunk_init(256);
+	p->p_mem = memchunk_init(2048);
 	if ( p->p_mem == NULL )
 		goto out_free;
 

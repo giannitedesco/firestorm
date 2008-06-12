@@ -55,7 +55,7 @@ static const size_t mem_lo = 3 << 20;
 static const timestamp_t timeout = 60 * TIMESTAMP_HZ;
 
 /* config: Don't decode fragments with too low ttl */
-static const unsigned int minttl = 1;
+static const uint8_t minttl = 1;
 
 /* Statistics */
 static unsigned int err_reasm;

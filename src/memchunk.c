@@ -190,10 +190,10 @@ void memchunk_fini(memchunk_t m)
 {
 	if ( m != NULL )
 		chunk_free(m->m_hdr, m->m_size);
-	mesg(M_INFO, "memchunk: %uK released: %u.%.2u%% was still inuse",
+	mesg(M_INFO, "memchunk: %uK released: %u.%.2u%% was still in use",
 		m->m_size >> 10,
-		(m->m_inuse * 100) / (m->m_size >> 12),
-		((m->m_inuse * 10000) / (m->m_size >> 12)) % 100);
+		(m->m_inuse * 100) / (m->m_size >> MEMCHUNK_SHIFT),
+		((m->m_inuse * 10000) / (m->m_size >> MEMCHUNK_SHIFT)) % 100);
 	free(m);
 }
 
