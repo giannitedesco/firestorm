@@ -2,6 +2,13 @@
  * This file is part of Firestorm NIDS
  * Copyright (c) Gianni Tedesco 2008
  * This program is released under the terms of the GNU GPL version 3
+ *
+ * TODO:
+ *  o Do checksums, minttl, broadcast check etc...
+ *  o Keep track of state-tracking decisions
+ *  o Handle ICMP errors
+ *  o Reassembly
+ *  o Application layer infrastructure
 */
 #include <firestorm.h>
 #include <f_packet.h>
@@ -12,7 +19,7 @@
 #include <pkt/icmp.h>
 #include "p_ipv4.h"
 
-#undef STATE_DEBUG
+#define STATE_DEBUG 0
 
 #if STATE_DEBUG
 #define dmesg mesg
@@ -39,6 +46,8 @@ struct tcpflow {
 	struct list_head syn1;
 
 	/* stats */
+	unsigned int num_packets;
+	unsigned int state_errs;
 	unsigned int num_timeouts;
 	unsigned int num_active;
 	unsigned int max_active;
@@ -53,9 +62,10 @@ struct tcpseg {
 	uint16_t hash, len;
 	uint32_t tsval;
 	unsigned int saw_tstamp;
+	uint8_t *payload;
 };
 
-#ifdef STATE_DEBUG
+#if STATE_DEBUG
 static const char * const state_str[] = {
 	"CLOSED",
 	"ESTABLISHED",
@@ -75,7 +85,7 @@ static const char * const state_str[] = {
 /* Perform a state transition */
 static void transition(struct tcp_session *s, int cs, int ss)
 {
-#ifdef STATE_DEBUG
+#if STATE_DEBUG
 	ipstr_t sip, cip;
 
 	iptostr(sip, s->s_addr);
@@ -91,16 +101,29 @@ static void transition(struct tcp_session *s, int cs, int ss)
 
 static void state_dbg(struct tcpseg *cur, const char *msg)
 {
-#ifdef STATE_DEBUG
+#if STATE_DEBUG
 	ipstr_t sip, dip;
 
 	iptostr(sip, cur->iph->saddr);
 	iptostr(dip, cur->iph->daddr);
-	mesg(M_DEBUG, "%s:%u %s:%u :: %s",
+	mesg(M_DEBUG, "%s:%u -> %s:%u - %s",
 		sip, sys_be16(cur->tcph->sport),
 		dip, sys_be16(cur->tcph->dport), msg);
 #endif
 }
+static void state_err(struct tcpseg *cur, const char *msg)
+{
+	ipstr_t sip, dip;
+
+	iptostr(sip, cur->iph->saddr);
+	iptostr(dip, cur->iph->daddr);
+	//mesg(M_ERR, "%s:%u -> %s:%u - %s",
+	//	sip, sys_be16(cur->tcph->sport),
+	//	dip, sys_be16(cur->tcph->dport), msg);
+	mesg(M_ERR, "%s", msg);
+	cur->tf->state_errs++;
+}
+
 
 /* Wrap-safe seq/ack calculations */
 static int between(uint32_t s1, uint32_t s2, uint32_t s3)
@@ -126,15 +149,14 @@ static int tcp_sequence(struct tcp_stream *tp, uint32_t seq, uint32_t end_seq)
  * and destinations are inverted 
  */
 static uint16_t _constfn tcp_hashfn(uint32_t saddr, uint32_t daddr,
-			uint16_t sport, uint16_t dport)
+					uint16_t sport, uint16_t dport)
 {
 	uint32_t h;
-
 	h = ((saddr ^ sport) ^ (daddr ^ dport));
 	h ^= h >> 16;
 	h ^= h >> 8;
-
-	return h % TCPHASH;
+	h %= TCPHASH;
+	return h;
 }
 
 /* HASH: Unlink a session from the session hash */
@@ -187,6 +209,55 @@ static struct tcp_session *tcp_collide(struct tcp_session *s,
 	}
 
 	return NULL;
+}
+
+/* Parse TCP options just for timestamps */
+static int tcp_fast_options(struct tcpseg *cur)
+{
+	const struct pkt_tcphdr *t = cur->tcph;
+	char *tmp, *end;
+	size_t ofs = t->doff << 2;
+
+	/* Return if we don't have any */
+	if ( ofs <= sizeof(struct pkt_tcphdr))
+		return 0;
+
+	/* Work out where they begin and end */
+	tmp = end = (char *)t;
+	tmp += sizeof(struct pkt_tcphdr);
+	end += ofs;
+
+	while ( tmp < end ) {
+		size_t step;
+
+		/* XXX: We continue past an EOL. Is that right? */
+		switch ( *tmp ) {
+		case TCPOPT_EOL:
+		case TCPOPT_NOP:
+			tmp++;
+			continue;
+		}
+
+		if ( tmp+1 >= end )
+			break;
+
+		switch ( *tmp ) {
+		case TCPOPT_TIMESTAMP:
+			if ( tmp + 10 >= end )
+				break;
+			cur->tsval = sys_be32(*((uint32_t *)(tmp + 2)));
+			return 1;
+		}
+
+		step = *(tmp + 1);
+		if ( step < 2 ) {
+			state_dbg(cur, "Malicious tcp options");
+			step = 2;
+		}
+		tmp += step;
+	}
+
+	return 0;
 }
 
 /* This will parse TCP options for SYN packets */
@@ -251,9 +322,10 @@ static void tcp_syn_options(struct tcp_stream *s,
 
 		step = *(tmp + 1);
 		if ( step < 2 ) {
-			/* XXX: Alert bad options */
+			//state_dbg(cur, "Malicious tcp options");
 			step = 2;
 		}
+
 		tmp += step;
 	}
 }
@@ -297,16 +369,18 @@ static struct tcp_session *tcp_new(struct tcpseg *cur)
 {
 	struct tcp_session *s;
 
-	/* timeout check: assumes time is monotonic */
-	tcp_tmo_check(cur->tf, cur->ts);
-
 	/* Track syn packets only for now. This could be re-jiggled for
 	 * flow accounting:
 	 *  - move this check after allocation
 	 *  - for stray packets: don't transition + keep server/client zeroed
 	 */
-	if ( (cur->tcph->flags & (TCP_SYN|TCP_ACK|TCP_RST)) != TCP_SYN )
+	if ( (cur->tcph->flags & (TCP_SYN|TCP_ACK|TCP_RST)) != TCP_SYN ) {
+		state_err(cur, "not a valid syn packet");
 		return NULL;
+	}
+
+	/* timeout check: assumes time is monotonic */
+	tcp_tmo_check(cur->tf, cur->ts);
 
 	/* FIXME: evict one if necessary */
 	s = objcache_alloc(cur->tf->session_cache);
@@ -388,11 +462,6 @@ static void state_track(struct tcpseg *cur)
 			cur->iph, cur->tcph, &to_server);
 	if ( s == NULL ) {
 		s = tcp_new(cur);
-		if ( s == NULL ) {
-			state_dbg(cur, "never heard of you");
-			return;
-		}
-
 		return;
 	}
 
@@ -414,8 +483,11 @@ static void state_track(struct tcpseg *cur)
 		if ( cur->tcph->flags & TCP_ACK ) {
 		 	/* if SND.UNA =< SEG.ACK =< SND.NXT
 			 * then ACK is acceptable */
-			if ( !(between(cur->ack, rcv->snd_una, rcv->snd_nxt)) )
+			if ( !(between(cur->ack,
+					rcv->snd_una, rcv->snd_nxt)) ) {
+				state_err(cur, "syn+ack bad ack");
 				return;
+			}
 
 			/* Dodgy heuristic for swapped SYN+ACK/ACK */
 #if 0
@@ -432,6 +504,7 @@ static void state_track(struct tcpseg *cur)
 		/* then check the rst flag */
 		if ( cur->tcph->flags & TCP_RST ) {
 			tcp_free(cur->tf, s);
+			state_dbg(cur, "connection refused");
 			return;
 		}
 
@@ -474,10 +547,24 @@ static void state_track(struct tcpseg *cur)
 	/* First check the sequence number (catches retransmits) */
 	if ( !tcp_sequence(rcv, cur->seq, cur->seq_end) ) {
 		/* ERROR - 7208 */
+		state_err(cur, "failed sequence check");
 		return;
 	}
 
 no_checks:
+	/* rfc1323: H1. Apply PAWS checks first */
+	if ( (rcv->flags & TF_TSTAMP_OK) &&
+		(cur->saw_tstamp = tcp_fast_options(cur)) ) {
+		/* TODO: PAWS is buggy as fuck. We use the Linux PAWS check,
+		 * I have no idea what other stacks do...
+		 */
+		if ( (int32_t)(rcv->ts_recent - cur->tsval) > TCP_PAWS_WINDOW &&
+			(uint32_t)(cur->ts/TIMESTAMP_HZ) < rcv->ts_recent_stamp
+			+ TCP_PAWS_24DAYS ) {
+			state_err(cur, "PAWS discard");
+			return;
+		}
+	}
 
 	/* Second, check the RST bit */
 	if ( cur->tcph->flags & TCP_RST ) {
@@ -504,6 +591,7 @@ no_checks:
 		if ( cur->seq != rcv->isn)
 			state_dbg(cur, "in window syn");
 
+		//state_err(cur, "unknown syn thing");
 		tcp_free(cur->tf, s);
 		return;
 	}
@@ -519,7 +607,7 @@ no_checks:
 
 	switch(rcv->state) {
 	case TCP_SYN_SENT:
-		/* ACK: part 3 of connection handshake */
+		/* First ACK: part 3 of connection handshake */
 		if ( !tcp_after(rcv->snd_una, cur->ack) &&
 			!tcp_after(cur->ack, rcv->snd_nxt) ) {
 			tcp_data_ack(snd, rcv, cur->seq, cur->ack, cur->win);
@@ -584,7 +672,7 @@ no_ack:
 		rcv->rcv_nxt = cur->seq_end;
 	}
 
-	//cur.data = 1;
+	//dhex_dump(cur->payload, cur->len, 16);
 
 no_data:
 	/* eighth, check the FIN bit */
@@ -624,11 +712,15 @@ no_fin:
 	if ( (snd->state == TCP_TIME_WAIT && rcv->state == 0) ||
 		(rcv->state == TCP_TIME_WAIT && snd->state == 0) ) {
 		tcp_free(cur->tf, s);
+		state_dbg(cur, "connection closed");
 		return;
 	}else if ( rcv->state == 0 && snd->state == TCP_SYN_SENT ) {
 		/* we reset the timeout on retransmissions */
-		if ( (cur->tcph->flags & (TCP_SYN|TCP_ACK|TCP_RST)) == TCP_SYN )
+		if ( (cur->tcph->flags &
+				(TCP_SYN|TCP_ACK|TCP_RST)) == TCP_SYN ) {
+			state_dbg(cur, "syn1 timer reset by retransmit");
 			tcp_expire(cur->tf, s, cur->ts + TCP_TMO_SYN1);
+		}
 	}
 
 	return;
@@ -655,14 +747,22 @@ static pkt_t tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 	cur.seq_end = cur.seq + cur.len;
 	cur.tsval = 0;
 	cur.saw_tstamp = 0;
+	cur.payload = (uint8_t *)cur.tcph + (cur.tcph->doff << 2);
+
+	cur.tf->num_packets++;
 
 	state_track(&cur);
+
 	return NULL;
 }
 
 static void tcpflow_dtor(flow_state_t s)
 {
 	struct tcpflow *tf = s;
+	mesg(M_INFO,"tcpstream: max_active=%u num_active=%u",
+		tf->max_active, tf->num_active);
+	mesg(M_INFO,"tcpstream: %u state errors out of %u packets",
+		tf->state_errs, tf->num_packets);
 	free(tf);
 }
 
