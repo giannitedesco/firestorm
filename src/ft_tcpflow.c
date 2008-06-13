@@ -63,21 +63,20 @@ struct tcpseg {
 	uint32_t tsval;
 	unsigned int saw_tstamp;
 	uint8_t *payload;
+	struct tcp_stream *snd, *rcv;
 };
 
 #if STATE_DEBUG
 static const char * const state_str[] = {
 	"CLOSED",
-	"ESTABLISHED",
 	"SYN_SENT",
 	"SYN_RECV",
+	"ESTABLISHED",
 	"FIN_WAIT1",
 	"FIN_WAIT2",
 	"TCP_TIME_WAIT",
-	"TCP_CLOSE",
 	"TCP_CLOSE_WAIT",
 	"TCP_LAST_ACK",
-	"TCP_LISTEN",
 	"TCP_CLOSING"
 };
 #endif
@@ -113,14 +112,17 @@ static void state_dbg(struct tcpseg *cur, const char *msg)
 }
 static void state_err(struct tcpseg *cur, const char *msg)
 {
+#if STATE_DEBUG
 	ipstr_t sip, dip;
 
 	iptostr(sip, cur->iph->saddr);
 	iptostr(dip, cur->iph->daddr);
-	//mesg(M_ERR, "%s:%u -> %s:%u - %s",
-	//	sip, sys_be16(cur->tcph->sport),
-	//	dip, sys_be16(cur->tcph->dport), msg);
-	mesg(M_ERR, "%s", msg);
+	mesg(M_ERR, "%s:%u -> %s:%u - %s",
+		sip, sys_be16(cur->tcph->sport),
+		dip, sys_be16(cur->tcph->dport), msg);
+#else
+	//mesg(M_ERR, "%s", msg);
+#endif
 	cur->tf->state_errs++;
 }
 
@@ -131,18 +133,18 @@ static int between(uint32_t s1, uint32_t s2, uint32_t s3)
 	return s3 - s2 >= s1 - s2; /* is s2<=s1<=s3 ? */
 }
 
-static uint32_t tcp_receive_window(struct tcp_stream *tp)
+static uint32_t tcp_receive_window(struct tcp_stream *s)
 {
-	int32_t win = tp->rcv_wup + tp->rcv_wnd - tp->rcv_nxt;
+	int32_t win = s->rcv_wup + s->rcv_wnd - s->rcv_nxt;
 	if ( win < 0 )
 		win = 0;
 	return (uint32_t)win;
 }
 
-static int tcp_sequence(struct tcp_stream *tp, uint32_t seq, uint32_t end_seq)
+static int tcp_sequence(struct tcp_stream *s, uint32_t seq, uint32_t end_seq)
 {
-	return !tcp_before(end_seq, tp->rcv_wup) &&
-		!tcp_after(seq, tp->rcv_nxt + tcp_receive_window(tp));
+	return !tcp_before(end_seq, s->rcv_wup) &&
+		!tcp_after(seq, s->rcv_nxt + tcp_receive_window(s));
 }
 
 /* Hash function. Hashes to the same value even when source
@@ -189,7 +191,7 @@ static void tcp_hash_mtf(struct tcpflow *tf, struct tcp_session *s,
 static struct tcp_session *tcp_collide(struct tcp_session *s,
 					const struct pkt_iphdr *iph,
 					const struct pkt_tcphdr *tcph,
-					int *to_server)
+					unsigned int *to_server)
 {
 	for (; s; s = s->hash_next) {
 		if (	s->s_addr == iph->saddr &&
@@ -365,7 +367,7 @@ static void tcp_expire(struct tcpflow *tf,
 	list_move(&tf->syn1, &s->tmo);
 }
 
-static struct tcp_session *tcp_new(struct tcpseg *cur)
+static struct tcp_session *new_session(struct tcpseg *cur)
 {
 	struct tcp_session *s;
 
@@ -408,7 +410,6 @@ static struct tcp_session *tcp_new(struct tcpseg *cur)
 	/* Setup initial window tracking state machine */
 	memset(&s->client, 0, sizeof(s->client));
 	memset(&s->server, 0, sizeof(s->server));
-	transition(s, TCP_SYN_SENT, 0);
 	s->server.isn = cur->seq;
 	s->client.snd_una = s->server.isn + 1;
 	s->client.snd_nxt = s->client.snd_una + 1;
@@ -421,6 +422,9 @@ static struct tcp_session *tcp_new(struct tcpseg *cur)
 
 	/* TODO */
 	s->proto = NULL;
+
+	transition(s, TCP_SYN_SENT, 0);
+	state_dbg(cur, "#1 - syn");
 
 	return s;
 }
@@ -444,41 +448,26 @@ static void tcp_data_ack(struct tcp_stream *snd, struct tcp_stream *rcv,
 		 * ESTABLISHED, FIN_WAIT1 or FIN_WAIT2. That means we have
 		 * to hold on to any data until connection establishment.
 		 */
-		if ( (rcv->state >= TCP_FIN_WAIT1) &&
-			(rcv->state != TCP_LISTEN) )
+		if ( (rcv->state >= TCP_FIN_WAIT1) ) {
+			dmesg(M_DEBUG, "tcp_data_ack: ack wibbling :(");
 			--ack;
+		}
 
 		//reassemble_point(cur.sndbuf, ack);
 	}
 }
 
-static void state_track(struct tcpseg *cur)
+static unsigned int process_handshake(struct tcpseg *cur, struct tcp_session *s)
 {
-	struct tcp_session *s;
-	struct tcp_stream *snd, *rcv;
-	int to_server;
+	struct tcp_stream *snd = cur->snd, *rcv = cur->rcv;
 
-	s = tcp_collide(cur->tf->hash[cur->hash],
-			cur->iph, cur->tcph, &to_server);
-	if ( s == NULL ) {
-		s = tcp_new(cur);
-		return;
-	}
-
-	tcp_hash_mtf(cur->tf, s, cur->hash);
-	list_move(&cur->tf->lru, &s->lru);
-
-	/* Figure out which side is which */
-	if ( to_server ) {
-		snd = &s->client;
-		rcv = &s->server;
-	}else{
-		snd = &s->server;
-		rcv = &s->client;
-	}
-
-	/* Deal with a SYN/ACK */
-	if ( rcv->state == TCP_SYN_SENT ) {
+	switch(rcv->state) {
+	case 0:
+		/* TODO: Check if it's the same connection or not */
+		state_dbg(cur, "SYN retransmit");
+		tcp_expire(cur->tf, s, cur->ts + TCP_TMO_SYN1);
+		return 0;
+	case TCP_SYN_SENT:
 		/* fist check the ack field */
 		if ( cur->tcph->flags & TCP_ACK ) {
 		 	/* if SND.UNA =< SEG.ACK =< SND.NXT
@@ -486,251 +475,219 @@ static void state_track(struct tcpseg *cur)
 			if ( !(between(cur->ack,
 					rcv->snd_una, rcv->snd_nxt)) ) {
 				state_err(cur, "syn+ack bad ack");
-				return;
+				return 0;
 			}
+			rcv->snd_una = cur->ack;
 
-			/* Dodgy heuristic for swapped SYN+ACK/ACK */
-#if 0
-			if ( (rcv->rcv_nxt == 0) ) {
-				state_dbg(cur, "doing dodgy heuristic");
-				rcv->rcv_nxt = cur->seq_end;
-				rcv->state = TCP_SYN_RECV;
-				snd->state = TCP_SYN_SENT;
-				transition(s, s->client.state, s->server.state);
+			if ( cur->tcph->flags & TCP_RST ) {
+				tcp_free(cur->tf, s);
+				state_dbg(cur, "Connection refused");
+				return 0;
 			}
-#endif
 		}
 
-		/* then check the rst flag */
+		/* Second check the RST bit */
 		if ( cur->tcph->flags & TCP_RST ) {
-			tcp_free(cur->tf, s);
-			state_dbg(cur, "connection refused");
-			return;
+			state_err(cur, "Attempt to RST at SYN-SENT");
+			return 0;
 		}
+
+		assert(snd->state == 0 || snd->state == TCP_SYN_RECV);
 
 		if ( cur->tcph->flags & TCP_SYN ) {
-			/* update the advertised window */
-			snd->rcv_wnd = cur->win;
+			rcv->rcv_nxt = cur->seq + 1;
 
-			/* update sequencing information */
-			snd->snd_una = cur->seq + 1;
-			snd->snd_nxt = snd->snd_una + 1;
-
-			rcv->isn = cur->seq;
-			rcv->rcv_nxt = cur->seq_end;
-			rcv->rcv_wup = cur->seq_end;
-			if ( cur->tcph->flags & TCP_ACK )
-				rcv->snd_una = cur->ack;
-
-			/* client now sees servers initial options */
-			tcp_syn_options(&s->client, cur->tcph,
-					cur->ts / TIMESTAMP_HZ);
-
-			/* Check whether to use window scaling */
-			if ( !(rcv->flags & TF_WSCALE_OK) ||
-				!(snd->flags & TF_WSCALE_OK) ) {
-				rcv->scale = 0;
-				snd->scale = 0;
+			if ( !tcp_after(rcv->snd_una, snd->isn) ) {
+				state_err(cur, "Got SYN expected SYN+ACK");
+				return 0;
 			}
 
-			/* SYN|ACK: part 2 of connection handshake */
+			snd->rcv_wnd = cur->win;
+			snd->snd_una = rcv->rcv_nxt;
+			snd->snd_nxt = rcv->rcv_nxt + 1;
+			rcv->isn = cur->seq;
+			rcv->rcv_wup = rcv->rcv_nxt;
 			rcv->state = TCP_SYN_RECV;
 			snd->state = TCP_SYN_SENT;
-			transition(s, s->client.state, s->server.state);
+
+			tcp_syn_options(rcv, cur->tcph, cur->ts);
+			if ( ((rcv->flags | snd->flags) & TF_WSCALE_OK) == 0 )
+				rcv->scale = snd->scale = 0;
+
 			list_del(&s->tmo);
-
-			return;
-		}else
-			goto no_checks;
-	}
-
-	/* First check the sequence number (catches retransmits) */
-	if ( !tcp_sequence(rcv, cur->seq, cur->seq_end) ) {
-		/* ERROR - 7208 */
-		state_err(cur, "failed sequence check");
-		return;
-	}
-
-no_checks:
-	/* rfc1323: H1. Apply PAWS checks first */
-	if ( (rcv->flags & TF_TSTAMP_OK) &&
-		(cur->saw_tstamp = tcp_fast_options(cur)) ) {
-		/* TODO: PAWS is buggy as fuck. We use the Linux PAWS check,
-		 * I have no idea what other stacks do...
-		 */
-		if ( (int32_t)(rcv->ts_recent - cur->tsval) > TCP_PAWS_WINDOW &&
-			(uint32_t)(cur->ts/TIMESTAMP_HZ) < rcv->ts_recent_stamp
-			+ TCP_PAWS_24DAYS ) {
-			state_err(cur, "PAWS discard");
-			return;
+			transition(s, s->client.state, s->server.state);
+			state_dbg(cur, "#2 syn+ack");
+			break;
 		}
+
+		rcv->state = TCP_ESTABLISHED;
+		snd->state = TCP_ESTABLISHED; /* maybe flip this later? */
+		transition(s, s->client.state, s->server.state);
+		tcp_data_ack(snd, rcv, cur->seq, cur->ack, cur->win);
+		state_dbg(cur, "#3 ack");
+		break;
 	}
 
-	/* Second, check the RST bit */
-	if ( cur->tcph->flags & TCP_RST ) {
-		state_dbg(cur, "TCP stream was reset");
-		tcp_free(cur->tf, s);
-		return;
+	return 1;
+}
+
+static void process_segment_text(struct tcpseg *cur, struct tcp_session *s)
+{
+	struct tcp_stream *snd = cur->snd, *rcv = cur->rcv;
+
+	/* sixth, check the URG bit */
+	if ( cur->tcph->flags & TCP_URG ) {
 	}
 
-	/* rfc1323: PAWS: update ts_recent */
-	if ( cur->saw_tstamp && !tcp_after(cur->seq,rcv->rcv_wup) ) {
-		if((int32_t)(cur->tsval - rcv->ts_recent) >= 0 ||
-		   (uint32_t)(cur->ts / TIMESTAMP_HZ) >= rcv->ts_recent_stamp
-		   + TCP_PAWS_24DAYS) {
-			rcv->ts_recent = cur->tsval;
-			rcv->ts_recent_stamp = cur->ts / TIMESTAMP_HZ;
-		}
-	}
-
-	/* Third, check security and precendece (pfft) */
-
-	/* Fourth, check the SYN bit */
-	if ( cur->tcph->flags & TCP_SYN && !tcp_before(cur->seq,rcv->rcv_nxt) ) {
-		/* If not a retransmit, then it's an in-window SYN */
-		if ( cur->seq != rcv->isn)
-			state_dbg(cur, "in window syn");
-
-		//state_err(cur, "unknown syn thing");
-		tcp_free(cur->tf, s);
-		return;
-	}
-
-	/* we now know that this packet is in-state */
-
-	/* Scale the window */
-	cur->win <<= snd->scale;
-
-	/* Fifth, check the ack field */
-	if ( (cur->tcph->flags & TCP_ACK) == 0 )
-		goto no_ack;
-
+	/* seventh, process the segment text */
 	switch(rcv->state) {
-	case TCP_SYN_SENT:
-		/* First ACK: part 3 of connection handshake */
-		if ( !tcp_after(rcv->snd_una, cur->ack) &&
-			!tcp_after(cur->ack, rcv->snd_nxt) ) {
-			tcp_data_ack(snd, rcv, cur->seq, cur->ack, cur->win);
-			transition(s, TCP_ESTABLISHED, TCP_ESTABLISHED);
-		}
-		break;
 	case TCP_ESTABLISHED:
-		tcp_data_ack(snd,rcv, cur->seq, cur->ack, cur->win);
-		break;
-	case TCP_FIN_WAIT1:
-		tcp_data_ack(snd,rcv, cur->seq, cur->ack,cur->win);
-		rcv->state = TCP_FIN_WAIT2;
-		snd->state = TCP_LAST_ACK;
-		transition(s, s->client.state, s->server.state);
-	case TCP_FIN_WAIT2:
-		//reassemble_point(cur.sndbuf, cur->ack - 1);
-		break;
-	case TCP_CLOSE_WAIT:
-		tcp_data_ack(snd, rcv, cur->seq, cur->ack, cur->win);
-		break;
-	case TCP_CLOSING:
-		tcp_data_ack(snd, rcv, cur->seq, cur->ack, cur->win);
-		rcv->state = TCP_TIME_WAIT;
-		transition(s, s->client.state, s->server.state);
-		break;
-	case TCP_LAST_ACK:
-		/* XXX: is this one needed? */
-		//reassemble_point(cur.sndbuf, cur->ack - 1);
-		rcv->state = 0;
-		transition(s, s->client.state, s->server.state);
+		if ( cur->tcph->flags & TCP_ACK ) {
+			tcp_data_ack(snd, rcv, cur->seq, cur->ack, cur->win);
+		}
+		state_dbg(cur, "established");
 		break;
 	default:
+		transition(s, s->client.state, s->server.state);
 		break;
 	}
 
-no_ack:
-	/* sixth check URG bit */
-
-	/* seventh process the segment text */
-	if ( cur->len == 0 )
-		goto no_data;
-
-	/* There is data in the segment */
-	switch(rcv->state) {
-	case TCP_CLOSE_WAIT:
-	case TCP_CLOSING:
-	case TCP_LAST_ACK:
-	case TCP_TIME_WAIT:
-		state_dbg(cur, "data sent on closed stream");
-		goto no_data;
-	}
-
-	if ( !tcp_after(cur->seq_end, rcv->rcv_nxt) )
-		goto no_data;
-
-	if ( !tcp_after(cur->seq, rcv->rcv_nxt) ) {
+	if ( tcp_after(cur->seq_end, rcv->rcv_nxt) && 
+		!tcp_after(cur->seq, rcv->rcv_nxt) ) {
 		//if (tcp_receive_window(rcv) == 0) {
 		//	/* XXX: Alert here? */
 		//	goto no_data;
 		//}
 
-		rcv->rcv_nxt = cur->seq_end;
+		rcv->rcv_nxt = cur->seq + cur->len;
 	}
 
-	//dhex_dump(cur->payload, cur->len, 16);
+	/* FIXME: don't swallow text outside the window this time? */
+	if ( cur->len )
+		dhex_dump(cur->payload, cur->len, 16);
 
-no_data:
 	/* eighth, check the FIN bit */
-	if ( (cur->tcph->flags & TCP_FIN) == 0 )
-		goto no_fin;
+	if ( cur->tcph->flags & TCP_FIN ) {
+		rcv->rcv_nxt++;
 
-	rcv->rcv_nxt++;
-
-	switch(rcv->state) {
-	case TCP_SYN_RECV:
-	case TCP_ESTABLISHED:
-		rcv->state = TCP_CLOSE_WAIT;
-		snd->state = TCP_FIN_WAIT1;
-		transition(s, s->client.state, s->server.state);
-		break;
-	case TCP_FIN_WAIT1:
-		/* if fin has been acked do time_wait else closing */
-		rcv->state = TCP_TIME_WAIT;
-		transition(s, s->client.state, s->server.state);
-		break;
-	case TCP_FIN_WAIT2:
-		rcv->state = TCP_TIME_WAIT;
-		transition(s, s->client.state, s->server.state);
-		break;
-	case TCP_CLOSE_WAIT:
-	case TCP_CLOSING:
-	case TCP_LAST_ACK:
-	case TCP_TIME_WAIT:
-		/* Remain in the same state */
-		break;
-	default:
-		break;
-	}
-
-no_fin:
-	/* TODO: need to implement time_wait timer */
-	if ( (snd->state == TCP_TIME_WAIT && rcv->state == 0) ||
-		(rcv->state == TCP_TIME_WAIT && snd->state == 0) ) {
-		tcp_free(cur->tf, s);
-		state_dbg(cur, "connection closed");
-		return;
-	}else if ( rcv->state == 0 && snd->state == TCP_SYN_SENT ) {
-		/* we reset the timeout on retransmissions */
-		if ( (cur->tcph->flags &
-				(TCP_SYN|TCP_ACK|TCP_RST)) == TCP_SYN ) {
-			state_dbg(cur, "syn1 timer reset by retransmit");
-			tcp_expire(cur->tf, s, cur->ts + TCP_TMO_SYN1);
+		switch(rcv->state) {
+		case TCP_SYN_SENT:
+			break;
+		case TCP_SYN_RECV:
+		case TCP_ESTABLISHED:
+			rcv->state = TCP_CLOSE_WAIT;
+			snd->state = TCP_FIN_WAIT1;
+			transition(s, s->client.state, s->server.state);
+			break;
+		case TCP_FIN_WAIT1:
+			/* FIXME: if fin has been acked do time_wait
+			 * else do closing */
+			rcv->state = TCP_TIME_WAIT;
+			transition(s, s->client.state, s->server.state);
+			break;
+		case TCP_FIN_WAIT2:
+			rcv->state = TCP_TIME_WAIT;
+			transition(s, s->client.state, s->server.state);
+			break;
+		case TCP_CLOSE_WAIT:
+		case TCP_CLOSING:
+		case TCP_LAST_ACK:
+		case TCP_TIME_WAIT:
+			/* Remain in the same state */
+			break;
+		default:
+			break;
 		}
 	}
+}
 
-	return;
+static void state_track(struct tcpseg *cur, struct tcp_session *s)
+{
+	struct tcp_stream *snd = cur->snd, *rcv = cur->rcv;
+
+	tcp_hash_mtf(cur->tf, s, cur->hash);
+	list_move(&cur->tf->lru, &s->lru);
+
+	if ( rcv->state < TCP_SYN_RECV ) {
+		if ( !process_handshake(cur, s) )
+			return;
+
+		process_segment_text(cur, s);
+		return;
+	}
+
+	/* first, check sequence number */
+	if ( !tcp_sequence(rcv, cur->seq, cur->seq_end) ) {
+		state_err(cur, "bad sequence");
+		return;
+	}
+
+	/* second, check the RST bit */
+	if ( cur->tcph->flags & TCP_RST ) {
+		state_dbg(cur, "Connection reset by peer");
+		tcp_free(cur->tf, s);
+		return;
+	}
+
+	/* third, ignore security + precedence */
+
+	/* fourth, check the SYN bit */
+	if ( cur->tcph->flags & TCP_SYN ) {
+		if ( cur->seq != rcv->isn ) {
+			state_err(cur, "in window syn");
+		}
+		return;
+	}
+
+	/* fifth, check the ACK field */
+	if ( cur->tcph->flags & TCP_ACK ) {
+		switch(rcv->state) {
+		case TCP_ESTABLISHED:
+			tcp_data_ack(snd,rcv, cur->seq, cur->ack, cur->win);
+			break;
+		case TCP_FIN_WAIT1:
+			tcp_data_ack(snd,rcv, cur->seq, cur->ack,cur->win);
+			rcv->state = TCP_FIN_WAIT2;
+			snd->state = TCP_LAST_ACK;
+			transition(s, s->client.state, s->server.state);
+		case TCP_FIN_WAIT2:
+			//reassemble_point(cur.sndbuf, cur->ack - 1);
+			break;
+		case TCP_CLOSE_WAIT:
+			tcp_data_ack(snd, rcv, cur->seq, cur->ack, cur->win);
+			break;
+		case TCP_CLOSING:
+			tcp_data_ack(snd, rcv, cur->seq, cur->ack, cur->win);
+			rcv->state = TCP_TIME_WAIT;
+			transition(s, s->client.state, s->server.state);
+			break;
+		case TCP_LAST_ACK:
+			/* XXX: is this one needed? */
+			//reassemble_point(cur.sndbuf, cur->ack - 1);
+			rcv->state = 0;
+			transition(s, s->client.state, s->server.state);
+			break;
+		default:
+			break;
+		}
+
+	}
+
+	process_segment_text(cur, s);
+	if ( rcv->state == 0 && snd->state == TCP_TIME_WAIT ) {
+		tcp_free(cur->tf, s);
+	}
 }
 
 /* FIXME: most of this stack frame ought to go in a struct and pass pointer */
 static pkt_t tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 {
 	struct tcp_dcb *dcb = (struct tcp_dcb *)dcb_ptr;
+	unsigned int to_server;
+	struct tcp_session *s;
 	struct tcpseg cur;
+
+	dmesg(M_DEBUG, "TCP Segment processing");
 
 	cur.tf = sptr;
 	cur.ts = pkt->pkt_ts;
@@ -751,7 +708,23 @@ static pkt_t tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 
 	cur.tf->num_packets++;
 
-	state_track(&cur);
+	s = tcp_collide(cur.tf->hash[cur.hash],
+			cur.iph, cur.tcph, &to_server);
+	if ( s == NULL ) {
+		s = new_session(&cur);
+		return NULL;
+	}
+
+	/* Figure out which side is which */
+	if ( to_server ) {
+		cur.snd = &s->client;
+		cur.rcv = &s->server;
+	}else{
+		cur.snd = &s->server;
+		cur.rcv = &s->client;
+	}
+
+	state_track(&cur, s);
 
 	return NULL;
 }
