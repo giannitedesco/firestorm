@@ -154,10 +154,31 @@ static void tunnel_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 	ipv4_decode(p);
 }
 
-static void icmp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
+static const struct pkt_iphdr *icmp_try_inner(struct _pkt *p,
+						const struct pkt_iphdr *outer,
+						const struct pkt_icmphdr *icmph)
+{
+	const struct pkt_iphdr *iph;
+	iph = (const struct pkt_iphdr *)p->pkt_nxthdr;
+
+	if ( p->pkt_nxthdr + sizeof(*iph) > p->pkt_end )
+		return NULL;
+
+	if ( iph->version != 4 || iph->ihl < 5 )
+		return NULL;
+
+	p->pkt_nxthdr += iph->ihl << 2;
+
+	/* TODO: Rip out udp/tcp/icmp and bear in mind AH */
+
+	return iph;
+}
+
+static void icmp_decode(struct _pkt *p, const struct pkt_iphdr *outer,
 			const struct pkt_ahhdr *ah)
 {
 	const struct pkt_icmphdr *icmph;
+	const struct pkt_iphdr *iph;
 	struct icmp_dcb *dcb;
 
 	icmph = (const struct pkt_icmphdr *)p->pkt_nxthdr;
@@ -168,12 +189,25 @@ static void icmp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 	dmesg(M_DEBUG, "ipv4: tcp type=%u code=%u",
 		icmph->type, icmph->code);
 
-	dcb = (struct icmp_dcb *)_decode_layer(p, &p_icmp);
-	if ( dcb ) {
-		dcb->icmp_iph = iph;
-		dcb->icmp_ah = ah;
-		dcb->icmp_hdr = icmph;
+	switch(icmph->type) {
+	case ICMP_TIME_EXCEEDED:
+		dmesg(M_DEBUG, "icmp: TIME_EXCEEDED, traceroute?");
+	case ICMP_DEST_UNREACH:
+	case ICMP_PARAMETERPROB:
+		iph = icmp_try_inner(p, outer, icmph);
+		break;
+	default:
+		iph = NULL;
 	}
+
+	dcb = (struct icmp_dcb *)_decode_layer(p, &p_icmp);
+	if ( dcb == NULL )
+		return;
+
+	dcb->icmp_iph = iph;
+	dcb->icmp_ah = ah;
+	dcb->icmp_hdr = icmph;
+	dcb->icmp_inner = iph;
 }
 
 static void tcp_decode(struct _pkt *p, const struct pkt_iphdr *iph,

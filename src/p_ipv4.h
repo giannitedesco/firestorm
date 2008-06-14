@@ -37,6 +37,7 @@ struct icmp_dcb {
 	const struct pkt_iphdr *icmp_iph;
 	const struct pkt_ahhdr *icmp_ah;
 	const struct pkt_icmphdr *icmp_hdr;
+	const struct pkt_iphdr *icmp_inner;
 };
 
 /* Keeps each individual fragment */
@@ -129,14 +130,10 @@ struct tcp_session {
 	struct tcp_stream client;
 	struct tcp_stream server;
 
-	struct tcp_sbuf c_reasm;
-	struct tcp_sbuf s_reasm;
-
-	/* Application layer protocol carried on this stream */
-	struct _proto *proto;
-
-	/* Application layer state (flow information) */
-	void *flow;
+	//struct tcp_sbuf c_reasm;
+	//struct tcp_sbuf s_reasm;
+	//struct _proto *proto;
+	//void *flow;
 
 	/* expiry time */
 	timestamp_t expire;

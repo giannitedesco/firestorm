@@ -4,11 +4,11 @@
  * This program is released under the terms of the GNU GPL version 3
  *
  * TODO:
- *  o Do checksums, minttl, broadcast check etc...
- *  o Keep track of state-tracking decisions
+ *  o Put state data in to DCB
  *  o Handle ICMP errors
  *  o Reassembly
  *  o Application layer infrastructure
+ *  o check for broadcasts if possible
 */
 #include <firestorm.h>
 #include <f_packet.h>
@@ -29,6 +29,15 @@
 #define dhex_dump(x...) do{}while(0);
 #endif
 
+#define SEGMENT_DEBUG 0
+
+#if SEGMENT_DEBUG
+#include <stdio.h>
+#include <stdarg.h>
+#endif
+
+#define STREAM_DEBUG 0
+
 static const uint8_t minttl = 1;
 
 #define TCP_PAWS_24DAYS (60 * 60 * 24 * 24)
@@ -48,6 +57,8 @@ struct tcpflow {
 	/* stats */
 	unsigned int num_packets;
 	unsigned int state_errs;
+	unsigned int num_csum_errs;
+	unsigned int num_ttl_errs;
 	unsigned int num_timeouts;
 	unsigned int num_active;
 	unsigned int max_active;
@@ -90,26 +101,14 @@ static void transition(struct tcp_session *s, int cs, int ss)
 	iptostr(sip, s->s_addr);
 	iptostr(cip, s->c_addr);
 
-	dmesg(M_DEBUG, "%s:%u(%s) -> %s:%u(%s)",
-		cip, sys_be16(s->c_port), state_str[cs],
-		sip, sys_be16(s->s_port), state_str[ss]);
+	mesg(M_DEBUG, "%s:%u(\033[%dm%s\033[0m) -> %s:%u(\033[%dm%s\033[0m)",
+		cip, sys_be16(s->c_port), 30 + (cs % 9), state_str[cs],
+		sip, sys_be16(s->s_port), 30 + (ss % 9), state_str[ss]);
 #endif
 	s->client.state = cs;
 	s->server.state = ss;
 }
 
-static void state_dbg(struct tcpseg *cur, const char *msg)
-{
-#if STATE_DEBUG
-	ipstr_t sip, dip;
-
-	iptostr(sip, cur->iph->saddr);
-	iptostr(dip, cur->iph->daddr);
-	mesg(M_DEBUG, "%s:%u -> %s:%u - %s",
-		sip, sys_be16(cur->tcph->sport),
-		dip, sys_be16(cur->tcph->dport), msg);
-#endif
-}
 static void state_err(struct tcpseg *cur, const char *msg)
 {
 #if STATE_DEBUG
@@ -120,12 +119,9 @@ static void state_err(struct tcpseg *cur, const char *msg)
 	mesg(M_ERR, "%s:%u -> %s:%u - %s",
 		sip, sys_be16(cur->tcph->sport),
 		dip, sys_be16(cur->tcph->dport), msg);
-#else
-	//mesg(M_ERR, "%s", msg);
 #endif
 	cur->tf->state_errs++;
 }
-
 
 /* Wrap-safe seq/ack calculations */
 static int between(uint32_t s1, uint32_t s2, uint32_t s3)
@@ -148,7 +144,7 @@ static int tcp_sequence(struct tcp_stream *s, uint32_t seq, uint32_t end_seq)
 }
 
 /* Hash function. Hashes to the same value even when source
- * and destinations are inverted 
+ * and destinations are inverted
  */
 static uint16_t _constfn tcp_hashfn(uint32_t saddr, uint32_t daddr,
 					uint16_t sport, uint16_t dport)
@@ -253,7 +249,7 @@ static int tcp_fast_options(struct tcpseg *cur)
 
 		step = *(tmp + 1);
 		if ( step < 2 ) {
-			state_dbg(cur, "Malicious tcp options");
+			dmesg(M_DEBUG, "Malicious tcp options");
 			step = 2;
 		}
 		tmp += step;
@@ -324,7 +320,7 @@ static void tcp_syn_options(struct tcp_stream *s,
 
 		step = *(tmp + 1);
 		if ( step < 2 ) {
-			//state_dbg(cur, "Malicious tcp options");
+			dmesg(M_WARN, "Malicious tcp options");
 			step = 2;
 		}
 
@@ -420,11 +416,8 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 	/* server sees clients initial options */
 	tcp_syn_options(&s->server, cur->tcph, cur->ts / TIMESTAMP_HZ);
 
-	/* TODO */
-	s->proto = NULL;
-
 	transition(s, TCP_SYN_SENT, 0);
-	state_dbg(cur, "#1 - syn");
+	dmesg(M_DEBUG, "#1 - syn");
 
 	return s;
 }
@@ -448,11 +441,12 @@ static void tcp_data_ack(struct tcp_stream *snd, struct tcp_stream *rcv,
 		 * ESTABLISHED, FIN_WAIT1 or FIN_WAIT2. That means we have
 		 * to hold on to any data until connection establishment.
 		 */
-		if ( (rcv->state >= TCP_FIN_WAIT1) ) {
-			dmesg(M_DEBUG, "tcp_data_ack: ack wibbling :(");
-			--ack;
-		}
 
+		/* If we sent a FIN, then we can't be acking the virtual
+		 * byte of data that it represents
+		 */
+		if ( (rcv->state == TCP_FIN_WAIT1) )
+			--ack;
 		//reassemble_point(cur.sndbuf, ack);
 	}
 }
@@ -464,7 +458,7 @@ static unsigned int process_handshake(struct tcpseg *cur, struct tcp_session *s)
 	switch(rcv->state) {
 	case 0:
 		/* TODO: Check if it's the same connection or not */
-		state_dbg(cur, "SYN retransmit");
+		dmesg(M_DEBUG, "SYN retransmit");
 		tcp_expire(cur->tf, s, cur->ts + TCP_TMO_SYN1);
 		return 0;
 	case TCP_SYN_SENT:
@@ -481,7 +475,7 @@ static unsigned int process_handshake(struct tcpseg *cur, struct tcp_session *s)
 
 			if ( cur->tcph->flags & TCP_RST ) {
 				tcp_free(cur->tf, s);
-				state_dbg(cur, "Connection refused");
+				dmesg(M_DEBUG, "Connection refused");
 				return 0;
 			}
 		}
@@ -516,7 +510,7 @@ static unsigned int process_handshake(struct tcpseg *cur, struct tcp_session *s)
 
 			list_del(&s->tmo);
 			transition(s, s->client.state, s->server.state);
-			state_dbg(cur, "#2 syn+ack");
+			dmesg(M_DEBUG, "#2 syn+ack");
 			break;
 		}
 
@@ -524,7 +518,7 @@ static unsigned int process_handshake(struct tcpseg *cur, struct tcp_session *s)
 		snd->state = TCP_ESTABLISHED; /* maybe flip this later? */
 		transition(s, s->client.state, s->server.state);
 		tcp_data_ack(snd, rcv, cur->seq, cur->ack, cur->win);
-		state_dbg(cur, "#3 ack");
+		dmesg(M_DEBUG, "#3 ack");
 		break;
 	}
 
@@ -540,31 +534,21 @@ static void process_segment_text(struct tcpseg *cur, struct tcp_session *s)
 	}
 
 	/* seventh, process the segment text */
-	switch(rcv->state) {
-	case TCP_ESTABLISHED:
-		if ( cur->tcph->flags & TCP_ACK ) {
-			tcp_data_ack(snd, rcv, cur->seq, cur->ack, cur->win);
-		}
-		state_dbg(cur, "established");
-		break;
-	default:
-		transition(s, s->client.state, s->server.state);
-		break;
-	}
-
-	if ( tcp_after(cur->seq_end, rcv->rcv_nxt) && 
+	if ( tcp_after(cur->seq_end, rcv->rcv_nxt) &&
 		!tcp_after(cur->seq, rcv->rcv_nxt) ) {
-		//if (tcp_receive_window(rcv) == 0) {
-		//	/* XXX: Alert here? */
-		//	goto no_data;
-		//}
+		if (tcp_receive_window(rcv) == 0) {
+			dmesg(M_DEBUG, "data on empty recieve window");
+		}else{
+			/* FIXME: don't swallow text outside the window? */
+			if ( cur->len ) {
+				dmesg(M_DEBUG, "data: %u bytes: %x - %x",
+					cur->len, cur->seq, cur->seq_end);
+				//dhex_dump(cur->payload, cur->len, 16);
+			}
+		}
 
 		rcv->rcv_nxt = cur->seq + cur->len;
 	}
-
-	/* FIXME: don't swallow text outside the window this time? */
-	if ( cur->len )
-		dhex_dump(cur->payload, cur->len, 16);
 
 	/* eighth, check the FIN bit */
 	if ( cur->tcph->flags & TCP_FIN ) {
@@ -601,6 +585,42 @@ static void process_segment_text(struct tcpseg *cur, struct tcp_session *s)
 	}
 }
 
+static void paws_update(struct tcpseg *cur, struct tcp_stream *rcv)
+{
+	/* rfc1323: PAWS: update ts_recent */
+	if ( cur->saw_tstamp && !tcp_after(cur->seq,rcv->rcv_wup) ) {
+		if((int32_t)(cur->tsval - rcv->ts_recent) >= 0 ||
+		   (uint32_t)(cur->ts / TIMESTAMP_HZ) >= rcv->ts_recent_stamp
+		   + TCP_PAWS_24DAYS) {
+			rcv->ts_recent = cur->tsval;
+			rcv->ts_recent_stamp = cur->ts / TIMESTAMP_HZ;
+		}
+	}
+}
+
+static int paws_check(struct tcpseg *cur, struct tcp_stream *rcv)
+{
+	/* rfc1323: H1. Apply PAWS checks first */
+	if ( (rcv->flags & TF_TSTAMP_OK) == 0 )
+		return 1;
+
+	cur->saw_tstamp = tcp_fast_options(cur);
+	if ( !cur->saw_tstamp )
+		return 1;
+
+	/* FIXME: PAWS is buggy as fuck. We use the Linux PAWS check,
+	 * I have no idea what other stacks do...
+	 */
+	if ( (int32_t)(rcv->ts_recent - cur->tsval) > TCP_PAWS_WINDOW &&
+		(uint32_t)(cur->ts / TIMESTAMP_HZ) < rcv->ts_recent_stamp
+		+ TCP_PAWS_24DAYS ) {
+		return 0;
+	}
+
+	paws_update(cur, rcv);
+	return 1;
+}
+
 static void state_track(struct tcpseg *cur, struct tcp_session *s)
 {
 	struct tcp_stream *snd = cur->snd, *rcv = cur->rcv;
@@ -622,9 +642,14 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 		return;
 	}
 
+	if ( !paws_check(cur, rcv) ) {
+		state_err(cur, "paws");
+		return;
+	}
+
 	/* second, check the RST bit */
 	if ( cur->tcph->flags & TCP_RST ) {
-		state_dbg(cur, "Connection reset by peer");
+		dmesg(M_DEBUG, "Connection reset by peer");
 		tcp_free(cur->tf, s);
 		return;
 	}
@@ -679,6 +704,91 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 	}
 }
 
+static int tcp_csum(struct tcpseg *cur)
+{
+	struct tcp_phdr ph;
+	uint16_t *tmp;
+	uint32_t sum = 0;
+	uint16_t csum, len;
+	int i;
+
+	len = sys_be16(cur->iph->tot_len) - (cur->iph->ihl << 2);
+
+	/* Make pseudo-header */
+	ph.sip = cur->iph->saddr;
+	ph.dip = cur->iph->daddr;
+	ph.zero = 0;
+	ph.proto = cur->iph->protocol;
+	ph.tcp_len = sys_be16(len);
+
+	/* Checksum the pseudo-header */
+	tmp = (uint16_t *)&ph;
+	for(i = 0; i < 6; i++)
+		sum += tmp[i];
+
+	/* Checksum the header+data */
+	tmp = (uint16_t *)cur->tcph;
+	for(i = 0; i < (len >> 1); i++)
+		sum += tmp[i];
+
+	/* Deal with last byte (if odd number of bytes) */
+	if ( len & 1 ) {
+		union {
+			uint8_t b[2];
+			uint16_t s;
+		}f;
+
+		f.b[0] = ((uint8_t *)cur->tcph)[len - 1];
+		f.b[1] = 0;
+		sum += f.s;
+	}
+
+	sum = (sum & 0xffff) + (sum >> 16);
+
+	csum = ~sum & 0xffff;
+
+	return (csum == 0);
+}
+
+static void dbg_segment(struct tcpseg *cur)
+{
+#if SEGMENT_DEBUG
+	static const char tcpflags[] = "FSRPAUEC";
+	uint8_t x, i;
+	char ackbuf[16];
+	char fstr[9];
+	ipstr_t sip, dip;
+
+	iptostr(sip, cur->iph->saddr);
+	iptostr(dip, cur->iph->daddr);
+
+	for(i = 0, x = 1; x; i++, x <<= 1)
+		fstr[i] = (cur->tcph->flags & x) ? tcpflags[i] : '*';
+
+	fstr[i] = '\0';
+
+	if ( cur->tcph->flags & TCP_ACK ) {
+		snprintf(ackbuf, sizeof(ackbuf), " a:%x", cur->ack);
+	}else{
+		ackbuf[0] = '\0';
+	}
+
+	mesg(M_DEBUG, "\033[36m[%s] %s:%u %s:%u s:%x%s w:%u\033[0m", fstr,
+		sip, sys_be16(cur->tcph->sport),
+		dip, sys_be16(cur->tcph->dport),
+		cur->seq, ackbuf, cur->win);
+#endif
+}
+
+static void dbg_stream(const char *label, struct tcp_stream *s)
+{
+#if STREAM_DEBUG
+	mesg(M_DEBUG, "\033[34m%s: su=%.8x sn=%.8x n=%.8x wup=%.8x w=%u\033[0m",
+		label, s->snd_una, s->snd_nxt,
+		s->rcv_nxt, s->rcv_wup, s->rcv_wnd);
+#endif
+}
+
 /* FIXME: most of this stack frame ought to go in a struct and pass pointer */
 static pkt_t tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 {
@@ -687,9 +797,8 @@ static pkt_t tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 	struct tcp_session *s;
 	struct tcpseg cur;
 
-	dmesg(M_DEBUG, "TCP Segment processing");
-
 	cur.tf = sptr;
+
 	cur.ts = pkt->pkt_ts;
 	cur.iph = dcb->tcp_iph;
 	cur.tcph = dcb->tcp_hdr;
@@ -708,24 +817,42 @@ static pkt_t tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 
 	cur.tf->num_packets++;
 
+	dbg_segment(&cur);
+
+	if ( cur.iph->ttl < minttl ) {
+		cur.tf->num_ttl_errs++;
+		state_err(&cur, "TTL evasion");
+		return NULL;
+	}
+
+	if ( !tcp_csum(&cur) ) {
+		cur.tf->num_csum_errs++;
+		state_err(&cur, "bad checksum");
+		return NULL;
+	}
+
 	s = tcp_collide(cur.tf->hash[cur.hash],
 			cur.iph, cur.tcph, &to_server);
 	if ( s == NULL ) {
 		s = new_session(&cur);
-		return NULL;
-	}
-
-	/* Figure out which side is which */
-	if ( to_server ) {
-		cur.snd = &s->client;
-		cur.rcv = &s->server;
+		if ( s == NULL )
+			return NULL;
 	}else{
-		cur.snd = &s->server;
-		cur.rcv = &s->client;
+		/* Figure out which side is which */
+		if ( to_server ) {
+			cur.snd = &s->client;
+			cur.rcv = &s->server;
+		}else{
+			cur.snd = &s->server;
+			cur.rcv = &s->client;
+		}
+
+		state_track(&cur, s);
 	}
 
-	state_track(&cur, s);
-
+	dbg_stream("client", &s->client);
+	dbg_stream("server", &s->server);
+	dmesg(M_DEBUG, ".");
 	return NULL;
 }
 
