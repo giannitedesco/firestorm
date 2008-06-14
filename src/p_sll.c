@@ -41,7 +41,7 @@ static void sll_decode(struct _pkt *p)
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 
-	proto = source_n16(p->pkt_source, sll->sll_protocol);
+	proto = sys_be16(sll->sll_protocol);
 
 	_decode_layer(p, &p_sll);
 
@@ -55,6 +55,6 @@ static void sll_decode(struct _pkt *p)
 	case const_be16(LINUX_SLL_P_PPPHDLC):
 		break;
 	default:
-		_decode_next(p, NS_ETHER, proto);
+		_decode_next(p, NS_ETHER, sll->sll_protocol);
 	}
 }
