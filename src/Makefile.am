@@ -8,6 +8,7 @@ bin_PROGRAMS = firestorm
 firestorm_SOURCES = \
 	ft_ipdefrag.c \
 	ft_tcpflow.c \
+	tcp_reasm.c \
 	c_tcpdump.c \
 	p_ether.c \
 	p_ipx.c \

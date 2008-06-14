@@ -47,6 +47,7 @@ void _mesg(mesg_code_t code, const char *str, size_t len)
 
 	printf("%s: %s: %s\n", tbuf, code_str[code], str);
 #else
-	printf("%s: %s\n", code_str[code], str);
+	//printf("%s: %s\n", code_str[code], str);
+	printf("\033[%dm%s\033[0m: %s\n", 31 + code, code_str[code], str);
 #endif
 }

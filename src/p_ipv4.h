@@ -81,6 +81,13 @@ struct ipq {
 	timestamp_t	time;
 };
 
+/* Reassembly buffer */
+struct tcp_sbuf {
+	struct tcpr_node *root; /* root node of rbtree */
+	uint32_t begin; /* sequence number of first byte (not always rcv_nxt) */
+	uint32_t reasm_begin; /* sequence number of first unswallowed byte */
+};
+
 /* A simplex tcp stream */
 struct tcp_stream {
 	uint8_t		state; /* from above enum */
@@ -102,13 +109,8 @@ struct tcp_stream {
 	uint32_t	rcv_wup; /* rcv_nxt on last window update */
 
 	uint32_t	isn; /* equivalent of rfc793 iss */
-};
 
-/* Reassembly buffer */
-struct tcp_sbuf {
-	struct tcpr_node *root; /* root node of rbtree */
-	uint32_t begin; /* sequence number of first byte (not always rcv_nxt) */
-	uint32_t reasm_begin; /* sequence number of first unswallowed byte */
+	struct tcp_sbuf reasm;
 };
 
 /* A duplex tcp session */
@@ -130,19 +132,11 @@ struct tcp_session {
 	struct tcp_stream client;
 	struct tcp_stream server;
 
-	//struct tcp_sbuf c_reasm;
-	//struct tcp_sbuf s_reasm;
 	//struct _proto *proto;
 	//void *flow;
 
 	/* expiry time */
 	timestamp_t expire;
-};
-
-/* tcp_session allocator union */
-union tcp_union {
-	union tcp_union *next;
-	struct tcp_session s;
 };
 
 /* sizeof("255.255.255.255\0") */
@@ -155,5 +149,10 @@ extern struct _flow_tracker _ipv4_ipdefrag;
 extern struct _flow_tracker _ipv4_tcpflow;
 
 uint16_t _ip_csum(const struct pkt_iphdr *iph);
+
+void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq,
+			uint32_t len, const void *buf);
+void _tcp_reasm_free(struct tcp_sbuf *s);
+uint8_t *_tcp_reassemble(struct tcp_sbuf *s, uint32_t ack, size_t *len);
 
 #endif /* _P_IPV4_HEADER_INCLUDED_ */
