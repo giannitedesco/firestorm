@@ -114,6 +114,19 @@ _decode_dcb_alloc(pkt_t p, size_t sz)
 	return (struct _dcb *)ret;
 }
 
+static inline size_t
+_decode_dcb_len(struct _dcb *dcb)
+{
+	uint8_t *ptr, *nxt;
+
+	ptr = (uint8_t *)dcb;
+	nxt = (uint8_t *)dcb->dcb_next;
+
+	assert(nxt > ptr);
+
+	return nxt - ptr;
+}
+
 static inline struct _dcb *
 _decode_layer(pkt_t pkt, struct _proto *p)
 {
