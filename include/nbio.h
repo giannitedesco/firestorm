@@ -14,7 +14,7 @@ struct nbio {
 #define NBIO_ERROR	(1<<2)
 #define NBIO_WAIT	(NBIO_READ|NBIO_WRITE|NBIO_ERROR)
 	unsigned short mask, flags;
-	struct nbio_ops *ops;
+	const struct nbio_ops *ops;
 	struct list_head list;
 	union {
 		int poll;
@@ -43,7 +43,7 @@ struct nbio_ops {
 /* nbio API */
 void nbio_add(struct iothread *, struct nbio *, unsigned short) _nonull(1,2);
 void nbio_del(struct iothread *, struct nbio *) _nonull(1,2);
-void nbio_pump(struct iothread *) _nonull(1);
+void nbio_pump(struct iothread *, int mto) _nonull(1);
 void nbio_fini(struct iothread *) _nonull(1);
 int nbio_init(struct iothread *, const char *plugin) _nonull(1) _check_result;
 void nbio_inactive(struct iothread *, struct nbio *) _nonull(1,2);
@@ -56,7 +56,7 @@ struct eventloop {
 	const char *name;
 	int (*init)(struct iothread *);
 	void (*fini)(struct iothread *);
-	void (*pump)(struct iothread *);
+	void (*pump)(struct iothread *, int);
 	void (*inactive)(struct iothread *, struct nbio *);
 	void (*active)(struct iothread *, struct nbio *);
 	struct eventloop *next;
@@ -64,5 +64,11 @@ struct eventloop {
 
 void eventloop_add(struct eventloop *e) _nonull(1);
 struct eventloop *eventloop_find(const char *name) _nonull(1) _check_result;
+void _eventloop_poll_ctor(void);
+#if HAVE_EPOLL
+void _eventloop_epoll_ctor(void);
+#else
+static inline void _eventloop_epoll_ctor(void) { }
+#endif
 
 #endif /* _NBIO_HEADER_INCLUDED_ */

@@ -3,13 +3,17 @@
 INCLUDES = \
 	-I../include
 
-bin_PROGRAMS = firestorm
+if HAVE_EPOLL
+SRC_EPOLL = nbio-epoll.c
+endif
 
+bin_PROGRAMS = firestorm
 firestorm_SOURCES = \
+	c_tcpdump.c \
+	\
 	ft_ipdefrag.c \
 	ft_tcpflow.c \
 	tcp_reasm.c \
-	c_tcpdump.c \
 	p_ether.c \
 	p_ipx.c \
 	p_ipv4.c \
@@ -18,16 +22,20 @@ firestorm_SOURCES = \
 	p_sll.c \
 	\
 	memchunk.c \
-	capture.c \
-	packet.c \
-	decode.c \
 	timers.c \
 	mpool.c \
 	fdctl.c \
-	flow.c \
+	nbio.c \
+	$(SRC_EPOLL) \
+	nbio-poll.c \
 	mesg.c \
 	util.c \
 	os.c \
+	\
+	capture.c \
+	packet.c \
+	decode.c \
+	flow.c \
 	\
 	s_pipeline.c \
 	sensor.c \

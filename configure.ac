@@ -45,7 +45,7 @@ AC_STRUCT_TM
 
 dnl Check for library functions
 AC_CHECK_FUNCS([tzset sigaction getrusage getopt_long madvise getpwnam])
-AC_CHECK_FUNCS([poll epoll_create writev sigprocmask])
+AC_CHECK_FUNCS([poll writev sigprocmask])
 
 dnl Check for memory mapped IO support
 havemm="no"
@@ -55,6 +55,10 @@ if test "x$havemm" != "xno"; then
 	echo "ERROR: get a real OS."
 	exit 1
 fi
+
+AC_CHECK_FUNC(epoll_create,[have_epoll=1], [have_epoll=0])
+AM_CONDITIONAL([HAVE_EPOLL], [test x$have_epoll = x1])
+AC_DEFINE_UNQUOTED([HAVE_EPOLL], $have_epoll, [If nbio epoll module is built])
 
 dnl Check for libpcap -- shamelessly stolen from snort
 AC_ARG_WITH(libpcap_includes,

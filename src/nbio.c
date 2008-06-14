@@ -13,11 +13,7 @@
  *  o nbio_add() - Register an fd with read/write/error callbacks
  *  o nbio_del() - Remove an fd
 */
-#include <compiler.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-#include <list.h>
+#include <firestorm.h>
 #include <nbio.h>
 
 static struct eventloop *ev_list;
@@ -38,7 +34,7 @@ struct eventloop *eventloop_find(const char *name)
 void eventloop_add(struct eventloop *e)
 {
 	if ( eventloop_find(e->name) ) {
-		fprintf(stderr, "eventloop: '%s' eventloop is "
+		mesg(M_ERR, "eventloop: '%s' eventloop is "
 			"already registered\n", e->name);
 		return;
 	}
@@ -52,7 +48,7 @@ int nbio_init(struct iothread *t, const char *plugin)
 	if ( plugin == NULL ) {
 		t->plugin = ev_list;
 		if ( t->plugin == NULL ) {
-			fprintf(stderr, "nbio: No eventloop plugins\n");
+			mesg(M_ERR, "nbio: No eventloop plugins\n");
 			return 0;
 		}
 	}else{
@@ -97,7 +93,7 @@ void nbio_fini(struct iothread *t)
 	t->plugin->fini(t);
 }
 
-void nbio_pump(struct iothread *t)
+void nbio_pump(struct iothread *t, int mto)
 {
 	struct nbio *n, *tmp;
 	struct nbio *d, *tmp2;
@@ -127,7 +123,7 @@ void nbio_pump(struct iothread *t)
 	}
 
 	if ( !list_empty(&t->inactive) )
-		t->plugin->pump(t);
+		t->plugin->pump(t, mto);
 }
 
 void nbio_add(struct iothread *t, struct nbio *n, unsigned short wait)
@@ -170,4 +166,10 @@ void nbio_set_wait(struct iothread *t, struct nbio *io, unsigned short wait)
 unsigned short nbio_get_wait(struct nbio *io)
 {
 	return io->mask & NBIO_WAIT;
+}
+
+static void __attribute__((constructor)) _ctor(void)
+{
+	_eventloop_poll_ctor();
+	_eventloop_epoll_ctor();
 }
