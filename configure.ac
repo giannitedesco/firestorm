@@ -57,7 +57,7 @@ if test "x$havemm" != "xno"; then
 fi
 
 AC_CHECK_FUNC(epoll_create,[have_epoll=1], [have_epoll=0])
-AM_CONDITIONAL([HAVE_EPOLL], [test x$have_epoll = x1])
+AM_CONDITIONAL([HAVE_EPOLL], [test x$have_epoll == x1])
 AC_DEFINE_UNQUOTED([HAVE_EPOLL], $have_epoll, [If nbio epoll module is built])
 
 dnl Check for libpcap -- shamelessly stolen from snort
@@ -77,15 +77,14 @@ if test "x$with_libpcap_libraries" != "xno"; then
 	LDFLAGS="${LDFLAGS}  -L${with_libpcap_libraries}"
 fi
 
-AC_CHECK_LIB(pcap,pcap_datalink,have_libpcap="yes",have_libpcap="no")
-if test "x$have_libpcap" != "xno"; then
-	pcap_la="capdev_pcap.la"
+AC_CHECK_LIB(pcap, pcap_datalink, [have_pcap=1], [have_pcap=0])
+AM_CONDITIONAL([HAVE_PCAP], [test x$have_pcap == x1])
+AC_DEFINE_UNQUOTED([HAVE_PCAP], $have_pcap, [If nbio libpcap capture is built])
+if test "x$have_pcap" != "xno"; then
 	pcap_ldflags="-lpcap"
 else
-	pcap_la=""
 	pcap_ldflags=""
 fi
-AC_SUBST(pcap_la)
 AC_SUBST(pcap_ldflags)
 
 dnl Check for Linux mmap() packet socket 

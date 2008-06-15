@@ -76,6 +76,9 @@ void memchunk_free_obj(memchunk_t m, void *chunk);
 
 /* --- Data-source plugins */
 source_t capture_tcpdump_open(const char *fn);
+source_t capture_pcap_open_offline(const char *fn);
+source_t capture_pcap_open_live(const char *ifname, size_t mtu, int promisc);
+void source_free(source_t s) _nonull(1);
 
 /* --- Decode API */
 void decode_init(void);

@@ -3,13 +3,20 @@
 INCLUDES = \
 	-I../include
 
+bin_PROGRAMS = firestorm
+
 if HAVE_EPOLL
 SRC_EPOLL = nbio-epoll.c
 endif
 
-bin_PROGRAMS = firestorm
+if HAVE_PCAP
+firestorm_LDADD = @pcap_ldflags@
+SRC_PCAP = c_pcap.c
+endif
+
 firestorm_SOURCES = \
 	c_tcpdump.c \
+	c_pcap.c \
 	\
 	ft_ipdefrag.c \
 	ft_tcpflow.c \

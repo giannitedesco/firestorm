@@ -6,7 +6,10 @@
 #ifndef _FIRESTORM_CAPTURE_HEADER_INCLUDED_
 #define _FIRESTORM_CAPTURE_HEADER_INCLUDED_
 
+#include <nbio.h>
+
 struct _source {
+	struct nbio s_io;
 	const struct _capdev *s_capdev;
 	const char *s_name;
 	decoder_t s_decoder;
@@ -22,19 +25,22 @@ struct _source {
 struct _capdev {
 	bitmask_t c_flags;
 
-	struct _pkt *(*c_dequeue)(struct _source *s);
+	struct _pkt *(*c_dequeue)(struct _source *s, struct iothread *io);
 
+#if 0
 	off_t (*cf_index)(struct _pkt *pkt);
 	struct _pkt *(*c_query)(struct _source *s, off_t off);
 
 	void (*c_rewind)(struct _source *s);
+#endif
 
 	void (*c_dtor)(struct _source *s);
 
 	const char *c_name;
 };
 
-void _source_free(struct _source *s) _nonull(1);
+void _source_new(struct _source *s, const struct _capdev *c, const char *label)
+	_nonull(1,2,3);
 
 static inline uint16_t source_h16(struct _source *src, uint16_t i)
 {

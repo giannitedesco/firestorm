@@ -73,7 +73,8 @@
 #define _printf(x,y)
 #endif
 
-#ifndef _nonull
+#if 1
+#undef _nonull
 #define _nonull(x...)
 #endif
 

@@ -182,7 +182,7 @@ static void tcpd_free(struct _source *s)
 	free(s);
 }
 
-static struct _pkt *tcpd_dequeue(struct _source *s)
+static struct _pkt *tcpd_dequeue(struct _source *s, struct iothread *io)
 {
 	struct tcpd_priv *p = (struct tcpd_priv *)s;
 	struct pcap_pkthdr *h;
@@ -209,7 +209,6 @@ static struct _pkt *tcpd_dequeue(struct _source *s)
 	p->pkt.pkt_caplen = p->r32(h->caplen);
 	p->pkt.pkt_base = p->cur;
 	p->pkt.pkt_end = p->cur + p->pkt.pkt_caplen;
-	p->pkt.pkt_source = s;
 
 	/* advance the file pointer */
 	p->cur += p->pkt.pkt_caplen;
@@ -233,8 +232,8 @@ source_t capture_tcpdump_open(const char *fn)
 	if ( p == NULL )
 		goto err;
 
-	p->src.s_name = fn;
-	p->src.s_capdev = &capdev;
+	_source_new(&p->src, &capdev, fn);
+	p->pkt.pkt_source = &p->src;
 	p->fd = -1;
 
 	if ( !decode_pkt_realloc(&p->pkt, DECODE_DEFAULT_MIN_LAYERS) )
