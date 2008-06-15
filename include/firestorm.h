@@ -56,6 +56,7 @@ typedef uint8_t mesg_code_t;
 #define M_LIMIT 0x80 /* Ratelimit this message */
 
 /* --- Global firestorm stuff */
+void *_firestorm_unimplemented(void);
 void mesg(mesg_code_t code, const char *fmt, ...) _printf(2,3);
 void hex_dump(const uint8_t *tmp, size_t len, size_t llen);
 
@@ -76,8 +77,13 @@ void memchunk_free_obj(memchunk_t m, void *chunk);
 
 /* --- Data-source plugins */
 source_t capture_tcpdump_open(const char *fn);
+#if HAVE_PCAP
 source_t capture_pcap_open_offline(const char *fn);
 source_t capture_pcap_open_live(const char *ifname, size_t mtu, int promisc);
+#else
+#define capture_pcap_open_offline(x) _firestorm_unimplemented(void)
+#define capture_pcap_open_live(x,y,z) _firestorm_unimplemented(void)
+#endif
 void source_free(source_t s) _nonull(1);
 
 /* --- Decode API */

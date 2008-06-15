@@ -20,8 +20,8 @@ int main(int argc, char **argv)
 	decode_init();
 
 	if ( argc > 1 ) {
-		//src = capture_tcpdump_open(argv[1]);
-		src = capture_pcap_open_live(argv[1], 0xffff, 1);
+		src = capture_tcpdump_open(argv[1]);
+		//src = capture_pcap_open_live(argv[1], 0xffff, 1);
 	}else{
 		src = capture_tcpdump_open("./test.cap");
 	}

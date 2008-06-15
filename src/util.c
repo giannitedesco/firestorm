@@ -9,6 +9,11 @@
 #include <stdio.h>
 #include <ctype.h>
 
+void *_firestorm_unimplemented(void)
+{
+	return NULL;
+}
+
 void hex_dump(const uint8_t *tmp, size_t len, size_t llen)
 {
 	size_t i, j;
