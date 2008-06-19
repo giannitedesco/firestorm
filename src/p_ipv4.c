@@ -1,7 +1,7 @@
 /*
  * This file is part of Firestorm NIDS
- * Copyright (c) 2002,2003,2004 Gianni Tedesco <gianni@scaramanga.co.uk>
- * This program is released under the terms of the GNU GPL version 2
+ * Copyright (c) 2008 Gianni Tedesco [gianni @t scaramanga d0t co d0t uk]
+ * This program is released under the terms of the GNU GPL version 3
 */
 
 #include <firestorm.h>
@@ -164,8 +164,15 @@ static const struct pkt_iphdr *icmp_try_inner(struct _pkt *p,
 	if ( p->pkt_nxthdr + sizeof(*iph) > p->pkt_end )
 		return NULL;
 
-	if ( iph->version != 4 || iph->ihl < 5 )
+	if ( iph->version != 4 || iph->ihl < 5 ) {
+		mesg(M_WARN, "icmp: bad ip header in payload");
 		return NULL;
+	}
+
+	if ( _ip_csum(iph) ) {
+		mesg(M_WARN, "icmp: bad ip checksum in payload");
+		return NULL;
+	}
 
 	p->pkt_nxthdr += iph->ihl << 2;
 
