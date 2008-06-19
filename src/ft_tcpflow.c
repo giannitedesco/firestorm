@@ -19,9 +19,9 @@
 #include <pkt/icmp.h>
 #include "p_ipv4.h"
 
-#define STATE_DEBUG 0
-#define SEGMENT_DEBUG 0
-#define STREAM_DEBUG 0
+#define STATE_DEBUG 1
+#define SEGMENT_DEBUG 1
+#define STREAM_DEBUG 1
 
 #if STATE_DEBUG
 #define dmesg mesg
@@ -109,7 +109,7 @@ static void transition(struct tcp_session *s, int cs, int ss)
 
 static void state_err(struct tcpseg *cur, const char *msg)
 {
-#if STATE_DEBUG
+#if STATE_DEBUG || 1
 	ipstr_t sip, dip;
 
 	iptostr(sip, cur->iph->saddr);
@@ -141,8 +141,8 @@ static int tcp_sequence(struct tcp_stream *s, uint32_t seq, uint32_t end_seq)
 		!tcp_after(seq, s->rcv_nxt + tcp_receive_window(s));
 }
 
-/* Hash function. Hashes to the same value even when source
- * and destinations are inverted
+/* Hash function.
+ * Hashes to the same value even when source and destinations are inverted.
  */
 static uint16_t _constfn tcp_hashfn(uint32_t saddr, uint32_t daddr,
 					uint16_t sport, uint16_t dport)
@@ -326,13 +326,33 @@ static void tcp_syn_options(struct tcp_stream *s,
 	}
 }
 
+/* Reassemble all bytes up to ack */
+static void reassemble_point(struct tcp_sbuf *sbuf, uint32_t ack)
+{
+	uint8_t *ptr;
+	size_t len;
+
+	if ( sbuf->root == NULL )
+		return;
+	if ( !tcp_after(ack, sbuf->reasm_begin) )
+		return;
+
+	ptr = _tcp_reassemble(sbuf, ack, &len);
+	if ( ptr ) {
+		dmesg(M_DEBUG, "reassembled %u bytes", len);
+		free(ptr);
+	}
+}
+
 static void tcp_free(struct tcpflow *tf, struct tcp_session *s)
 {
 	transition(s, 0, 0);
 	tcp_hash_unlink(s);
 	list_del(&s->tmo);
 	list_del(&s->lru);
+	reassemble_point(&s->server.reasm, s->server.rcv_nxt);
 	_tcp_reasm_free(&s->server.reasm);
+	reassemble_point(&s->client.reasm, s->client.rcv_nxt);
 	_tcp_reasm_free(&s->client.reasm);
 	objcache_free(tf->session_cache, s);
 	tf->num_active--;
@@ -425,26 +445,7 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 	return s;
 }
 
-/* Reassemble all bytes up to ack */
-static void reassemble_point(struct tcp_sbuf *sbuf, uint32_t ack)
-{
-	uint8_t *ptr;
-	size_t len;
-
-	if ( sbuf->root == NULL )
-		return;
-	if ( !tcp_after(ack, sbuf->reasm_begin) )
-		return;
-
-	ptr = _tcp_reassemble(sbuf, ack, &len);
-	if ( ptr ) {
-		dmesg(M_DEBUG, "reassembled %u bytes", len);
-		free(ptr);
-	}
-}
-
-/* rfc793: Actions to perform when recieving an ACK in
- * an established state */
+/* rfc793: Actions to perform when recieving an ACK in an established state */
 static void tcp_data_ack(struct tcp_stream *snd, struct tcp_stream *rcv,
 				uint32_t seq, uint32_t ack, uint32_t win)
 {
@@ -462,12 +463,6 @@ static void tcp_data_ack(struct tcp_stream *snd, struct tcp_stream *rcv,
 		 * ESTABLISHED, FIN_WAIT1 or FIN_WAIT2. That means we have
 		 * to hold on to any data until connection establishment.
 		 */
-
-		/* If we sent a FIN, then we can't be acking the virtual
-		 * byte of data that it represents
-		 */
-		if ( (rcv->state == TCP_FIN_WAIT1) )
-			--ack;
 		reassemble_point(&snd->reasm, ack);
 	}
 }
@@ -573,7 +568,7 @@ static void process_segment_text(struct tcpseg *cur, struct tcp_session *s)
 						cur->seq,
 						cur->len,
 						cur->payload);
-
+			dhex_dump(cur->payload, cur->len, 16);
 		}
 
 		rcv->rcv_nxt = cur->seq + cur->len;
@@ -697,10 +692,10 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 	if ( cur->tcph->flags & TCP_ACK ) {
 		switch(rcv->state) {
 		case TCP_ESTABLISHED:
-			tcp_data_ack(snd,rcv, cur->seq, cur->ack, cur->win);
+			tcp_data_ack(snd, rcv, cur->seq, cur->ack, cur->win);
 			break;
 		case TCP_FIN_WAIT1:
-			tcp_data_ack(snd,rcv, cur->seq, cur->ack,cur->win);
+			tcp_data_ack(snd, rcv, cur->seq, cur->ack - 1,cur->win);
 			rcv->state = TCP_FIN_WAIT2;
 			snd->state = TCP_LAST_ACK;
 			transition(s, s->client.state, s->server.state);
@@ -802,10 +797,10 @@ static void dbg_segment(struct tcpseg *cur)
 		ackbuf[0] = '\0';
 	}
 
-	mesg(M_DEBUG, "\033[36m[%s] %s:%u %s:%u s:%x%s w:%u\033[0m", fstr,
+	mesg(M_DEBUG, "\033[36m[%s] %s:%u %s:%u s:%x%s w:%u l:%u\033[0m", fstr,
 		sip, sys_be16(cur->tcph->sport),
 		dip, sys_be16(cur->tcph->dport),
-		cur->seq, ackbuf, cur->win);
+		cur->seq, ackbuf, cur->win, cur->len);
 #endif
 }
 
@@ -853,6 +848,13 @@ static pkt_t tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 		return NULL;
 	}
 
+	if ( !tcp_csum(&cur) ) {
+		cur.tf->num_csum_errs++;
+		state_err(&cur, "bad checksum");
+		dhex_dump(cur.payload, cur.len, 16);
+		return NULL;
+	}
+
 	s = tcp_collide(cur.tf->hash[cur.hash],
 			cur.iph, cur.tcph, &to_server);
 	if ( s == NULL ) {
@@ -867,12 +869,6 @@ static pkt_t tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 		}else{
 			cur.snd = &s->server;
 			cur.rcv = &s->client;
-		}
-
-		if ( !tcp_csum(&cur) ) {
-			cur.tf->num_csum_errs++;
-			state_err(&cur, "bad checksum");
-			return NULL;
 		}
 
 		state_track(&cur, s);
