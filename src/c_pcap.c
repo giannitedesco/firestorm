@@ -88,7 +88,6 @@ static struct _pkt *live_dequeue(struct _source *s, struct iothread *io)
 	if ( ret < 0 ) {
 		mesg(M_ERR, "pcap: %s", pcap_geterr(p->pcap_desc));
 		nbio_del(io, &s->s_io);
-		source_free(s);
 		return NULL;
 	}
 
