@@ -56,6 +56,7 @@ static const struct {
 /* This is our own private data */
 struct tcpd_priv {
 	struct _source	src;
+	struct _frame	frame;
 	struct _pkt	pkt;
 	void		*end;
 	void		*cur;
@@ -182,7 +183,7 @@ static void tcpd_free(struct _source *s)
 	free(s);
 }
 
-static struct _pkt *tcpd_dequeue(struct _source *s, struct iothread *io)
+static struct _frame *tcpd_dequeue(struct _source *s, struct iothread *io)
 {
 	struct tcpd_priv *p = (struct tcpd_priv *)s;
 	struct pcap_pkthdr *h;
@@ -213,7 +214,7 @@ static struct _pkt *tcpd_dequeue(struct _source *s, struct iothread *io)
 	/* advance the file pointer */
 	p->cur += p->pkt.pkt_caplen;
 
-	return &p->pkt;
+	return &p->frame;
 }
 
 static const struct _capdev capdev = {
@@ -233,7 +234,9 @@ source_t capture_tcpdump_open(const char *fn)
 		goto err;
 
 	_source_new(&p->src, &capdev, fn);
-	p->pkt.pkt_source = &p->src;
+	p->frame.f_source = &p->src;
+	p->frame.f_raw = &p->pkt;
+	p->pkt.pkt_owner = &p->frame;
 	p->fd = -1;
 
 	if ( !decode_pkt_realloc(&p->pkt, DECODE_DEFAULT_MIN_LAYERS) )

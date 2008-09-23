@@ -25,6 +25,7 @@
 #include <f_os.h>
 
 typedef struct _pkt *pkt_t;
+typedef struct _frame *frame_t;
 
 typedef struct _source *source_t;
 typedef struct _capdev *capdev_t;
@@ -61,7 +62,7 @@ void mesg(mesg_code_t code, const char *fmt, ...) _printf(2,3);
 void hex_dump(const uint8_t *tmp, size_t len, size_t llen);
 
 /* --- Packet routines */
-pkt_t pkt_alloc(source_t source) _malloc;
+pkt_t pkt_alloc(frame_t owner) _malloc;
 void pkt_free(pkt_t pkt);
 
 /* -- Memchunk routines */

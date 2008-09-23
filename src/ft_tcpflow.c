@@ -19,9 +19,9 @@
 #include <pkt/icmp.h>
 #include "p_ipv4.h"
 
-#define STATE_DEBUG 1
-#define SEGMENT_DEBUG 1
-#define STREAM_DEBUG 1
+#define STATE_DEBUG 0
+#define SEGMENT_DEBUG 0
+#define STREAM_DEBUG 0
 
 #if STATE_DEBUG
 #define dmesg mesg
@@ -109,7 +109,7 @@ static void transition(struct tcp_session *s, int cs, int ss)
 
 static void state_err(struct tcpseg *cur, const char *msg)
 {
-#if STATE_DEBUG || 1
+#if STATE_DEBUG
 	ipstr_t sip, dip;
 
 	iptostr(sip, cur->iph->saddr);

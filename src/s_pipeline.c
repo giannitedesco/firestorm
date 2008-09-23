@@ -139,7 +139,7 @@ static void analyze_packet(struct _pipeline *p, struct _pkt *pkt)
 		pp = &p->p_proto[cur->dcb_proto->p_idx];
 		if ( pp->pp_ft && pp->pp_ft->ft_track ) {
 			reasm = pp->pp_ft->ft_track(pp->pp_flow, pkt, cur);
-			if ( reasm ) {
+			if ( reasm != NULL ) {
 				dmesg(M_DEBUG, "REASSEMBLYGRAM");
 				analyze_packet(p, reasm);
 				pkt_free(reasm);
@@ -151,19 +151,22 @@ static void analyze_packet(struct _pipeline *p, struct _pkt *pkt)
 static unsigned int do_dequeue(struct _pipeline *p, struct _source *s,
 				struct iothread *io)
 {
-	pkt_t pkt;
+	frame_t f;
 
-	pkt = s->s_capdev->c_dequeue(s, io);
-	if ( pkt == NULL )
+	f = s->s_capdev->c_dequeue(s, io);
+	if ( f == NULL )
 		return 0;
 
 	p->p_num_pkt++;
 
-	dmesg(M_DEBUG, "packet %llu, len = %u/%u",
+	dmesg(M_DEBUG, "Frame %llu, len = %u/%u",
 		p->p_num_pkt, pkt->pkt_caplen, pkt->pkt_len);
-	decode(pkt, s->s_decoder);
-	analyze_packet(p, pkt);
-	if ( pkt->pkt_nxthdr < pkt->pkt_end ) {
+
+	decode(f->f_raw, s->s_decoder);
+
+	analyze_packet(p, f->f_raw);
+
+	if ( f->f_raw->pkt_nxthdr < f->f_raw->pkt_end ) {
 		dhex_dump(pkt->pkt_nxthdr,
 			pkt->pkt_end - pkt->pkt_nxthdr, 16);
 	}else{

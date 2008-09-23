@@ -162,7 +162,8 @@ static void frankenpkt_dtor(struct _pkt *pkt)
 }
 
 /* Reassemble a complete set of fragments */
-static struct _pkt *reassemble(struct ipdefrag *ipd, struct ipq *qp, source_t s)
+static struct _pkt *reassemble(struct ipdefrag *ipd, struct ipq *qp,
+				struct _pkt *pkt)
 {
 	struct ipfrag *f;
 	struct pkt_iphdr *iph;
@@ -210,7 +211,7 @@ static struct _pkt *reassemble(struct ipdefrag *ipd, struct ipq *qp, source_t s)
 
 	dhex_dump(buf, qp->len, 16);
 
-	ret = pkt_alloc(s);
+	ret = pkt_alloc(pkt->pkt_owner);
 	if ( ret == NULL )
 		goto err_free_buf;
 
@@ -224,7 +225,7 @@ static struct _pkt *reassemble(struct ipdefrag *ipd, struct ipq *qp, source_t s)
 
 	ret->pkt_dtor = frankenpkt_dtor;
 
-	/* TODO: Inject the packet back in to the flow */
+	/* FIXME: needs a reassemblygram DCB, dont call decode()  */
 	decode(ret, &_ipv4_decoder);
 	reassembled++;
 
@@ -595,7 +596,7 @@ static pkt_t ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
 		return ret;
 
 	if ( queue_fragment(ipd, hash, q, pkt, iph) ) {
-		ret = reassemble(ipd, q, pkt->pkt_source);
+		ret = reassemble(ipd, q, pkt);
 		ipq_kill(ipd, q);
 	}
 

@@ -1,0 +1,63 @@
+===============================================================================
+Firestorm v0.6.x - A Network Intrusion Detection Suite
+Copyright (c) 2001-2008 Gianni Tedesco <gianni at scaramanga dot co dot uk>
+This software is released under the GNU GPL version 3 (see: COPYING)
+===============================================================================
+
+Passive Sensor Component
+------------------------
+Responsible for all flow tracking, profiling, protocol and signature analysis.
+Flow tracking and profiling is state based evidence
+Protocol and signature analysis provide event based evidence
+
+ o One or more sources of various types (online or offline)
+ o Packets are dequeued from sources
+ o Each packet is decoded in to a DCB. However:
+   - packet decode updates flowstats (endpoint tuple, byte + pkt counters)
+   - this also goes for session state (tcpflow)
+   - sometimes reassemblygrams are generated (ipdefrag)
+   - stream reassemblers (tcp) will generate stream-push events
+ o Analysis proceeds only after a full decode
+   - each (pkt, dcb) pair  is considered an event that rule language may hook
+   - flowstats are a data structure to be queried, not event driven
+   - DCB for each reassembly/stream-push etc..
+   - may map to an alert, but that's part of the language
+ o Cleanup then involves:
+   - session state may need destroying after analysis (eg. RST)
+   - reassembly state may need destroying after analysis (eg. reassembled, kept ptr in dcb)
+   - stream fragments may need freeing after content analysis etc.
+   - flows are invariant, they may only die if the next packet causes an eviction (if ever)
+   - THEREFORE: a single packet must not generate two state entries from the same data structure
+   - THEREFORE: flow trackers must not free up anything it doesn't own (eg, via global mem balancing)
+
+Active Sensor Component
+-----------------------
+ o State evidence:
+   - Vuln. analysis
+   - SNMP gets
+   - netflow
+ o Event evidence
+   - SNMP traps
+   - syslog
+
+Central Manager Unit
+--------------------
+ o Control of sensor
+ o Gathering of evidence from sensor
+ o State DB
+ o Event DB
+ o Correlation
+
+Rule Language:
+--------------
+Used by signatures, correlator, event db queries, state db queries
+
+ o Generic type/name system
+ o 3 Language Front-ends (lexer/syntax analysis)
+   - query language
+   - signature language
+   - correlation language
+ o 3 processing backends
+   - signature analysis: IDD on a single event
+   - Correlator: state/event transitions, programatically query DB
+   - event/state DB querying

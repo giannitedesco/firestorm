@@ -25,7 +25,7 @@ struct _source {
 struct _capdev {
 	bitmask_t c_flags;
 
-	struct _pkt *(*c_dequeue)(struct _source *s, struct iothread *io);
+	struct _frame *(*c_dequeue)(struct _source *s, struct iothread *io);
 
 #if 0
 	off_t (*cf_index)(struct _pkt *pkt);

@@ -6,6 +6,12 @@
 #ifndef _FIRESTORM_PACKET_HEADER_INCLUDED_
 #define _FIRESTORM_PACKET_HEADER_INCLUDED_
 
+struct _frame {
+	source_t	f_source;
+	struct _pkt	*f_raw;
+	struct list_head f_pkts;
+};
+
 struct _pkt {
 	timestamp_t 	pkt_ts;
 
@@ -16,14 +22,18 @@ struct _pkt {
 
 	const uint8_t	*pkt_nxthdr;
 
-	source_t	pkt_source;
-
 	struct _dcb	*pkt_dcb_top;
 	struct _dcb	*pkt_dcb;
 	struct _dcb	*pkt_dcb_end;
 
 	/** Destructor function. Responsible for freeing up dcb and payload. */
 	void (*pkt_dtor)(struct _pkt *pkt);
+
+	/** Owning frame. May be NULL */
+	struct _frame	*pkt_owner;
+
+	/** Packet list entry in owning frame. Valid iff pkt_owner != NULL */
+	struct list_head pkt_list;
 };
 
 #endif /* _FIRESTORM_PACKET_HEADER_INCLUDED_ */
