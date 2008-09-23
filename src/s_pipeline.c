@@ -12,7 +12,7 @@
 #include <f_flow.h>
 #include <nbio.h>
 
-#if 0
+#if 1
 #define dmesg mesg
 #define dhex_dump hex_dump
 #else
@@ -33,6 +33,19 @@ struct _pipeline {
 	uint64_t p_num_pkt;
 	struct per_proto p_proto[0];
 };
+
+static void analyze_packet(struct _pipeline *p, struct _pkt *pkt)
+{
+	struct _dcb *cur;
+	struct per_proto *pp;
+
+	dmesg(M_DEBUG, "analyze packet:");
+	for(cur = pkt->pkt_dcb;
+		cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
+		pp = &p->p_proto[cur->dcb_proto->p_idx];
+		dmesg(M_DEBUG, " o %s layer", cur->dcb_proto->p_label);
+	}
+}
 
 static int ft_init(struct _flow_tracker *ft, void *priv)
 {
@@ -135,9 +148,10 @@ static void flowtrack_packet(struct _pipeline *p, struct _pkt *pkt)
 	struct per_proto *pp;
 
 	for(cur = pkt->pkt_dcb; cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
-		dmesg(M_DEBUG, "DECODED: %s", cur->dcb_proto->p_label);
 		pp = &p->p_proto[cur->dcb_proto->p_idx];
 		if ( pp->pp_ft && pp->pp_ft->ft_track ) {
+			dmesg(M_DEBUG, "FLOW TRACK: %s",
+				cur->dcb_proto->p_label);
 			pp->pp_ft->ft_track(pp->pp_flow, pkt, cur);
 		}
 	}
@@ -153,9 +167,7 @@ static void cbfn_pkt_new(struct _event *ev, va_list args)
 	pkt = va_arg(args, struct _pkt *);
 	p = f->f_priv;
 	dmesg(M_DEBUG, "ev: new_pkt: frame=%p pkt=%p", f, pkt);
-
 	list_add_tail(&pkt->pkt_list, &f->f_pkts);
-	dmesg(M_DEBUG, "REASSEMBLYGRAM");
 	flowtrack_packet(p, pkt);
 }
 
@@ -184,18 +196,19 @@ static unsigned int do_dequeue(struct _pipeline *p, struct _source *s,
 	decode(f->f_raw, s->s_decoder);
 
 	flowtrack_packet(p, f->f_raw);
+	analyze_packet(p, f->f_raw);
+
+	list_for_each_entry_safe(pkt, tmp, &f->f_pkts, pkt_list) {
+		analyze_packet(p, pkt);
+		list_del(&pkt->pkt_list);
+		pkt_free(pkt);
+	}
 
 	if ( f->f_raw->pkt_nxthdr < f->f_raw->pkt_end ) {
 		dhex_dump(f->f_raw->pkt_nxthdr,
 			f->f_raw->pkt_end - f->f_raw->pkt_nxthdr, 16);
 	}else{
 		dmesg(M_DEBUG, ".\n");
-	}
-
-	list_for_each_entry_safe(pkt, tmp, &f->f_pkts, pkt_list) {
-		dmesg(M_DEBUG, " - aux packet");
-		list_del(&pkt->pkt_list);
-		pkt_free(pkt);
 	}
 
 	return 1;
