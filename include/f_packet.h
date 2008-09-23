@@ -10,6 +10,7 @@ struct _frame {
 	source_t	f_source;
 	struct _pkt	*f_raw;
 	struct list_head f_pkts;
+	void		*f_priv;
 };
 
 struct _pkt {
@@ -32,7 +33,7 @@ struct _pkt {
 	/** Owning frame. May be NULL */
 	struct _frame	*pkt_owner;
 
-	/** Packet list entry in owning frame. Valid iff pkt_owner != NULL */
+	/** Packet list entry in owning frame. */
 	struct list_head pkt_list;
 };
 

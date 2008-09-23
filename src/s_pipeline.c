@@ -8,8 +8,17 @@
 #include <f_capture.h>
 #include <f_packet.h>
 #include <f_decode.h>
+#include <f_event.h>
 #include <f_flow.h>
 #include <nbio.h>
+
+#if 0
+#define dmesg mesg
+#define dhex_dump hex_dump
+#else
+#define dmesg(x...) do{}while(0);
+#define dhex_dump(x...) do{}while(0);
+#endif
 
 struct per_proto {
 	struct _flow_tracker *pp_ft;
@@ -120,17 +129,8 @@ int pipeline_add_source(pipeline_t p, source_t s)
 	return 1;
 }
 
-#if 0
-#define dmesg mesg
-#define dhex_dump hex_dump
-#else
-#define dmesg(x...) do{}while(0);
-#define dhex_dump(x...) do{}while(0);
-#endif
-
-static void analyze_packet(struct _pipeline *p, struct _pkt *pkt)
+static void flowtrack_packet(struct _pipeline *p, struct _pkt *pkt)
 {
-	struct _pkt *reasm;
 	struct _dcb *cur;
 	struct per_proto *pp;
 
@@ -138,39 +138,64 @@ static void analyze_packet(struct _pipeline *p, struct _pkt *pkt)
 		dmesg(M_DEBUG, "DECODED: %s", cur->dcb_proto->p_label);
 		pp = &p->p_proto[cur->dcb_proto->p_idx];
 		if ( pp->pp_ft && pp->pp_ft->ft_track ) {
-			reasm = pp->pp_ft->ft_track(pp->pp_flow, pkt, cur);
-			if ( reasm != NULL ) {
-				dmesg(M_DEBUG, "REASSEMBLYGRAM");
-				analyze_packet(p, reasm);
-				pkt_free(reasm);
-			}
+			pp->pp_ft->ft_track(pp->pp_flow, pkt, cur);
 		}
 	}
+}
+
+static void cbfn_pkt_new(struct _event *ev, va_list args)
+{
+	struct _pipeline *p;
+	struct _frame *f;
+	struct _pkt *pkt;
+
+	f = va_arg(args, struct _frame *);
+	pkt = va_arg(args, struct _pkt *);
+	p = f->f_priv;
+	dmesg(M_DEBUG, "ev: new_pkt: frame=%p pkt=%p", f, pkt);
+
+	list_add_tail(&pkt->pkt_list, &f->f_pkts);
+	dmesg(M_DEBUG, "REASSEMBLYGRAM");
+	flowtrack_packet(p, pkt);
+}
+
+struct _event ev_pkt_new;
+static void __attribute__((constructor)) pipeline_ctor(void)
+{
+	_event_register(&ev_pkt_new, "pkt_new", cbfn_pkt_new);
 }
 
 static unsigned int do_dequeue(struct _pipeline *p, struct _source *s,
 				struct iothread *io)
 {
 	frame_t f;
+	pkt_t pkt, tmp;
 
 	f = s->s_capdev->c_dequeue(s, io);
 	if ( f == NULL )
 		return 0;
 
+	f->f_priv = p;
 	p->p_num_pkt++;
 
 	dmesg(M_DEBUG, "Frame %llu, len = %u/%u",
-		p->p_num_pkt, pkt->pkt_caplen, pkt->pkt_len);
+		p->p_num_pkt, f->f_raw->pkt_caplen, f->f_raw->pkt_len);
 
 	decode(f->f_raw, s->s_decoder);
 
-	analyze_packet(p, f->f_raw);
+	flowtrack_packet(p, f->f_raw);
 
 	if ( f->f_raw->pkt_nxthdr < f->f_raw->pkt_end ) {
-		dhex_dump(pkt->pkt_nxthdr,
-			pkt->pkt_end - pkt->pkt_nxthdr, 16);
+		dhex_dump(f->f_raw->pkt_nxthdr,
+			f->f_raw->pkt_end - f->f_raw->pkt_nxthdr, 16);
 	}else{
 		dmesg(M_DEBUG, ".\n");
+	}
+
+	list_for_each_entry_safe(pkt, tmp, &f->f_pkts, pkt_list) {
+		dmesg(M_DEBUG, " - aux packet");
+		list_del(&pkt->pkt_list);
+		pkt_free(pkt);
 	}
 
 	return 1;

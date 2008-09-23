@@ -25,6 +25,7 @@
 #include <firestorm.h>
 #include <f_packet.h>
 #include <f_decode.h>
+#include <f_event.h>
 #include <f_flow.h>
 #include <pkt/ip.h>
 #include "p_ipv4.h"
@@ -211,7 +212,7 @@ static struct _pkt *reassemble(struct ipdefrag *ipd, struct ipq *qp,
 
 	dhex_dump(buf, qp->len, 16);
 
-	ret = pkt_alloc(pkt->pkt_owner);
+	ret = pkt_alloc();
 	if ( ret == NULL )
 		goto err_free_buf;
 
@@ -575,32 +576,32 @@ static int queue_fragment(struct ipdefrag *ipd,
 	return 0;
 }
 
-static pkt_t ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
+static void ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
 {
 	struct ipdefrag *ipd = s;
 	const struct pkt_iphdr *iph;
 	struct ipfrag_dcb *dcb;
 	unsigned int hash;
 	struct ipq *q;
-	pkt_t ret = NULL;
+	pkt_t new;
 
 	dcb = (struct ipfrag_dcb *)dcb_ptr;
 	iph = dcb->ip_iph;
 
 	/* Ignore packets with ttl < min_ttl */
 	if ( iph->ttl < minttl )
-		return ret;
+		return;
 
 	q = ip_find(ipd, iph, &hash, pkt);
 	if ( q == NULL )
-		return ret;
+		return;
 
 	if ( queue_fragment(ipd, hash, q, pkt, iph) ) {
-		ret = reassemble(ipd, q, pkt);
+		new = reassemble(ipd, q, pkt);
+		if ( new )
+			event_fire(&ev_pkt_new, pkt->pkt_owner, new);
 		ipq_kill(ipd, q);
 	}
-
-	return ret;
 }
 
 static void ipdefrag_dtor(flow_state_t s)

@@ -234,6 +234,7 @@ source_t capture_tcpdump_open(const char *fn)
 		goto err;
 
 	_source_new(&p->src, &capdev, fn);
+	INIT_LIST_HEAD(&p->frame.f_pkts);
 	p->frame.f_source = &p->src;
 	p->frame.f_raw = &p->pkt;
 	p->pkt.pkt_owner = &p->frame;

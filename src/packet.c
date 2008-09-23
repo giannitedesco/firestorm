@@ -20,16 +20,9 @@ static void __attribute__((destructor)) _dtor(void)
 	mpool_fini(&pkt_pool);
 }
 
-pkt_t pkt_alloc(frame_t owner)
+pkt_t pkt_alloc(void)
 {
-	struct _pkt *ret;
-	ret = mpool_alloc0(&pkt_pool);
-	if ( ret ) {
-		ret->pkt_owner = owner;
-		if ( ret->pkt_owner )
-			list_add_tail(&ret->pkt_list, &owner->f_pkts);
-	}
-	return ret;
+	return mpool_alloc0(&pkt_pool);
 }
 
 void pkt_free(pkt_t pkt)

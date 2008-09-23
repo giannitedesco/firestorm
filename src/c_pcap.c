@@ -174,6 +174,7 @@ source_t capture_pcap_open_live(const char *ifname, size_t mtu, int promisc)
 		return 0;
 
 	_source_new(&p->src, &c_live, ifname);
+	INIT_LIST_HEAD(&p->frame.f_pkts);
 	p->frame.f_source = &p->src;
 	p->frame.f_raw = &p->pkt;
 	p->pkt.pkt_owner = &p->frame;
