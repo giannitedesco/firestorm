@@ -8,7 +8,6 @@
 #include <f_capture.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_event.h>
 #include <f_flow.h>
 #include <nbio.h>
 
@@ -157,25 +156,6 @@ static void flowtrack_packet(struct _pipeline *p, struct _pkt *pkt)
 	}
 }
 
-static void cbfn_pkt_new(struct _event *ev, va_list args)
-{
-	struct _pipeline *p;
-	struct _frame *f;
-	struct _pkt *pkt;
-
-	f = va_arg(args, struct _frame *);
-	pkt = va_arg(args, struct _pkt *);
-	p = f->f_priv;
-	dmesg(M_DEBUG, "ev: new_pkt: frame=%p pkt=%p", f, pkt);
-	list_add_tail(&pkt->pkt_list, &f->f_pkts);
-	flowtrack_packet(p, pkt);
-}
-
-struct _event ev_pkt_new;
-static void __attribute__((constructor)) pipeline_ctor(void)
-{
-	_event_register(&ev_pkt_new, "pkt_new", cbfn_pkt_new);
-}
 
 static unsigned int do_dequeue(struct _pipeline *p, struct _source *s,
 				struct iothread *io)
@@ -199,8 +179,8 @@ static unsigned int do_dequeue(struct _pipeline *p, struct _source *s,
 	analyze_packet(p, f->f_raw);
 
 	list_for_each_entry_safe(pkt, tmp, &f->f_pkts, pkt_list) {
+		flowtrack_packet(p, pkt);
 		analyze_packet(p, pkt);
-		list_del(&pkt->pkt_list);
 		pkt_free(pkt);
 	}
 

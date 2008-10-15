@@ -44,8 +44,6 @@ typedef unsigned int proto_id_t;
 typedef struct _flow_tracker *flow_tracker_t;
 typedef void *flow_state_t;
 
-typedef struct _event *event_t;
-
 typedef uint8_t mesg_code_t;
 
 /* Message codes */
@@ -64,7 +62,7 @@ void mesg(mesg_code_t code, const char *fmt, ...) _printf(2,3);
 void hex_dump(const uint8_t *tmp, size_t len, size_t llen);
 
 /* --- Packet routines */
-pkt_t pkt_alloc(void) _malloc;
+pkt_t pkt_new(struct _frame *owner) _malloc;
 void pkt_free(pkt_t pkt);
 
 /* -- Memchunk routines */
@@ -101,10 +99,5 @@ pipeline_t pipeline_new(void) _malloc;
 void pipeline_free(pipeline_t p);
 int pipeline_add_source(pipeline_t p, source_t s);
 int pipeline_go(pipeline_t p);
-
-/* --- Event API */
-event_t event_by_name(const char *name);
-void event_fire(event_t ev, ...);
-
 
 #endif /* _FIRESTORM_HEADER_INCLUDED_ */

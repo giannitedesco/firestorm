@@ -25,7 +25,6 @@
 #include <firestorm.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_event.h>
 #include <f_flow.h>
 #include <pkt/ip.h>
 #include "p_ipv4.h"
@@ -212,7 +211,7 @@ static struct _pkt *reassemble(struct ipdefrag *ipd, struct ipq *qp,
 
 	dhex_dump(buf, qp->len, 16);
 
-	ret = pkt_alloc();
+	ret = pkt_new(pkt->pkt_owner);
 	if ( ret == NULL )
 		goto err_free_buf;
 
@@ -598,8 +597,6 @@ static void ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
 
 	if ( queue_fragment(ipd, hash, q, pkt, iph) ) {
 		new = reassemble(ipd, q, pkt);
-		if ( new )
-			event_fire(&ev_pkt_new, pkt->pkt_owner, new);
 		ipq_kill(ipd, q);
 	}
 }
