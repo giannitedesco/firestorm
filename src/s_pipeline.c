@@ -111,7 +111,8 @@ void pipeline_free(pipeline_t p)
 	for(i = 0; i < decode_num_protocols(); i++) {
 		if ( p->p_proto[i].pp_ft &&
 			p->p_proto[i].pp_ft->ft_dtor )
-			p->p_proto[i].pp_ft->ft_dtor(p->p_proto[i].pp_flow);
+			p->p_proto[i].pp_ft->ft_dtor(p->p_mem,
+						p->p_proto[i].pp_flow);
 	}
 
 	memchunk_fini(p->p_mem);

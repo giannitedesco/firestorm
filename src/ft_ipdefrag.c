@@ -601,7 +601,7 @@ static void ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
 	}
 }
 
-static void ipdefrag_dtor(flow_state_t s)
+static void ipdefrag_dtor(memchunk_t mc, flow_state_t s)
 {
 	struct ipdefrag *ipd = s;
 

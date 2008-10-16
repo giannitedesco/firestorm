@@ -11,7 +11,7 @@ Flow tracking and profiling is state based evidence
 Protocol and signature analysis provide event based evidence
 
  o One or more sources of various types (online or offline)
- o Packets are dequeued from sources
+ o Frames are dequeued from sources
  o Each packet is decoded in to a DCB. However:
    - packet decode updates flowstats (endpoint tuple, byte + pkt counters)
    - this also goes for session state (tcpflow)

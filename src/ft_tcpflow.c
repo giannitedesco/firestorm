@@ -813,7 +813,7 @@ static void dbg_stream(const char *label, struct tcp_stream *s)
 #endif
 }
 
-static pkt_t tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
+static void tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 {
 	struct tcp_dcb *dcb = (struct tcp_dcb *)dcb_ptr;
 	unsigned int to_server;
@@ -845,14 +845,14 @@ static pkt_t tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 	if ( cur.iph->ttl < minttl ) {
 		cur.tf->num_ttl_errs++;
 		state_err(&cur, "TTL evasion");
-		return NULL;
+		return;
 	}
 
 	if ( !tcp_csum(&cur) ) {
 		cur.tf->num_csum_errs++;
 		state_err(&cur, "bad checksum");
 		dhex_dump(cur.payload, cur.len, 16);
-		return NULL;
+		return;
 	}
 
 	s = tcp_collide(cur.tf->hash[cur.hash],
@@ -860,7 +860,7 @@ static pkt_t tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 	if ( s == NULL ) {
 		s = new_session(&cur);
 		if ( s == NULL )
-			return NULL;
+			return;
 	}else{
 		/* Figure out which side is which */
 		if ( to_server ) {
@@ -877,10 +877,9 @@ static pkt_t tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 	dbg_stream("client", &s->client);
 	dbg_stream("server", &s->server);
 	dmesg(M_DEBUG, ".");
-	return NULL;
 }
 
-static void tcpflow_dtor(flow_state_t s)
+static void tcpflow_dtor(memchunk_t mc, flow_state_t s)
 {
 	struct tcpflow *tf = s;
 	mesg(M_INFO,"tcpstream: max_active=%u num_active=%u",
