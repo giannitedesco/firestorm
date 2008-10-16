@@ -16,7 +16,7 @@ endif
 
 firestorm_SOURCES = \
 	c_tcpdump.c \
-	c_pcap.c \
+	$(SRC_PCAP) \
 	\
 	ft_ipdefrag.c \
 	ft_tcpflow.c \
