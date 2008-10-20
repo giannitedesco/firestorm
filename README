@@ -4,60 +4,21 @@ Copyright (c) 2001-2008 Gianni Tedesco <gianni at scaramanga dot co dot uk>
 This software is released under the GNU GPL version 3 (see: COPYING)
 ===============================================================================
 
-Passive Sensor Component
-------------------------
-Responsible for all flow tracking, profiling, protocol and signature analysis.
-Flow tracking and profiling is state based evidence
-Protocol and signature analysis provide event based evidence
+0x0. Introduction
+-----------------
+Firestorm is a next generation network intrusion detection system. It aims for
+developing a modern system with the following core features:
 
- o One or more sources of various types (online or offline)
- o Frames are dequeued from sources
- o Each packet is decoded in to a DCB. However:
-   - packet decode updates flowstats (endpoint tuple, byte + pkt counters)
-   - this also goes for session state (tcpflow)
-   - sometimes reassemblygrams are generated (ipdefrag)
-   - stream reassemblers (tcp) will generate stream-push events
- o Analysis proceeds only after a full decode
-   - each (pkt, dcb) pair  is considered an event that rule language may hook
-   - flowstats are a data structure to be queried, not event driven
-   - DCB for each reassembly/stream-push etc..
-   - may map to an alert, but that's part of the language
- o Cleanup then involves:
-   - session state may need destroying after analysis (eg. RST)
-   - reassembly state may need destroying after analysis (eg. reassembled, kept ptr in dcb)
-   - stream fragments may need freeing after content analysis etc.
-   - flows are invariant, they may only die if the next packet causes an eviction (if ever)
-   - THEREFORE: a single packet must not generate two state entries from the same data structure
-   - THEREFORE: flow trackers must not free up anything it doesn't own (eg, via global mem balancing)
+ 1. Application layer protocol state tracking
+ 2. Passive OS + application software detection
+ 3. Stateful rule language and event correlation
+ 4. Framework for detecting web based attacks
+ 5. Support for SMP and other forms of hardware acceleration
 
-Active Sensor Component
------------------------
- o State evidence:
-   - Vuln. analysis
-   - SNMP gets
-   - netflow
- o Event evidence
-   - SNMP traps
-   - syslog
+It is free software and aims to be relatively clean and portable code-base.
 
-Central Manager Unit
---------------------
- o Control of sensor
- o Gathering of evidence from sensor
- o State DB
- o Event DB
- o Correlation
+0x1. Compilation from Source
+----------------------------
+The following command ought to do it:
 
-Rule Language:
---------------
-Used by signatures, correlator, event db queries, state db queries
-
- o Generic type/name system
- o 3 Language Front-ends (lexer/syntax analysis)
-   - query language
-   - signature language
-   - correlation language
- o 3 processing backends
-   - signature analysis: IDD on a single event
-   - Correlator: state/event transitions, programatically query DB
-   - event/state DB querying
+ $ ./configure && make && su -c "make install"
