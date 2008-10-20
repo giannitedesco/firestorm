@@ -202,7 +202,11 @@ void decoder_register(struct _decoder *d, proto_ns_t ns, proto_id_t id)
 		}
 	}
 
-	assert(ns_assure(&_ns_arr[ns]));
+	if ( !ns_assure(&_ns_arr[ns]) ) {
+		assert(ns_assure(&_ns_arr[ns]));
+		return;
+	}
+
 	_ns_arr[ns].ns_reg[_ns_arr[ns].ns_num_reg].nse_id = id;
 	_ns_arr[ns].ns_reg[_ns_arr[ns].ns_num_reg].nse_decoder = d;
 	_ns_arr[ns].ns_num_reg++;
