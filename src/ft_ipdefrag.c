@@ -25,9 +25,10 @@
 #include <firestorm.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_flow.h>
 #include <pkt/ip.h>
-#include "p_ipv4.h"
+#include <p_ipv4.h>
+
+#include "tcpip.h"
 
 #if 0
 #define dmesg mesg
@@ -36,16 +37,6 @@
 #define dmesg(x...) do{}while(0);
 #define dhex_dump(x...) do{}while(0);
 #endif
-
-#define IPHASH 113 /* Must be a power of two */
-struct ipdefrag {
-	struct ipq *ipq_latest;
-	struct ipq *ipq_oldest;
-	size_t mem;
-	struct ipq *hash[IPHASH]; /* IP fragment hash table */
-	obj_cache_t ipq_cache;
-	obj_cache_t frag_cache;
-};
 
 /* config: high and low memory water marks */
 static const size_t mem_hi = 4 << 20;
@@ -575,9 +566,10 @@ static int queue_fragment(struct ipdefrag *ipd,
 	return 0;
 }
 
-static void ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
+void _ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
 {
-	struct ipdefrag *ipd = s;
+	struct ip_flow_state *ipfs = s;
+	struct ipdefrag *ipd = &ipfs->ipdefrag;
 	const struct pkt_iphdr *iph;
 	struct ipfrag_dcb *dcb;
 	unsigned int hash;
@@ -601,10 +593,8 @@ static void ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
 	}
 }
 
-static void ipdefrag_dtor(memchunk_t mc, flow_state_t s)
+void _ipdefrag_dtor(struct ipdefrag *ipd, memchunk_t mc)
 {
-	struct ipdefrag *ipd = s;
-
 	mesg(M_INFO, "ipdefrag: %u reassembled packets, "
 		"%u reasm errors, %u timeouts",
 		reassembled, err_reasm, err_timeout);
@@ -612,26 +602,19 @@ static void ipdefrag_dtor(memchunk_t mc, flow_state_t s)
 		err_mem, ipd->mem >> 10);
 
 	/* FIXME: memory leak */
-	free(s);
 }
 
-static flow_state_t ipdefrag_ctor(memchunk_t mc)
+int _ipdefrag_ctor(struct ipdefrag *ipd, memchunk_t mc)
 {
-	struct ipdefrag *ipd;
-
 	if ( mem_hi <= mem_lo ) {
 		mesg(M_ERR, "ipdefrag: mem_hi must be bigger than mem_lo");
-		return NULL;
+		return 0;
 	}
 
 	if ( minttl > 255 ) {
 		mesg(M_ERR, "ipdefrag: minttl must be < 256");
-		return NULL;
+		return 0;
 	}
-
-	ipd = calloc(1, sizeof(*ipd));
-	if ( ipd == NULL )
-		return NULL;
 
 	mesg(M_INFO, "ipdefrag: mem_hi=%uK mem_lo=%uK minttl=%u timeout=%llus",
 		mem_hi >> 10, mem_lo >> 10, minttl, timeout / TIMESTAMP_HZ);
@@ -644,18 +627,8 @@ static flow_state_t ipdefrag_ctor(memchunk_t mc)
 
 	ipd->ipq_cache = objcache_init(mc, "ipq", sizeof(struct ipq));
 	ipd->frag_cache = objcache_init(mc, "ipfrag", sizeof(struct ipfrag));
-	if ( ipd->ipq_cache == NULL || ipd->frag_cache == NULL ) {
-		free(ipd);
-		return NULL;
-	}
+	if ( ipd->ipq_cache == NULL || ipd->frag_cache == NULL )
+		return 0;
 
-
-	return ipd;
+	return 1;
 }
-
-struct _flow_tracker _ipv4_ipdefrag = {
-	.ft_label = "ipdefrag",
-	.ft_ctor = ipdefrag_ctor,
-	.ft_dtor = ipdefrag_dtor,
-	.ft_track = ipdefrag_track,
-};

@@ -24,10 +24,14 @@ enum {
 };
 
 struct _decoder {
-	const char *d_label;
+	unsigned int d_idx;
 	void (*d_decode)(struct _pkt *p);
+	flow_state_t (*d_flow_ctor)(memchunk_t mc);
+	void (*d_flow_dtor)(memchunk_t mc, flow_state_t s);
 	struct _proto *d_protos;
 	struct _decoder *d_next;
+	const char *d_label;
+	flow_tracker_t d_flowstate;
 };
 
 struct _ns_entry {
@@ -46,7 +50,7 @@ struct _proto {
 	struct _proto *p_next;
 	struct _decoder *p_owner;
 	size_t p_dcb_sz;
-	flow_tracker_t p_ft;
+	void (*p_flowtrack)(flow_state_t s, pkt_t pkt, dcb_t dcb);
 	const char *p_label;
 };
 
@@ -59,8 +63,11 @@ extern struct _namespace _ns_arr[NS_MAX];
 
 /* ===[ Front end API: decoding ]=== */
 unsigned int decode_num_protocols(void);
+unsigned int decode_num_decoders(void);
 size_t decode_max_dcb_size(void);
 int decode_foreach_protocol(int(*cbfn)(proto_t p, void *priv), void *priv)
+				_nonull(1);
+int decode_foreach_decoder(int(*cbfn)(decoder_t, void *priv), void *priv)
 				_nonull(1);
 
 /* ===[ Backend API: for protocol/decoder plugins ]=== */

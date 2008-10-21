@@ -42,7 +42,6 @@ firestorm_SOURCES = \
 	capture.c \
 	packet.c \
 	decode.c \
-	flow.c \
 	\
 	s_pipeline.c \
 	sensor.c \

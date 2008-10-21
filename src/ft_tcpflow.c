@@ -13,11 +13,12 @@
 #include <firestorm.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_flow.h>
 #include <pkt/ip.h>
 #include <pkt/tcp.h>
 #include <pkt/icmp.h>
-#include "p_ipv4.h"
+#include <p_ipv4.h>
+
+#include "tcpip.h"
 
 #define STATE_DEBUG 0
 #define SEGMENT_DEBUG 0
@@ -43,24 +44,6 @@ static const uint8_t minttl = 1;
 #define TCP_PAWS_WINDOW 60
 
 #define TCP_TMO_SYN1 (90 * TIMESTAMP_HZ)
-
-#define TCPHASH 503 /* prime */
-struct tcpflow {
-	/* flow hash */
-	struct list_head lru;
-	obj_cache_t session_cache;
-	struct tcp_session *hash[TCPHASH];
-	struct list_head syn1;
-
-	/* stats */
-	unsigned int num_packets;
-	unsigned int state_errs;
-	unsigned int num_csum_errs;
-	unsigned int num_ttl_errs;
-	unsigned int num_timeouts;
-	unsigned int num_active;
-	unsigned int max_active;
-};
 
 struct tcpseg {
 	struct tcpflow *tf;
@@ -813,14 +796,15 @@ static void dbg_stream(const char *label, struct tcp_stream *s)
 #endif
 }
 
-static void tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
+void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 {
+	struct ip_flow_state *ipfs = sptr;
 	struct tcp_dcb *dcb = (struct tcp_dcb *)dcb_ptr;
 	unsigned int to_server;
 	struct tcp_session *s;
 	struct tcpseg cur;
 
-	cur.tf = sptr;
+	cur.tf = &ipfs->tcpflow;
 
 	cur.ts = pkt->pkt_ts;
 	cur.iph = dcb->tcp_iph;
@@ -879,24 +863,16 @@ static void tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 	dmesg(M_DEBUG, ".");
 }
 
-static void tcpflow_dtor(memchunk_t mc, flow_state_t s)
+void _tcpflow_dtor(struct tcpflow *tf, memchunk_t mc)
 {
-	struct tcpflow *tf = s;
 	mesg(M_INFO,"tcpstream: max_active=%u num_active=%u",
 		tf->max_active, tf->num_active);
 	mesg(M_INFO,"tcpstream: %u state errors out of %u packets",
 		tf->state_errs, tf->num_packets);
-	free(tf);
 }
 
-static flow_state_t tcpflow_ctor(memchunk_t mc)
+int _tcpflow_ctor(struct tcpflow *tf, memchunk_t mc)
 {
-	struct tcpflow *tf;
-
-	tf = calloc(1, sizeof(*tf));
-	if ( tf == NULL )
-		return NULL;
-
 	INIT_LIST_HEAD(&tf->lru);
 	INIT_LIST_HEAD(&tf->syn1);
 
@@ -905,17 +881,8 @@ static flow_state_t tcpflow_ctor(memchunk_t mc)
 
 	tf->session_cache = objcache_init(mc, "tcp_session",
 						sizeof(struct tcp_session));
-	if ( tf->session_cache == NULL ) {
-		free(tf);
-		tf = NULL;
-	}
+	if ( tf->session_cache == NULL )
+		return 0;
 
-	return tf;
+	return 1;
 }
-
-struct _flow_tracker _ipv4_tcpflow = {
-	.ft_label = "tcpflow",
-	.ft_ctor = tcpflow_ctor,
-	.ft_dtor = tcpflow_dtor,
-	.ft_track = tcpflow_track,
-};

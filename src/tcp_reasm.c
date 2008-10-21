@@ -11,11 +11,12 @@
 #include <firestorm.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_flow.h>
 #include <pkt/ip.h>
 #include <pkt/tcp.h>
 #include <pkt/icmp.h>
-#include "p_ipv4.h"
+#include <p_ipv4.h>
+
+#include "tcpip.h"
 
 #if 0
 #define dmesg mesg

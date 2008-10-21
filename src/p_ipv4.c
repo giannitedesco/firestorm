@@ -8,12 +8,13 @@
 #include <f_capture.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_flow.h>
 #include <pkt/ip.h>
 #include <pkt/icmp.h>
 #include <pkt/tcp.h>
 #include <pkt/udp.h>
-#include "p_ipv4.h"
+#include <p_ipv4.h>
+
+#include "tcpip.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -31,9 +32,40 @@ static void ipv4_decode(struct _pkt *p);
 static void ah_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 			const struct pkt_ahhdr *bogus);
 
+static flow_state_t flow_track_ctor(memchunk_t mc)
+{
+	struct ip_flow_state *ipf;
+
+	ipf = calloc(1, sizeof(*ipf));
+	if ( ipf == NULL )
+		goto err;
+	if ( !_ipdefrag_ctor(&ipf->ipdefrag, mc) )
+		goto err_free;
+	if ( !_tcpflow_ctor(&ipf->tcpflow, mc) )
+		goto err_free_ipfrag;
+
+	return ipf;
+
+err_free_ipfrag:
+	_ipdefrag_dtor(&ipf->ipdefrag, mc);
+err_free:
+	free(ipf);
+err:
+	return NULL;
+}
+
+static void flow_track_dtor(memchunk_t mc, flow_state_t s)
+{
+	struct ip_flow_state *ipf = s;
+	_ipdefrag_dtor(&ipf->ipdefrag, mc);
+	_tcpflow_dtor(&ipf->tcpflow, mc);
+	free(s);
+}
+
 static struct _proto p_fragment = {
 	.p_label = "ipfrag",
 	.p_dcb_sz = sizeof(struct ipfrag_dcb),
+	.p_flowtrack = _ipdefrag_track,
 };
 
 static struct _proto p_ipraw = {
@@ -70,6 +102,7 @@ static struct _proto p_esp = {
 static struct _proto p_tcp = {
 	.p_label = "tcp",
 	.p_dcb_sz = sizeof(struct tcp_dcb),
+	.p_flowtrack = _tcpflow_track,
 };
 
 static struct _proto p_udp = {
@@ -80,6 +113,8 @@ static struct _proto p_udp = {
 struct _decoder _ipv4_decoder = {
 	.d_label = "IPv4",
 	.d_decode = ipv4_decode,
+	.d_flow_ctor = flow_track_ctor,
+	.d_flow_dtor = flow_track_dtor,
 };
 
 static void __attribute__((constructor)) _ctor(void)
@@ -97,8 +132,6 @@ static void __attribute__((constructor)) _ctor(void)
 	proto_add(&_ipv4_decoder, &p_tcp);
 	proto_add(&_ipv4_decoder, &p_udp);
 	proto_add(&_ipv4_decoder, &p_esp);
-	flow_tracker_add(&p_fragment, &_ipv4_ipdefrag);
-	flow_tracker_add(&p_tcp, &_ipv4_tcpflow);
 }
 
 void iptostr(ipstr_t str, uint32_t ip)

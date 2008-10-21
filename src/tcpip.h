@@ -3,42 +3,8 @@
  * Copyright (c) 2008 Gianni Tedesco <gianni@scaramanga.co.uk>
  * Released under the terms of the GNU GPL version 3
 */
-#ifndef _P_IPV4_HEADER_INCLUDED_
-#define _P_IPV4_HEADER_INCLUDED_
-
-struct ipfrag_dcb {
-	struct _dcb ip_dcb;
-	const struct pkt_iphdr *ip_iph;
-};
-
-struct ip_dcb {
-	struct _dcb ip_dcb;
-	const struct pkt_iphdr *ip_iph;
-	const struct pkt_ahhdr *ip_ah;
-};
-
-struct tcp_dcb {
-	struct _dcb tcp_dcb;
-	const struct pkt_iphdr *tcp_iph;
-	const struct pkt_ahhdr *tcp_ah;
-	const struct pkt_tcphdr *tcp_hdr;
-	struct tcp_session *tcp_sess;
-};
-
-struct udp_dcb {
-	struct _dcb udp_dcb;
-	const struct pkt_iphdr *udp_iph;
-	const struct pkt_ahhdr *udp_ah;
-	const struct pkt_udphdr *udp_hdr;
-};
-
-struct icmp_dcb {
-	struct _dcb icmp_dcb;
-	const struct pkt_iphdr *icmp_iph;
-	const struct pkt_ahhdr *icmp_ah;
-	const struct pkt_icmphdr *icmp_hdr;
-	const struct pkt_iphdr *icmp_inner;
-};
+#ifndef _TCPIP_HEADER_INCLUDED_
+#define _TCPIP_HEADER_INCLUDED_
 
 /* Keeps each individual fragment */
 struct ipfrag {
@@ -139,20 +105,50 @@ struct tcp_session {
 	timestamp_t expire;
 };
 
-/* sizeof("255.255.255.255\0") */
-#define IPSTR_SZ 16
-typedef char ipstr_t[IPSTR_SZ];
-void iptostr(ipstr_t str, uint32_t ip);
+#define TCPHASH 509 /* prime */
+struct tcpflow {
+	/* flow hash */
+	struct list_head lru;
+	obj_cache_t session_cache;
+	struct tcp_session *hash[TCPHASH];
+	struct list_head syn1;
 
-extern struct _decoder _ipv4_decoder;
-extern struct _flow_tracker _ipv4_ipdefrag;
-extern struct _flow_tracker _ipv4_tcpflow;
+	/* stats */
+	unsigned int num_packets;
+	unsigned int state_errs;
+	unsigned int num_csum_errs;
+	unsigned int num_ttl_errs;
+	unsigned int num_timeouts;
+	unsigned int num_active;
+	unsigned int max_active;
+};
 
-uint16_t _ip_csum(const struct pkt_iphdr *iph);
+#define IPHASH 127 /* Mersenne prime */
+struct ipdefrag {
+	struct ipq *ipq_latest;
+	struct ipq *ipq_oldest;
+	size_t mem;
+	struct ipq *hash[IPHASH]; /* IP fragment hash table */
+	obj_cache_t ipq_cache;
+	obj_cache_t frag_cache;
+};
+
+struct ip_flow_state {
+	struct tcpflow tcpflow;
+	struct ipdefrag ipdefrag;
+};
+
+int _ipdefrag_ctor(struct ipdefrag *ipd, memchunk_t mc);
+void _ipdefrag_dtor(struct ipdefrag *ipd, memchunk_t mc);
+void _ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr);
+
+int _tcpflow_ctor(struct tcpflow *ipd, memchunk_t mc);
+void _tcpflow_dtor(struct tcpflow *ipd, memchunk_t mc);
+void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr);
 
 void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq,
 			uint32_t len, const void *buf);
 void _tcp_reasm_free(struct tcp_sbuf *s);
 uint8_t *_tcp_reassemble(struct tcp_sbuf *s, uint32_t ack, size_t *len);
 
-#endif /* _P_IPV4_HEADER_INCLUDED_ */
+#endif /* _TCPIP_HEADER_INCLUDED_ */

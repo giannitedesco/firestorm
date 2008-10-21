@@ -32,6 +32,7 @@ static unsigned int num_decoders;
 static struct _decoder *decoders;
 
 static unsigned int num_protos;
+/* special protos have no decoder which owns them */
 static struct _proto *special_protos;
 
 static size_t max_dcb;
@@ -39,6 +40,11 @@ static size_t max_dcb;
 unsigned int decode_num_protocols(void)
 {
 	return num_protos;
+}
+
+unsigned int decode_num_decoders(void)
+{
+	return num_decoders;
 }
 
 size_t decode_max_dcb_size(void)
@@ -168,7 +174,7 @@ void decoder_add(struct _decoder *d)
 	assert(d != NULL && d->d_label != NULL);
 	d->d_next = decoders;
 	decoders = d;
-	num_decoders++;
+	d->d_idx = num_decoders++;
 }
 
 static int ns_assure(struct _namespace *ns)
@@ -236,6 +242,20 @@ int decode_foreach_protocol(int(*cbfn)(struct _proto *p, void *priv),
 	}
 
 	return ret;
+}
+
+int decode_foreach_decoder(int(*cbfn)(decoder_t, void *priv), void *priv)
+{
+	struct _decoder *d;
+	int ret = 1;
+
+	for(d = decoders; d; d = d->d_next) {
+		ret = (*cbfn)(d, priv);
+		if ( ret == 0 )
+			return 0;
+	}
+
+	return ret;;
 }
 
 int decode_pkt_realloc(struct _pkt *p, unsigned int min_layers)

@@ -8,10 +8,9 @@
 #include <f_capture.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_flow.h>
 #include <nbio.h>
 
-#if 1
+#if 0
 #define dmesg mesg
 #define dhex_dump hex_dump
 #else
@@ -19,9 +18,8 @@
 #define dhex_dump(x...) do{}while(0);
 #endif
 
-struct per_proto {
-	struct _flow_tracker *pp_ft;
-	flow_state_t pp_flow;
+struct per_decoder {
+	flow_state_t pd_flow;
 };
 
 struct _pipeline {
@@ -30,35 +28,30 @@ struct _pipeline {
 	struct iothread p_io;
 	memchunk_t p_mem;
 	uint64_t p_num_pkt;
-	struct per_proto p_proto[0];
+	struct per_decoder p_pd[0];
 };
 
 static void analyze_packet(struct _pipeline *p, struct _pkt *pkt)
 {
 	struct _dcb *cur;
-	struct per_proto *pp;
 
 	dmesg(M_DEBUG, "analyze packet:");
 	for(cur = pkt->pkt_dcb;
 		cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
-		pp = &p->p_proto[cur->dcb_proto->p_idx];
 		dmesg(M_DEBUG, " o %s layer", cur->dcb_proto->p_label);
 	}
 }
 
-static int ft_init(struct _flow_tracker *ft, void *priv)
+static int pd_init(struct _decoder *d, void *priv)
 {
 	struct _pipeline *p = priv;
-	struct per_proto *pp;
+	struct per_decoder *pd;
 
-	pp = &p->p_proto[ft->ft_proto->p_idx];
-	if ( pp->pp_ft != NULL )
-		return 0;
+	pd = &p->p_pd[d->d_idx];
 
-	pp->pp_ft = ft;
-	if ( ft->ft_ctor ) {
-		pp->pp_flow = ft->ft_ctor(p->p_mem);
-		if ( pp->pp_flow == NULL )
+	if ( d->d_flow_ctor ) {
+		pd->pd_flow = d->d_flow_ctor(p->p_mem);
+		if ( pd->pd_flow == NULL )
 			return 0;
 	}
 
@@ -72,7 +65,7 @@ pipeline_t pipeline_new(void)
 
 	num = decode_num_protocols();
 
-	p = calloc(1, sizeof(*p) + sizeof(*p->p_proto) * num);
+	p = calloc(1, sizeof(*p) + sizeof(*p->p_pd) * num);
 	if ( p == NULL )
 		goto out;
 
@@ -82,7 +75,7 @@ pipeline_t pipeline_new(void)
 
 	INIT_LIST_HEAD(&p->p_sources);
 
-	if ( !flow_tracker_foreach(ft_init, p) )
+	if ( !decode_foreach_decoder(pd_init, p) )
 		goto out_free_chunk;
 
 	goto out;
@@ -96,24 +89,30 @@ out:
 	return p;
 }
 
+static int pd_fini(struct _decoder *d, void *priv)
+{
+	struct _pipeline *p = priv;
+	struct per_decoder *pd;
+
+	pd = &p->p_pd[d->d_idx];
+
+	if ( d->d_flow_dtor )
+		d->d_flow_dtor(p->p_mem, pd->pd_flow);
+
+	return 1;
+}
+
 void pipeline_free(pipeline_t p)
 {
 	struct _source *s, *tmp;
-	unsigned int i;
 
 	if ( p == NULL )
 		return;
 
-	list_for_each_entry_safe(s, tmp, &p->p_sources, s_list) {
-		source_free(s);
-	}
+	decode_foreach_decoder(pd_fini, p);
 
-	for(i = 0; i < decode_num_protocols(); i++) {
-		if ( p->p_proto[i].pp_ft &&
-			p->p_proto[i].pp_ft->ft_dtor )
-			p->p_proto[i].pp_ft->ft_dtor(p->p_mem,
-						p->p_proto[i].pp_flow);
-	}
+	list_for_each_entry_safe(s, tmp, &p->p_sources, s_list)
+		source_free(s);
 
 	memchunk_fini(p->p_mem);
 
@@ -145,14 +144,14 @@ int pipeline_add_source(pipeline_t p, source_t s)
 static void flowtrack_packet(struct _pipeline *p, struct _pkt *pkt)
 {
 	struct _dcb *cur;
-	struct per_proto *pp;
+	struct per_decoder *pd;
 
 	for(cur = pkt->pkt_dcb; cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
-		pp = &p->p_proto[cur->dcb_proto->p_idx];
-		if ( pp->pp_ft && pp->pp_ft->ft_track ) {
+		if ( cur->dcb_proto->p_flowtrack ) {
+			pd = &p->p_pd[cur->dcb_proto->p_owner->d_idx];
 			dmesg(M_DEBUG, "FLOW TRACK: %s",
 				cur->dcb_proto->p_label);
-			pp->pp_ft->ft_track(pp->pp_flow, pkt, cur);
+			cur->dcb_proto->p_flowtrack(pd->pd_flow, pkt, cur);
 		}
 	}
 }
