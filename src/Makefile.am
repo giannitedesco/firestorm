@@ -20,7 +20,6 @@ firestorm_SOURCES = \
 	\
 	ft_ipdefrag.c \
 	ft_tcpflow.c \
-	tcp_reasm.c \
 	p_ether.c \
 	p_ipx.c \
 	p_ipv4.c \

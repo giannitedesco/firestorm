@@ -20,8 +20,8 @@
 
 #include "tcpip.h"
 
-#define STATE_DEBUG 0
-#define SEGMENT_DEBUG 0
+#define STATE_DEBUG 1
+#define SEGMENT_DEBUG 1
 #define STREAM_DEBUG 0
 
 #if STATE_DEBUG
@@ -66,10 +66,10 @@ static const char * const state_str[] = {
 	"ESTABLISHED",
 	"FIN_WAIT1",
 	"FIN_WAIT2",
-	"TCP_TIME_WAIT",
 	"TCP_CLOSE_WAIT",
 	"TCP_LAST_ACK",
-	"TCP_CLOSING"
+	"TCP_CLOSING",
+	"TCP_TIME_WAIT",
 };
 #endif
 
@@ -309,34 +309,12 @@ static void tcp_syn_options(struct tcp_stream *s,
 	}
 }
 
-/* Reassemble all bytes up to ack */
-static void reassemble_point(struct tcp_sbuf *sbuf, uint32_t ack)
-{
-	uint8_t *ptr;
-	size_t len;
-
-	if ( sbuf->root == NULL )
-		return;
-	if ( !tcp_after(ack, sbuf->reasm_begin) )
-		return;
-
-	ptr = _tcp_reassemble(sbuf, ack, &len);
-	if ( ptr ) {
-		dmesg(M_DEBUG, "reassembled %u bytes", len);
-		free(ptr);
-	}
-}
-
 static void tcp_free(struct tcpflow *tf, struct tcp_session *s)
 {
 	transition(s, 0, 0);
 	tcp_hash_unlink(s);
 	list_del(&s->tmo);
 	list_del(&s->lru);
-	reassemble_point(&s->server.reasm, s->server.rcv_nxt);
-	_tcp_reasm_free(&s->server.reasm);
-	reassemble_point(&s->client.reasm, s->client.rcv_nxt);
-	_tcp_reasm_free(&s->client.reasm);
 	objcache_free(tf->session_cache, s);
 	tf->num_active--;
 }
@@ -416,9 +394,6 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 	s->server.rcv_nxt = s->client.snd_una;
 	s->server.rcv_wup = s->client.snd_una;
 
-	s->server.reasm.root = NULL;
-	s->client.reasm.root = NULL;
-
 	/* server sees clients initial options */
 	tcp_syn_options(&s->server, cur->tcph, cur->ts / TIMESTAMP_HZ);
 
@@ -443,10 +418,8 @@ static void tcp_data_ack(struct tcp_stream *snd, struct tcp_stream *rcv,
 
 		/* Try to reassemble up to acked byte */
 		/* XXX: Can only deliver data to user if rcv is in one of
-		 * ESTABLISHED, FIN_WAIT1 or FIN_WAIT2. That means we have
-		 * to hold on to any data until connection establishment.
+		 * ESTABLISHED, FIN_WAIT1 or FIN_WAIT2.
 		 */
-		reassemble_point(&snd->reasm, ack);
 	}
 }
 
@@ -537,21 +510,7 @@ static void process_segment_text(struct tcpseg *cur, struct tcp_session *s)
 		if (tcp_receive_window(rcv) == 0) {
 			dmesg(M_DEBUG, "data on empty recieve window");
 		}else{
-			/* FIXME: don't swallow text outside the window? */
-			if ( rcv->reasm.root == NULL ) {
-				if ( tcp_after(cur->seq, rcv->rcv_nxt) ) {
-					rcv->reasm.reasm_begin = rcv->rcv_nxt;
-				}else{
-					rcv->reasm.reasm_begin = cur->seq;
-				}
-				rcv->reasm.begin = rcv->reasm.reasm_begin;
-				dmesg(M_DEBUG, "begin = 0x%x", rcv->reasm.reasm_begin);
-			}
-			_tcp_reasm_inject(&rcv->reasm,
-						cur->seq,
-						cur->len,
-						cur->payload);
-			dhex_dump(cur->payload, cur->len, 16);
+			/* FIXME: don't swallow text outside the window. */
 		}
 
 		rcv->rcv_nxt = cur->seq + cur->len;
@@ -573,10 +532,11 @@ static void process_segment_text(struct tcpseg *cur, struct tcp_session *s)
 		case TCP_FIN_WAIT1:
 			/* FIXME: if fin has been acked do time_wait
 			 * else do closing */
-			rcv->state = TCP_TIME_WAIT;
+			rcv->state = TCP_FIN_WAIT2;
 			transition(s, s->client.state, s->server.state);
 			break;
 		case TCP_FIN_WAIT2:
+			snd->state = TCP_LAST_ACK;
 			rcv->state = TCP_TIME_WAIT;
 			transition(s, s->client.state, s->server.state);
 			break;
@@ -680,10 +640,11 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 		case TCP_FIN_WAIT1:
 			tcp_data_ack(snd, rcv, cur->seq, cur->ack - 1,cur->win);
 			rcv->state = TCP_FIN_WAIT2;
-			snd->state = TCP_LAST_ACK;
 			transition(s, s->client.state, s->server.state);
+			break;
 		case TCP_FIN_WAIT2:
-			reassemble_point(&snd->reasm, cur->ack - 1);
+			//rcv->state = TCP_TIME_WAIT;
+			//transition(s, s->client.state, s->server.state);
 			break;
 		case TCP_CLOSE_WAIT:
 			tcp_data_ack(snd, rcv, cur->seq, cur->ack, cur->win);
@@ -695,7 +656,6 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 			break;
 		case TCP_LAST_ACK:
 			/* XXX: is this one needed? */
-			reassemble_point(&snd->reasm, cur->ack - 1);
 			rcv->state = 0;
 			transition(s, s->client.state, s->server.state);
 			break;
@@ -860,7 +820,7 @@ void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 
 	dbg_stream("client", &s->client);
 	dbg_stream("server", &s->server);
-	dmesg(M_DEBUG, ".");
+	//dmesg(M_DEBUG, ".");
 }
 
 void _tcpflow_dtor(struct tcpflow *tf, memchunk_t mc)
