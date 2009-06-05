@@ -17,6 +17,9 @@ int main(int argc, char **argv)
 	mesg(M_INFO,"This program is free software; released under "
 		"the GNU GPL v3 (see: COPYING)");
 
+	if ( !memchunk_init(2048) )
+		return EXIT_FAILURE;
+
 	decode_init();
 
 	if ( argc > 1 ) {
@@ -37,6 +40,8 @@ int main(int argc, char **argv)
 	pipeline_go(p);
 
 	pipeline_free(p);
+
+	memchunk_fini();
 
 	mesg(M_INFO, "Firestorm exiting normally");
 	return EXIT_SUCCESS;

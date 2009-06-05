@@ -56,6 +56,8 @@ struct _memchunk {
 	struct _obj_cache m_self_cache;
 };
 
+static struct _memchunk mc;
+
 #if USE_MMAP
 static void *chunk_alloc(size_t sz)
 {
@@ -125,7 +127,7 @@ static void do_cache_init(struct _memchunk *m, struct _obj_cache *o,
 	mesg(M_INFO, "objcache: new: %s (%u byte)", o->o_label, o->o_sz);
 }
 
-memchunk_t memchunk_init(size_t numchunks)
+int memchunk_init(size_t numchunks)
 {
 	struct _memchunk *m;
 	unsigned int i;
@@ -134,12 +136,7 @@ memchunk_t memchunk_init(size_t numchunks)
 	if ( numchunks == 0 )
 		goto out_err;
 
-	/* The memchunk itself comes from the system heap, this helps our
-	 * chunks align better (gah, the age old problems) :S
-	*/
-	m = calloc(1, sizeof(*m));
-	if ( m == NULL )
-		goto out_err;
+	m = &mc;
 
 	/* Calculate metadata and total size */
 	msz = round_up(sizeof(*m->m_hdr) * numchunks);
@@ -176,27 +173,24 @@ memchunk_t memchunk_init(size_t numchunks)
 
 	do_cache_init(m, &m->m_self_cache, "_objcache",
 			sizeof(struct _obj_cache));
-	goto out;
+	return 1;
 
 out_free:
 	free(m);
 out_err:
-	m = NULL;
-out:
-	return m;
+	return 0;
 }
 
-void memchunk_fini(memchunk_t m)
+void memchunk_fini(void)
 {
-	if ( m != NULL )
-		chunk_free(m->m_hdr, m->m_size);
+	struct _memchunk *m = &mc;
+	chunk_free(m->m_hdr, m->m_size);
 	mesg(M_INFO, "memchunk: %uK released: "
 		"%u.%.2u%% was still in use in %u chunks",
 		m->m_size >> 10,
 		(m->m_inuse * 100) / (m->m_size >> MEMCHUNK_SHIFT),
 		((m->m_inuse * 10000) / (m->m_size >> MEMCHUNK_SHIFT)) % 100,
 		m->m_inuse);
-	free(m);
 }
 
 void *memchunk_alloc(memchunk_t m)
@@ -261,7 +255,7 @@ static struct _obj_cache *cache_find(struct _memchunk *m, const char *l)
 	return NULL;
 }
 
-obj_cache_t objcache_init(memchunk_t m, const char *label, size_t obj_sz)
+obj_cache_t objcache_init(const char *label, size_t obj_sz)
 {
 	struct _obj_cache *o;
 
@@ -270,7 +264,7 @@ obj_cache_t objcache_init(memchunk_t m, const char *label, size_t obj_sz)
 	if ( obj_sz < sizeof(void *) )
 		obj_sz = sizeof(void *);
 
-	o = cache_find(m, label);
+	o = cache_find(&mc, label);
 	if ( o ) {
 		size_t max;
 
@@ -282,11 +276,11 @@ obj_cache_t objcache_init(memchunk_t m, const char *label, size_t obj_sz)
 		return o;
 	}
 
-	o = objcache_alloc(&m->m_self_cache);
+	o = objcache_alloc(&mc.m_self_cache);
 	if ( o == NULL )
 		return NULL;
 
-	do_cache_init(m, o, label, obj_sz);
+	do_cache_init(&mc, o, label, obj_sz);
 	return o;
 }
 

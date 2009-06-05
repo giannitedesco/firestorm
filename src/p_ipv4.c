@@ -32,33 +32,33 @@ static void ipv4_decode(struct _pkt *p);
 static void ah_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 			const struct pkt_ahhdr *bogus);
 
-static flow_state_t flow_track_ctor(memchunk_t mc)
+static flow_state_t flow_track_ctor(void)
 {
 	struct ip_flow_state *ipf;
 
 	ipf = calloc(1, sizeof(*ipf));
 	if ( ipf == NULL )
 		goto err;
-	if ( !_ipdefrag_ctor(&ipf->ipdefrag, mc) )
+	if ( !_ipdefrag_ctor(&ipf->ipdefrag) )
 		goto err_free;
-	if ( !_tcpflow_ctor(&ipf->tcpflow, mc) )
+	if ( !_tcpflow_ctor(&ipf->tcpflow) )
 		goto err_free_ipfrag;
 
 	return ipf;
 
 err_free_ipfrag:
-	_ipdefrag_dtor(&ipf->ipdefrag, mc);
+	_ipdefrag_dtor(&ipf->ipdefrag);
 err_free:
 	free(ipf);
 err:
 	return NULL;
 }
 
-static void flow_track_dtor(memchunk_t mc, flow_state_t s)
+static void flow_track_dtor(flow_state_t s)
 {
 	struct ip_flow_state *ipf = s;
-	_ipdefrag_dtor(&ipf->ipdefrag, mc);
-	_tcpflow_dtor(&ipf->tcpflow, mc);
+	_ipdefrag_dtor(&ipf->ipdefrag);
+	_tcpflow_dtor(&ipf->tcpflow);
 	free(s);
 }
 

@@ -627,7 +627,7 @@ void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 	//dmesg(M_DEBUG, ".");
 }
 
-void _tcpflow_dtor(struct tcpflow *tf, memchunk_t mc)
+void _tcpflow_dtor(struct tcpflow *tf)
 {
 	mesg(M_INFO,"tcpstream: max_active=%u num_active=%u",
 		tf->max_active, tf->num_active);
@@ -635,7 +635,7 @@ void _tcpflow_dtor(struct tcpflow *tf, memchunk_t mc)
 		tf->state_errs, tf->num_packets);
 }
 
-int _tcpflow_ctor(struct tcpflow *tf, memchunk_t mc)
+int _tcpflow_ctor(struct tcpflow *tf)
 {
 	INIT_LIST_HEAD(&tf->lru);
 	INIT_LIST_HEAD(&tf->syn1);
@@ -643,7 +643,7 @@ int _tcpflow_ctor(struct tcpflow *tf, memchunk_t mc)
 	dmesg(M_INFO, "tcpflow: %u bytes state, %u bytes session",
 		sizeof(*tf), sizeof(struct tcp_session));
 
-	tf->session_cache = objcache_init(mc, "tcp_session",
+	tf->session_cache = objcache_init("tcp_session",
 						sizeof(struct tcp_session));
 	if ( tf->session_cache == NULL )
 		return 0;

@@ -593,7 +593,7 @@ void _ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
 	}
 }
 
-void _ipdefrag_dtor(struct ipdefrag *ipd, memchunk_t mc)
+void _ipdefrag_dtor(struct ipdefrag *ipd)
 {
 	mesg(M_INFO, "ipdefrag: %u reassembled packets, "
 		"%u reasm errors, %u timeouts",
@@ -604,7 +604,7 @@ void _ipdefrag_dtor(struct ipdefrag *ipd, memchunk_t mc)
 	/* FIXME: memory leak */
 }
 
-int _ipdefrag_ctor(struct ipdefrag *ipd, memchunk_t mc)
+int _ipdefrag_ctor(struct ipdefrag *ipd)
 {
 	if ( mem_hi <= mem_lo ) {
 		mesg(M_ERR, "ipdefrag: mem_hi must be bigger than mem_lo");
@@ -625,8 +625,8 @@ int _ipdefrag_ctor(struct ipdefrag *ipd, memchunk_t mc)
 			"you will be vulnerable to evasion!");
 	}
 
-	ipd->ipq_cache = objcache_init(mc, "ipq", sizeof(struct ipq));
-	ipd->frag_cache = objcache_init(mc, "ipfrag", sizeof(struct ipfrag));
+	ipd->ipq_cache = objcache_init("ipq", sizeof(struct ipq));
+	ipd->frag_cache = objcache_init("ipfrag", sizeof(struct ipfrag));
 	if ( ipd->ipq_cache == NULL || ipd->frag_cache == NULL )
 		return 0;
 

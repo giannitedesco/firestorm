@@ -26,7 +26,6 @@ struct _pipeline {
 	struct list_head p_sources;
 	unsigned int p_async;
 	struct iothread p_io;
-	memchunk_t p_mem;
 	uint64_t p_num_pkt;
 	struct per_decoder p_pd[0];
 };
@@ -50,7 +49,7 @@ static int pd_init(struct _decoder *d, void *priv)
 	pd = &p->p_pd[d->d_idx];
 
 	if ( d->d_flow_ctor ) {
-		pd->pd_flow = d->d_flow_ctor(p->p_mem);
+		pd->pd_flow = d->d_flow_ctor();
 		if ( pd->pd_flow == NULL )
 			return 0;
 	}
@@ -69,19 +68,13 @@ pipeline_t pipeline_new(void)
 	if ( p == NULL )
 		goto out;
 
-	p->p_mem = memchunk_init(2048);
-	if ( p->p_mem == NULL )
-		goto out_free;
-
 	INIT_LIST_HEAD(&p->p_sources);
 
 	if ( !decode_foreach_decoder(pd_init, p) )
-		goto out_free_chunk;
+		goto out_free;
 
 	goto out;
 
-out_free_chunk:
-	memchunk_fini(p->p_mem);
 out_free:
 	free(p);
 	p = NULL;
@@ -97,7 +90,7 @@ static int pd_fini(struct _decoder *d, void *priv)
 	pd = &p->p_pd[d->d_idx];
 
 	if ( d->d_flow_dtor )
-		d->d_flow_dtor(p->p_mem, pd->pd_flow);
+		d->d_flow_dtor(pd->pd_flow);
 
 	return 1;
 }
@@ -113,8 +106,6 @@ void pipeline_free(pipeline_t p)
 
 	list_for_each_entry_safe(s, tmp, &p->p_sources, s_list)
 		source_free(s);
-
-	memchunk_fini(p->p_mem);
 
 	free(p);
 }

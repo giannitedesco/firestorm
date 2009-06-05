@@ -26,8 +26,8 @@ enum {
 struct _decoder {
 	unsigned int d_idx;
 	void (*d_decode)(struct _pkt *p);
-	flow_state_t (*d_flow_ctor)(memchunk_t mc);
-	void (*d_flow_dtor)(memchunk_t mc, flow_state_t s);
+	flow_state_t (*d_flow_ctor)(void);
+	void (*d_flow_dtor)(flow_state_t s);
 	struct _proto *d_protos;
 	struct _decoder *d_next;
 	const char *d_label;

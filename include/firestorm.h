@@ -66,15 +66,15 @@ pkt_t pkt_new(struct _frame *owner) _malloc;
 void pkt_free(pkt_t pkt);
 
 /* -- Memchunk routines */
-memchunk_t memchunk_init(size_t numchunks) _malloc;
-void memchunk_fini(memchunk_t m);
+int memchunk_init(size_t numchunks);
+void memchunk_fini(void);
 
-obj_cache_t objcache_init(memchunk_t m, const char *l, size_t obj_sz) _malloc;
+obj_cache_t objcache_init(const char *l, size_t obj_sz) _malloc;
 void objcache_fini(obj_cache_t o);
 void *objcache_alloc(obj_cache_t o) _malloc;
 void *objcache_alloc0(obj_cache_t o) _malloc;
 void objcache_free(obj_cache_t o, void *obj);
-void memchunk_free_obj(memchunk_t m, void *chunk);
+void memchunk_free_obj(void *chunk);
 
 /* --- Data-source plugins */
 source_t capture_tcpdump_open(const char *fn);

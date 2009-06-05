@@ -129,12 +129,12 @@ struct ip_flow_state {
 	struct ipdefrag ipdefrag;
 };
 
-int _ipdefrag_ctor(struct ipdefrag *ipd, memchunk_t mc);
-void _ipdefrag_dtor(struct ipdefrag *ipd, memchunk_t mc);
+int _ipdefrag_ctor(struct ipdefrag *ipd);
+void _ipdefrag_dtor(struct ipdefrag *ipd);
 void _ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr);
 
-int _tcpflow_ctor(struct tcpflow *ipd, memchunk_t mc);
-void _tcpflow_dtor(struct tcpflow *ipd, memchunk_t mc);
+int _tcpflow_ctor(struct tcpflow *ipd);
+void _tcpflow_dtor(struct tcpflow *ipd);
 void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr);
 
 #endif /* _TCPIP_HEADER_INCLUDED_ */
