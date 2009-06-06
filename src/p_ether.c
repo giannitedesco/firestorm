@@ -18,8 +18,6 @@
 #define dmesg(x...) do{}while(0);
 #endif
 
-/* TODO: arp: NS_ETHER / 0x0806 */
-
 static struct _decoder eth_decoder = {
 	.d_label = "Ethernet",
 	.d_decode = _eth_decode,

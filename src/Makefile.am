@@ -26,6 +26,7 @@ firestorm_SOURCES = \
 	p_ipv6.c \
 	p_null.c \
 	p_sll.c \
+	p_arp.c \
 	\
 	memchunk.c \
 	timers.c \

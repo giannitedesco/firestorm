@@ -20,8 +20,8 @@
 
 #include "tcpip.h"
 
-#define STATE_DEBUG 1
-#define SEGMENT_DEBUG 1
+#define STATE_DEBUG 0
+#define SEGMENT_DEBUG 0
 #define STREAM_DEBUG 0
 
 #if STATE_DEBUG
