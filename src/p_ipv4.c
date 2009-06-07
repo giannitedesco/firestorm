@@ -163,7 +163,7 @@ static void raw_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 			const struct pkt_ahhdr *ah)
 {
 	struct ip_dcb *dcb;
-	dcb = (struct ip_dcb *)_decode_layer(p, &p_ipraw);
+	dcb = (struct ip_dcb *)decode_layer(p, &p_ipraw);
 	if ( dcb ) {
 		dcb->ip_iph = iph;
 		dcb->ip_ah = ah;
@@ -177,7 +177,7 @@ static void tunnel_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 {
 	struct ip_dcb *dcb;
 
-	dcb = (struct ip_dcb *)_decode_layer(p, &p_tunnel);
+	dcb = (struct ip_dcb *)decode_layer(p, &p_tunnel);
 	if ( dcb ) {
 		dcb->ip_iph = iph;
 		dcb->ip_ah = ah;
@@ -240,7 +240,7 @@ static void icmp_decode(struct _pkt *p, const struct pkt_iphdr *outer,
 		iph = NULL;
 	}
 
-	dcb = (struct icmp_dcb *)_decode_layer(p, &p_icmp);
+	dcb = (struct icmp_dcb *)decode_layer(p, &p_icmp);
 	if ( dcb == NULL )
 		return;
 
@@ -267,7 +267,7 @@ static void tcp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 	dmesg(M_DEBUG, "ipv4: tcp %u -> %u",
 		sys_be16(tcph->sport), sys_be16(tcph->dport));
 
-	dcb = (struct tcp_dcb *)_decode_layer(p, &p_tcp);
+	dcb = (struct tcp_dcb *)decode_layer(p, &p_tcp);
 	if ( dcb ) {
 		dcb->tcp_iph = iph;
 		dcb->tcp_ah = ah;
@@ -289,7 +289,7 @@ static void udp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 	dmesg(M_DEBUG, "ipv4: udp %u -> %u",
 		sys_be16(udph->sport), sys_be16(udph->dport));
 
-	dcb = (struct udp_dcb *)_decode_layer(p, &p_udp);
+	dcb = (struct udp_dcb *)decode_layer(p, &p_udp);
 	if ( dcb ) {
 		dcb->udp_iph = iph;
 		dcb->udp_ah = ah;
@@ -308,7 +308,7 @@ static void esp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 		return;
 
 	dmesg(M_DEBUG, "ipv4: ESP spi=0x%.8x", sys_be32(esp->spi));
-	_decode_layer(p, &p_esp);
+	decode_layer(p, &p_esp);
 }
 
 typedef void (*ipproto_t)(struct _pkt *p, const struct pkt_iphdr *iph,
@@ -409,7 +409,7 @@ static void ipv4_decode(struct _pkt *p)
 
 	if ( iph->frag_off & ipfmask ) {
 		struct ipfrag_dcb *dcb;
-		dcb = (struct ipfrag_dcb *)_decode_layer(p, &p_fragment);
+		dcb = (struct ipfrag_dcb *)decode_layer(p, &p_fragment);
 		if ( dcb ) {
 			dcb->ip_iph = iph;
 		}

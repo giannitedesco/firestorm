@@ -77,7 +77,7 @@ static void arp_decode(struct _pkt *p)
 		break;
 	}
 
-	dcb = (struct arp_dcb *) _decode_layer(p, &p_arp);
+	dcb = (struct arp_dcb *)decode_layer(p, &p_arp);
 	if ( dcb == NULL ) {
 		dcb->arp_hdr = arp;
 		dcb->arp_sha = sha;

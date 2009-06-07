@@ -57,24 +57,24 @@ static void snap_decode(struct _pkt *p, const struct pkt_ethhdr *eth,
 		return;
 
 	org = (snap->org[0] << 12) | (snap->org[1] << 8) | snap->org[2];
-	_decode_layer(p, &p_snap);
+	decode_layer(p, &p_snap);
 
 	switch(org) {
 	case SNAP_ORG_ETHER:
 		dmesg(M_DEBUG, "802.3: SNAP: Ethernet 0x%.4x",
 			sys_be16(snap->proto));
 		/* XXX: Don't look for a length instead of a protocol */
-		_decode_next(p, NS_ETHER, snap->proto);
+		decode_next(p, NS_ETHER, snap->proto);
 		break;
 	case SNAP_ORG_APPLE:
 		dmesg(M_DEBUG, "802.3: SNAP: Apple 0x%.4x",
 			sys_be16(snap->proto));
-		_decode_next(p, NS_APPLE, snap->proto);
+		decode_next(p, NS_APPLE, snap->proto);
 		break;
 	case SNAP_ORG_CISCO:
 		dmesg(M_DEBUG, "802.3: SNAP: Cisco 0x%.4x",
 			sys_be16(snap->proto));
-		_decode_next(p, NS_CISCO, snap->proto);
+		decode_next(p, NS_CISCO, snap->proto);
 		break;
 	default:
 		dmesg(M_WARN, "802.3: SNAP: unknown org=0x%x (0x%.4x)",
@@ -104,7 +104,7 @@ static void llc_decode(struct _pkt *p, const struct pkt_ethhdr *eth,
 	case 0xf0: /* netbios */
 	case 0x42: /* stp */
 	default:
-		_decode_layer(p, &p_llc);
+		decode_layer(p, &p_llc);
 		dmesg(M_DEBUG, "802.3: LLC dsap = %.2x, lsap = %.2x",
 			llc->dsap, llc->lsap);
 		break;
@@ -129,8 +129,8 @@ static void vlan_decode(struct _pkt *p, const struct pkt_ethhdr *eth)
 		return;
 	default:
 		dmesg(M_DEBUG, "802.1q proto = 0x%.4x", proto);
-		_decode_layer(p, &p_eth);
-		_decode_next(p, NS_ETHER, vlan->proto);
+		decode_layer(p, &p_eth);
+		decode_next(p, NS_ETHER, vlan->proto);
 		break;
 	}
 }
@@ -157,8 +157,8 @@ void _eth_decode(struct _pkt *p)
 		break;
 	default:
 		dmesg(M_DEBUG, "ethernet II - 0x%.4x", proto);
-		_decode_layer(p, &p_eth);
-		_decode_next(p, NS_ETHER, eth->proto);
+		decode_layer(p, &p_eth);
+		decode_next(p, NS_ETHER, eth->proto);
 		break;
 	}
 }

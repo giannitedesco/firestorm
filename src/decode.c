@@ -14,7 +14,7 @@
 #define NAMESPACE_ALLOC_CHUNK	(1<<4)
 #define NAMESPACE_ALLOC_MASK	(NAMESPACE_ALLOC_CHUNK-1)
 
-struct _namespace _ns_arr[NS_MAX] = {
+static struct _namespace ns_arr[NS_MAX] = {
 	[NS_DLT] {.ns_label = "DLT"},
 	[NS_UNIXPF] {.ns_label = "UNIX"},
 	[NS_ETHER] {.ns_label = "ETHER"},
@@ -23,9 +23,6 @@ struct _namespace _ns_arr[NS_MAX] = {
 	[NS_IPX] {.ns_label = "IPX"},
 	[NS_APPLE] {.ns_label = "APPLE"},
 	[NS_CISCO] {.ns_label = "CISCO"},
-	[NS_USTREAM] {.ns_label = "STREAM"},
-	[NS_UDGRAM] {.ns_label = "DGRAM"},
-	[NS_USEQPKT] {.ns_label = "SEQPKT"},
 };
 
 static unsigned int num_decoders;
@@ -36,6 +33,78 @@ static unsigned int num_protos;
 static struct _proto *special_protos;
 
 static size_t max_dcb;
+
+_constfn static struct _decoder *
+ns_entry_search(const struct _ns_entry *p, unsigned int n, proto_id_t id)
+{
+	while( n ) {
+		unsigned int i;
+
+		i = (n / 2);
+		if ( id < p[i].nse_id ) {
+			n = i;
+		}else if ( id > p[i].nse_id ) {
+			p = p + (i + 1);
+			n = n - (i + 1);
+		}else{
+			return p[i].nse_decoder;
+		}
+	}
+
+	return NULL;
+}
+
+static struct _dcb *dcb_alloc(pkt_t p, size_t sz)
+{
+	struct _dcb *ret = p->pkt_dcb_top;
+	uint8_t *ptr = (uint8_t *)ret;
+
+	p->pkt_dcb_top = (struct _dcb *)(ptr + sz);
+
+	if ( p->pkt_dcb_top > p->pkt_dcb_end )
+		return NULL;
+
+	ret->dcb_next = p->pkt_dcb_top;
+
+	return (struct _dcb *)ret;
+}
+
+size_t decode_dcb_len(struct _dcb *dcb)
+{
+	uint8_t *ptr, *nxt;
+
+	ptr = (uint8_t *)dcb;
+	nxt = (uint8_t *)dcb->dcb_next;
+
+	assert(nxt > ptr);
+
+	return nxt - ptr;
+}
+
+struct _dcb *decode_layer(pkt_t pkt, struct _proto *p)
+{
+	struct _dcb *ret;
+	ret = dcb_alloc(pkt, p->p_dcb_sz);
+	if ( ret )
+		ret->dcb_proto = p;
+	return ret;
+}
+
+struct _dcb *decode_layer2(pkt_t pkt, struct _proto *p, size_t sz)
+{
+	struct _dcb *ret;
+	ret = dcb_alloc(pkt, sz);
+	if ( ret )
+		ret->dcb_proto = p;
+	return ret;
+}
+void decode_next(pkt_t pkt, proto_ns_t ns, proto_id_t id)
+{
+	const struct _decoder *d;
+	d = ns_entry_search(ns_arr[ns].ns_reg, ns_arr[ns].ns_num_reg, id);
+	if ( d != NULL )
+		d->d_decode(pkt);
+}
 
 unsigned int decode_num_protocols(void)
 {
@@ -76,8 +145,8 @@ void proto_add(struct _decoder *d, struct _proto *p)
 decoder_t decoder_get(proto_ns_t ns, proto_id_t id)
 {
 	assert(ns < NS_MAX);
-	return _ns_entry_search(_ns_arr[ns].ns_reg,
-				_ns_arr[ns].ns_num_reg, id);
+	return ns_entry_search(ns_arr[ns].ns_reg,
+				ns_arr[ns].ns_num_reg, id);
 }
 
 static int nsentry_cmp(const void *A, const void *B)
@@ -110,22 +179,22 @@ void decode_init(void)
 		unsigned int j;
 
 		/* for binary search */
-		qsort(_ns_arr[i].ns_reg,
-			_ns_arr[i].ns_num_reg,
-			sizeof(*_ns_arr[i].ns_reg),
+		qsort(ns_arr[i].ns_reg,
+			ns_arr[i].ns_num_reg,
+			sizeof(*ns_arr[i].ns_reg),
 			nsentry_cmp);
 
-		if ( _ns_arr[i].ns_num_reg )
+		if ( ns_arr[i].ns_num_reg )
 			fprintf(f, "\t\"ns_%s\" [label=\"%s\" "
 				"fillcolor=\"#b0b0ff\"];\n",
-				_ns_arr[i].ns_label,
-				_ns_arr[i].ns_label);
-		for(j = 0; j < _ns_arr[i].ns_num_reg; j++)
+				ns_arr[i].ns_label,
+				ns_arr[i].ns_label);
+		for(j = 0; j < ns_arr[i].ns_num_reg; j++)
 			fprintf(f, "\t\"ns_%s\" -> \"d_%s\" "
 				"[label=\"id 0x%x\"];\n",
-				_ns_arr[i].ns_label,
-				_ns_arr[i].ns_reg[j].nse_decoder->d_label,
-				_ns_arr[i].ns_reg[j].nse_id);
+				ns_arr[i].ns_label,
+				ns_arr[i].ns_reg[j].nse_decoder->d_label,
+				ns_arr[i].ns_reg[j].nse_id);
 	}
 
 	for(d = decoders; d; d = d->d_next) {
@@ -199,23 +268,23 @@ void decoder_register(struct _decoder *d, proto_ns_t ns, proto_id_t id)
 	unsigned int i;
 	assert(ns < NS_MAX);
 
-	for(i = id; i < _ns_arr[ns].ns_num_reg; i++) {
-		if ( _ns_arr[ns].ns_reg[i].nse_id == id ) {
+	for(i = id; i < ns_arr[ns].ns_num_reg; i++) {
+		if ( ns_arr[ns].ns_reg[i].nse_id == id ) {
 			mesg(M_WARN, "decode: %s: %s / 0x%x registered by %s",
-				d->d_label, _ns_arr[ns].ns_label, id,
-				_ns_arr[ns].ns_reg[i].nse_decoder->d_label);
+				d->d_label, ns_arr[ns].ns_label, id,
+				ns_arr[ns].ns_reg[i].nse_decoder->d_label);
 			return;
 		}
 	}
 
-	if ( !ns_assure(&_ns_arr[ns]) ) {
-		assert(ns_assure(&_ns_arr[ns]));
+	if ( !ns_assure(&ns_arr[ns]) ) {
+		assert(ns_assure(&ns_arr[ns]));
 		return;
 	}
 
-	_ns_arr[ns].ns_reg[_ns_arr[ns].ns_num_reg].nse_id = id;
-	_ns_arr[ns].ns_reg[_ns_arr[ns].ns_num_reg].nse_decoder = d;
-	_ns_arr[ns].ns_num_reg++;
+	ns_arr[ns].ns_reg[ns_arr[ns].ns_num_reg].nse_id = id;
+	ns_arr[ns].ns_reg[ns_arr[ns].ns_num_reg].nse_decoder = d;
+	ns_arr[ns].ns_num_reg++;
 
 	return;
 }
