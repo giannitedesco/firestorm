@@ -47,18 +47,24 @@ struct ipq {
 	timestamp_t	time;
 };
 
+struct tcp_server {
+	struct tcp_server **hash_pprev, *hash_next;
+	uint32_t addr;
+	uint16_t port;
+	uint16_t _pad0;
+	unsigned int use;
+	// struct _proto *proto;
+};
+
 /* A simplex tcp stream */
-struct tcp_stream {
-	uint8_t		state; /* from above enum */
+struct tcp_state {
 #define TF_SACK_OK	(1<<0)
 #define TF_WSCALE_OK	(1<<1)
 #define TF_TSTAMP_OK	(1<<2)
 	uint8_t		flags; /* optional features */
 	uint8_t		scale; /* scaling factor */
-	uint8_t		queue; /* in queue mode */
-
-	uint32_t	ts_recent; /* a recent timestamp */
-	uint32_t	ts_recent_stamp; /* local time on it */
+	uint8_t		_pad0;
+	uint8_t		_pad1;
 
 	uint32_t	snd_una; /* first byte we want ack for */
 	uint32_t	snd_nxt; /* next sequence to send */
@@ -67,16 +73,26 @@ struct tcp_stream {
 	uint32_t	rcv_wnd; /* receiver window */
 	uint32_t	rcv_wup; /* rcv_nxt on last window update */
 
-	uint32_t	isn; /* equivalent of rfc793 iss */
+	uint32_t	ts_recent; /* a recent timestamp */
+	uint32_t	ts_recent_stamp; /* local time on it */
 };
 
 /* A duplex tcp session */
-struct tcp_session {
-	/* Global LRU list */
-	struct list_head lru;
+#define TCP_SESSION_S1	0
+#define TCP_SESSION_S2	1
+#define TCP_SESSION_S3	2
+#define TCP_SESSION_E	3
+#define TCP_SESSION_CF1	4
+#define TCP_SESSION_CF2	5
+#define TCP_SESSION_CF3	6
+#define TCP_SESSION_SF1	7
+#define TCP_SESSION_SF2	8
+#define TCP_SESSION_SF3	9
+#define TCP_SESSION_C	10
 
-	/* Timeout list, for SYN timeouts etc.. */
-	struct list_head tmo;
+struct tcp_session {
+	/* Timeout and LRU list */
+	struct list_head lru;
 
 	/* Hash table collision chaining */
 	struct tcp_session **hash_pprev, *hash_next;
@@ -85,12 +101,15 @@ struct tcp_session {
 	uint32_t c_addr, s_addr;
 	uint16_t c_port, s_port;
 
-	/* TCP state: host byte order */
-	struct tcp_stream client;
-	struct tcp_stream server;
+	uint16_t state;
+	uint16_t _pad0;
 
-	//struct _proto *proto;
-	//void *flow;
+	/* TCP state: host byte order */
+	struct tcp_state c_wnd;
+	struct tcp_state *s_wnd;
+
+	/* Per-server data structure */
+	struct tcp_server *server;
 
 	/* expiry time */
 	timestamp_t expire;
@@ -99,19 +118,24 @@ struct tcp_session {
 #define TCPHASH 509 /* prime */
 struct tcpflow {
 	/* flow hash */
-	struct list_head lru;
-	obj_cache_t session_cache;
 	struct tcp_session *hash[TCPHASH];
-	struct list_head syn1;
+
+	/* memory caches */
+	obj_cache_t session_cache;
+	obj_cache_t server_cache;
+	obj_cache_t sstate_cache;
+
+	/* timeout lists */
+	struct list_head lru;
+	struct list_head tmo_30;
 
 	/* stats */
-	unsigned int num_packets;
-	unsigned int state_errs;
-	unsigned int num_csum_errs;
-	unsigned int num_ttl_errs;
-	unsigned int num_timeouts;
 	unsigned int num_active;
 	unsigned int max_active;
+	unsigned int num_segments;
+
+	unsigned int num_csum_errs;
+	unsigned int num_ttl_errs;
 };
 
 #define IPHASH 127 /* Mersenne prime */

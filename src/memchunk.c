@@ -300,7 +300,7 @@ static void *cache_alloc_slow(struct _obj_cache *o)
 
 	ret = hdr->next_obj;
 	hdr->next_obj += o->o_sz;
-	hdr->use = 1;
+	hdr->use++;
 	list_add(&hdr->u.list, &o->o_partials);
 
 	for(ptr = ret, end = ret + o->o_sz * (o->o_obj_per_chunk - 1);

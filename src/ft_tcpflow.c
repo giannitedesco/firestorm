@@ -20,9 +20,9 @@
 
 #include "tcpip.h"
 
-#define STATE_DEBUG 0
-#define SEGMENT_DEBUG 0
-#define STREAM_DEBUG 0
+#define STATE_DEBUG 1
+#define SEGMENT_DEBUG 1
+#define STREAM_DEBUG 1
 
 #if STATE_DEBUG
 #define dmesg mesg
@@ -55,39 +55,48 @@ struct tcpseg {
 	uint32_t tsval;
 	unsigned int saw_tstamp;
 	uint8_t *payload;
-	struct tcp_stream *snd, *rcv;
+	struct tcp_state *snd, *rcv;
 };
 
-#if STATE_DEBUG
-static const char * const state_str[] = {
-	"CLOSED",
-	"SYN_SENT",
-	"SYN_RECV",
-	"ESTABLISHED",
-	"FIN_WAIT1",
-	"FIN_WAIT2",
-	"TCP_CLOSE_WAIT",
-	"TCP_LAST_ACK",
-	"TCP_CLOSING",
-	"TCP_TIME_WAIT",
-};
-#endif
-
-/* Perform a state transition */
-static void transition(struct tcp_session *s, int cs, int ss)
+static void dbg_segment(struct tcpseg *cur)
 {
-#if STATE_DEBUG
-	ipstr_t sip, cip;
+#if SEGMENT_DEBUG
+	static const char tcpflags[] = "FSRPAUEC";
+	uint8_t x, i;
+	char ackbuf[16];
+	char fstr[9];
+	ipstr_t sip, dip;
 
-	iptostr(sip, s->s_addr);
-	iptostr(cip, s->c_addr);
+	iptostr(sip, cur->iph->saddr);
+	iptostr(dip, cur->iph->daddr);
 
-	mesg(M_DEBUG, "%s:%u(\033[%dm%s\033[0m) -> %s:%u(\033[%dm%s\033[0m)",
-		cip, sys_be16(s->c_port), 30 + (cs % 9), state_str[cs],
-		sip, sys_be16(s->s_port), 30 + (ss % 9), state_str[ss]);
+	for(i = 0, x = 1; x; i++, x <<= 1)
+		fstr[i] = (cur->tcph->flags & x) ? tcpflags[i] : '*';
+
+	fstr[i] = '\0';
+
+	if ( cur->tcph->flags & TCP_ACK ) {
+		snprintf(ackbuf, sizeof(ackbuf), " a:%x", cur->ack);
+	}else{
+		ackbuf[0] = '\0';
+	}
+
+	mesg(M_DEBUG, "\033[36m[%s] %s:%u %s:%u s:%x%s w:%u l:%u\033[0m", fstr,
+		sip, sys_be16(cur->tcph->sport),
+		dip, sys_be16(cur->tcph->dport),
+		cur->seq, ackbuf, cur->win, cur->len);
 #endif
-	s->client.state = cs;
-	s->server.state = ss;
+}
+
+static void dbg_stream(const char *label, struct tcp_state *s)
+{
+#if STREAM_DEBUG
+	if ( NULL == s )
+		return;
+	mesg(M_DEBUG, "\033[34m%s: su=%.8x sn=%.8x n=%.8x wup=%.8x w=%u\033[0m",
+		label, s->snd_una, s->snd_nxt,
+		s->rcv_nxt, s->rcv_wup, s->rcv_wnd);
+#endif
 }
 
 static void state_err(struct tcpseg *cur, const char *msg)
@@ -101,7 +110,6 @@ static void state_err(struct tcpseg *cur, const char *msg)
 		sip, sys_be16(cur->tcph->sport),
 		dip, sys_be16(cur->tcph->dport), msg);
 #endif
-	cur->tf->state_errs++;
 }
 
 /* Wrap-safe seq/ack calculations */
@@ -110,7 +118,7 @@ static int between(uint32_t s1, uint32_t s2, uint32_t s3)
 	return s3 - s2 >= s1 - s2; /* is s2<=s1<=s3 ? */
 }
 
-static uint32_t tcp_receive_window(struct tcp_stream *s)
+static uint32_t tcp_receive_window(struct tcp_state *s)
 {
 	int32_t win = s->rcv_wup + s->rcv_wnd - s->rcv_nxt;
 	if ( win < 0 )
@@ -118,7 +126,7 @@ static uint32_t tcp_receive_window(struct tcp_stream *s)
 	return (uint32_t)win;
 }
 
-static int tcp_sequence(struct tcp_stream *s, uint32_t seq, uint32_t end_seq)
+static int tcp_sequence(struct tcp_state *s, uint32_t seq, uint32_t end_seq)
 {
 	return !tcp_before(end_seq, s->rcv_wup) &&
 		!tcp_after(seq, s->rcv_nxt + tcp_receive_window(s));
@@ -127,7 +135,7 @@ static int tcp_sequence(struct tcp_stream *s, uint32_t seq, uint32_t end_seq)
 /* Hash function.
  * Hashes to the same value even when source and destinations are inverted.
  */
-static uint16_t _constfn tcp_hashfn(uint32_t saddr, uint32_t daddr,
+_constfn static uint16_t tcp_hashfn(uint32_t saddr, uint32_t daddr,
 					uint16_t sport, uint16_t dport)
 {
 	uint32_t h;
@@ -240,7 +248,7 @@ static int tcp_fast_options(struct tcpseg *cur)
 }
 
 /* This will parse TCP options for SYN packets */
-static void tcp_syn_options(struct tcp_stream *s,
+static void tcp_syn_options(struct tcp_state *s,
 				const struct pkt_tcphdr *t,
 				uint32_t sec)
 {
@@ -311,15 +319,17 @@ static void tcp_syn_options(struct tcp_stream *s,
 
 static void tcp_free(struct tcpflow *tf, struct tcp_session *s)
 {
-	transition(s, 0, 0);
 	tcp_hash_unlink(s);
-	list_del(&s->tmo);
 	list_del(&s->lru);
+	if ( s->s_wnd )
+		objcache_free(tf->sstate_cache, s->s_wnd);
+	memset(s, 0xa5, sizeof(*s));
 	objcache_free(tf->session_cache, s);
 	tf->num_active--;
 }
 
 /* TMO: Check timeouts */
+#if 0
 static void tcp_tmo_check(struct tcpflow *tf, timestamp_t now)
 {
 	struct tcp_session *s;
@@ -343,6 +353,17 @@ static void tcp_expire(struct tcpflow *tf,
 	s->expire = t;
 	list_move(&tf->syn1, &s->tmo);
 }
+#endif
+
+static void init_wnd(struct tcpseg *cur, struct tcp_state *s)
+{
+	memset(s, 0, sizeof(*s));
+	s->snd_una = cur->seq + 1;
+	s->snd_nxt = s->snd_una + 1;
+	s->rcv_wnd = cur->win;
+	s->rcv_wup = s->rcv_nxt;
+	tcp_syn_options(s, cur->tcph, cur->ts / TIMESTAMP_HZ);
+}
 
 static struct tcp_session *new_session(struct tcpseg *cur)
 {
@@ -359,26 +380,20 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 		return NULL;
 	}
 
-	/* timeout check: assumes time is monotonic */
-	tcp_tmo_check(cur->tf, cur->ts);
-
-	/* FIXME: evict one if necessary */
 	s = objcache_alloc(cur->tf->session_cache);
 	if ( s == NULL ) {
 		mesg(M_CRIT, "tcp OOM");
 		return NULL;
 	}
 
+	dmesg(M_DEBUG, "#1 - syn: half-state allocated");
+
 	s->c_addr = cur->iph->saddr;
 	s->s_addr = cur->iph->daddr;
 	s->c_port = cur->tcph->sport;
 	s->s_port = cur->tcph->dport;
 
-	/* link it all up and set the SYN1 timeout */
-	list_add(&s->lru, &cur->tf->lru);
-	tcp_hash_link(cur->tf, s, cur->hash);
-	INIT_LIST_HEAD(&s->tmo);
-	tcp_expire(cur->tf, s, cur->ts + TCP_TMO_SYN1);
+	s->state = TCP_SESSION_S1;
 
 	/* stats */
 	cur->tf->num_active++;
@@ -386,90 +401,156 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 		cur->tf->max_active = cur->tf->num_active;
 
 	/* Setup initial window tracking state machine */
-	memset(&s->client, 0, sizeof(s->client));
-	memset(&s->server, 0, sizeof(s->server));
-	s->server.isn = cur->seq;
-	s->client.snd_una = s->server.isn + 1;
-	s->client.snd_nxt = s->client.snd_una + 1;
-	s->client.rcv_wnd = cur->win;
-	s->server.rcv_nxt = s->client.snd_una;
-	s->server.rcv_wup = s->client.snd_una;
+	init_wnd(cur, &s->c_wnd);
+	s->s_wnd = NULL;
 
-	/* server sees clients initial options */
-	tcp_syn_options(&s->server, cur->tcph, cur->ts / TIMESTAMP_HZ);
-
-	transition(s, TCP_SYN_SENT, TCP_CLOSED);
-	dmesg(M_DEBUG, "#1 - syn");
+	/* link it all up and set up timeouts*/
+	list_add(&s->lru, &cur->tf->tmo_30);
+	tcp_hash_link(cur->tf, s, cur->hash);
 
 	return s;
 }
 
+static void s1_processing(struct tcpseg *cur, struct tcp_session *s)
+{
+	if ( cur->tcph->flags & (TCP_FIN|TCP_RST) ) {
+		/* FIXME: apply seq check */
+		mesg(M_DEBUG, "connection refused");
+		s->state = TCP_SESSION_C;
+		return;
+	}
+
+	if ( cur->tcph->flags & TCP_SYN ) {
+		dmesg(M_DEBUG, "#2 syn+ack");
+		s->s_wnd = objcache_alloc(cur->tf->sstate_cache);
+		assert(NULL != s->s_wnd);
+		cur->snd = s->s_wnd;
+		init_wnd(cur, s->s_wnd);
+		s->state = TCP_SESSION_S2;
+	}
+}
+
+static void s2_processing(struct tcpseg *cur, struct tcp_session *s)
+{
+	if ( cur->tcph->flags & TCP_ACK ) {
+		dmesg(M_DEBUG, "#3 ack");
+		s->state = TCP_SESSION_S3;
+	}
+}
+
+static void e_processing(struct tcpseg *cur, struct tcp_session *s)
+{
+	dhex_dump(cur->payload, cur->len, 16);
+	if ( cur->tcph->flags & TCP_FIN) {
+		if ( cur->snd == &s->c_wnd ) {
+			dmesg(M_DEBUG, "client close");
+			s->state = TCP_SESSION_CF1;
+		}else{
+			dmesg(M_DEBUG, "server close");
+			s->state = TCP_SESSION_SF1;
+		}
+	}
+}
+
+static void f1_processing(struct tcpseg *cur, struct tcp_session *s)
+{
+	struct tcp_state *closer;
+
+	if ( s->state == TCP_SESSION_CF1 )
+		closer = &s->c_wnd;
+	else
+		closer = s->s_wnd;
+
+	if ( cur->snd == closer ) {
+		dmesg(M_DEBUG, "fin resend?");
+		return;
+	}
+
+	if ( cur->tcph->flags & TCP_ACK ) {
+		dmesg(M_DEBUG, "ack for fin");
+		s->state++;
+	}
+
+	if ( cur->tcph->flags & TCP_FIN) {
+		dmesg(M_DEBUG, "simultaneous close");
+		s->state++;
+	}
+}
+
+static void f2_processing(struct tcpseg *cur, struct tcp_session *s)
+{
+	struct tcp_state *closer;
+
+	if ( s->state == TCP_SESSION_CF2 )
+		closer = &s->c_wnd;
+	else
+		closer = s->s_wnd;
+
+	if ( cur->snd != closer && cur->tcph->flags & TCP_FIN ) {
+		dmesg(M_DEBUG, "final fin");
+		s->state++;
+	}
+}
+
+static void f3_processing(struct tcpseg *cur, struct tcp_session *s)
+{
+	struct tcp_state *closer;
+
+	if ( s->state == TCP_SESSION_CF3 )
+		closer = &s->c_wnd;
+	else
+		closer = s->s_wnd;
+
+	if ( cur->snd == closer && cur->tcph->flags & TCP_ACK ) {
+		dmesg(M_DEBUG, "teardown");
+		s->state = TCP_SESSION_C;
+	}
+}
+
 static void state_track(struct tcpseg *cur, struct tcp_session *s)
 {
-	struct tcp_stream *snd = cur->snd, *rcv = cur->rcv;
-
-	if ( snd->state == TCP_SYN_SENT ) {
-		dmesg(M_DEBUG, "SYN re-transmit?");
-	}else if ( rcv->state == TCP_SYN_SENT &&
-		snd->state == TCP_CLOSED ) {
-		if ( cur->tcph->flags & TCP_RST ) {
-			tcp_free(cur->tf, s);
-			dmesg(M_DEBUG, "Connection reset by peer");
-			return;
-		}
-		transition(s, TCP_SYN_RECV, TCP_SYN_SENT);
-		dmesg(M_DEBUG, "#2 - syn + ack");
-	}else if ( rcv->state == TCP_SYN_SENT &&
-			snd->state == TCP_SYN_RECV ) {
-		transition(s, TCP_ESTABLISHED, TCP_ESTABLISHED);
-		dmesg(M_DEBUG, "#3 - ack");
-	}else if ( rcv->state == TCP_ESTABLISHED &&
-			snd->state == TCP_ESTABLISHED ) {
-		if ( cur->tcph->flags & TCP_FIN ) {
-			snd->state = TCP_FIN_WAIT1;
-			rcv->state = TCP_CLOSE_WAIT;
-			transition(s, s->client.state, s->server.state);
-			dmesg(M_DEBUG, "%s initiated close",
-				(snd == &s->client) ? "client" : "server");
-		}else{
-			dmesg(M_DEBUG, "Text segment");
-		}
-	}else if ( rcv->state == TCP_FIN_WAIT1 ) {
-		if ( cur->tcph->flags & TCP_FIN ) {
-			rcv->state = TCP_CLOSING;
-			snd->state = TCP_LAST_ACK;
-			transition(s, s->client.state, s->server.state);
-			dmesg(M_DEBUG, "Simultaneous close");
-		}else if ( cur->tcph->flags & TCP_ACK ) {
-			rcv->state = TCP_FIN_WAIT2;
-			transition(s, s->client.state, s->server.state);
-			dmesg(M_DEBUG, "Half Open");
-		}
-	}else if ( rcv->state == TCP_FIN_WAIT2 ) {
-		if ( cur->tcph->flags & TCP_FIN ) {
-			rcv->state = TCP_TIME_WAIT;
-			snd->state = TCP_LAST_ACK;
-			transition(s, s->client.state, s->server.state);
-			dmesg(M_DEBUG, "Final shutdown");
-		}
-	}else if ( rcv->state == TCP_LAST_ACK ) {
-		if ( cur->tcph->flags & TCP_ACK ) {
-			snd->state = TCP_TIME_WAIT;
-			rcv->state = TCP_CLOSED;
-			/* TODO: Time-wait timer */
-			//transition(s, s->client.state, s->server.state);
-			tcp_free(cur->tf, s);
-			dmesg(M_DEBUG, "Teardown");
-		}
-	}else if ( rcv->state == TCP_CLOSING || rcv->state == TCP_CLOSE_WAIT ) {
-		dmesg(M_DEBUG, "FIN resend");
-	}else if ( rcv->state == TCP_TIME_WAIT ) {
-		dmesg(M_DEBUG, "ACK or FIN resend");
-	}else if ( snd->state == TCP_FIN_WAIT2 ) {
-		dmesg(M_DEBUG, "wtf");
-	}else{
-		assert(0);
+	switch(s->state) {
+	case TCP_SESSION_S1:
+		if ( cur->snd != &s->c_wnd )
+			s1_processing(cur, s);
+		else
+			dmesg(M_DEBUG, "syn resend?");
+		break;
+	case TCP_SESSION_S2:
+		if ( cur->snd == &s->c_wnd )
+			s2_processing(cur, s);
+		else
+			dmesg(M_DEBUG, "syn+ack resend?");
+		break;
+	case TCP_SESSION_S3:
+		if ( cur->snd == &s->c_wnd )
+			dmesg(M_DEBUG, "client sent first data");
+		else
+			dmesg(M_DEBUG, "server sent first data");
+		s->state = TCP_SESSION_E;
+		/* fall through */
+	case TCP_SESSION_E:
+		e_processing(cur, s);
+		break;
+	case TCP_SESSION_CF1:
+	case TCP_SESSION_SF1:
+		f1_processing(cur, s);
+		break;
+	case TCP_SESSION_CF2:
+	case TCP_SESSION_SF2:
+		f2_processing(cur, s);
+		break;
+	case TCP_SESSION_CF3:
+	case TCP_SESSION_SF3:
+		f3_processing(cur, s);
+		break;
+	case TCP_SESSION_C:
+		dmesg(M_DEBUG, "2MSL timeout");
+		break;
 	}
+
+	/* TODO: update timeouts */
+	list_move(&cur->tf->lru, &s->lru);
 }
 
 static int tcp_csum(struct tcpseg *cur)
@@ -518,74 +599,39 @@ static int tcp_csum(struct tcpseg *cur)
 	return (csum == 0);
 }
 
-static void dbg_segment(struct tcpseg *cur)
+static void seg_init(struct tcpseg *cur, struct ip_flow_state *ipfs,
+		pkt_t pkt, struct tcp_dcb *dcb)
 {
-#if SEGMENT_DEBUG
-	static const char tcpflags[] = "FSRPAUEC";
-	uint8_t x, i;
-	char ackbuf[16];
-	char fstr[9];
-	ipstr_t sip, dip;
+	cur->tf = &ipfs->tcpflow;
 
-	iptostr(sip, cur->iph->saddr);
-	iptostr(dip, cur->iph->daddr);
+	cur->ts = pkt->pkt_ts;
+	cur->iph = dcb->tcp_iph;
+	cur->tcph = dcb->tcp_hdr;
+	cur->ack = sys_be32(cur->tcph->ack);
+	cur->seq = sys_be32(cur->tcph->seq);
+	cur->win = sys_be16(cur->tcph->win);
+	cur->hash = tcp_hashfn(cur->iph->saddr, cur->iph->daddr,
+				cur->tcph->sport, cur->tcph->dport);
+	cur->len = sys_be16(cur->iph->tot_len) -
+			(cur->iph->ihl << 2) -
+			(cur->tcph->doff << 2);
+	cur->seq_end = cur->seq + cur->len;
+	cur->tsval = 0;
+	cur->saw_tstamp = 0;
+	cur->payload = (uint8_t *)cur->tcph + (cur->tcph->doff << 2);
 
-	for(i = 0, x = 1; x; i++, x <<= 1)
-		fstr[i] = (cur->tcph->flags & x) ? tcpflags[i] : '*';
+	cur->tf->num_segments++;
 
-	fstr[i] = '\0';
-
-	if ( cur->tcph->flags & TCP_ACK ) {
-		snprintf(ackbuf, sizeof(ackbuf), " a:%x", cur->ack);
-	}else{
-		ackbuf[0] = '\0';
-	}
-
-	mesg(M_DEBUG, "\033[36m[%s] %s:%u %s:%u s:%x%s w:%u l:%u\033[0m", fstr,
-		sip, sys_be16(cur->tcph->sport),
-		dip, sys_be16(cur->tcph->dport),
-		cur->seq, ackbuf, cur->win, cur->len);
-#endif
-}
-
-static void dbg_stream(const char *label, struct tcp_stream *s)
-{
-#if STREAM_DEBUG
-	mesg(M_DEBUG, "\033[34m%s: su=%.8x sn=%.8x n=%.8x wup=%.8x w=%u\033[0m",
-		label, s->snd_una, s->snd_nxt,
-		s->rcv_nxt, s->rcv_wup, s->rcv_wnd);
-#endif
+	dbg_segment(cur);
 }
 
 void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 {
-	struct ip_flow_state *ipfs = sptr;
-	struct tcp_dcb *dcb = (struct tcp_dcb *)dcb_ptr;
 	unsigned int to_server;
 	struct tcp_session *s;
 	struct tcpseg cur;
 
-	cur.tf = &ipfs->tcpflow;
-
-	cur.ts = pkt->pkt_ts;
-	cur.iph = dcb->tcp_iph;
-	cur.tcph = dcb->tcp_hdr;
-	cur.ack = sys_be32(cur.tcph->ack);
-	cur.seq = sys_be32(cur.tcph->seq);
-	cur.win = sys_be16(cur.tcph->win);
-	cur.hash = tcp_hashfn(cur.iph->saddr, cur.iph->daddr,
-				cur.tcph->sport, cur.tcph->dport);
-	cur.len = sys_be16(cur.iph->tot_len) -
-			(cur.iph->ihl << 2) -
-			(cur.tcph->doff << 2);
-	cur.seq_end = cur.seq + cur.len;
-	cur.tsval = 0;
-	cur.saw_tstamp = 0;
-	cur.payload = (uint8_t *)cur.tcph + (cur.tcph->doff << 2);
-
-	cur.tf->num_packets++;
-
-	dbg_segment(&cur);
+	seg_init(&cur, sptr, pkt, (struct tcp_dcb *)dcb_ptr);
 
 	if ( cur.iph->ttl < minttl ) {
 		cur.tf->num_ttl_errs++;
@@ -609,43 +655,58 @@ void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 	}else{
 		/* Figure out which side is which */
 		if ( to_server ) {
-			cur.snd = &s->client;
-			cur.rcv = &s->server;
+			cur.snd = &s->c_wnd;
+			cur.rcv = s->s_wnd;
 		}else{
-			cur.snd = &s->server;
-			cur.rcv = &s->client;
+			cur.snd = s->s_wnd;
+			cur.rcv = &s->c_wnd;
 		}
 
 		tcp_hash_mtf(cur.tf, s, cur.hash);
-		list_move(&cur.tf->lru, &s->lru);
 
 		state_track(&cur, s);
 	}
 
-	dbg_stream("client", &s->client);
-	dbg_stream("server", &s->server);
-	//dmesg(M_DEBUG, ".");
+	dbg_stream("client", &s->c_wnd);
+	dbg_stream("server", s->s_wnd);
+	if ( s->state == TCP_SESSION_C ) {
+		tcp_free(cur.tf, s);
+		mesg(M_DEBUG, "freed session state");
+	}
+	printf("\n\n");
 }
 
 void _tcpflow_dtor(struct tcpflow *tf)
 {
 	mesg(M_INFO,"tcpstream: max_active=%u num_active=%u",
 		tf->max_active, tf->num_active);
-	mesg(M_INFO,"tcpstream: %u state errors out of %u packets",
-		tf->state_errs, tf->num_packets);
+	mesg(M_INFO,"tcpstream: %u segments processed",
+		tf->num_segments);
+//	objcache_fini(&tf->session_cache);
+//	objcache_fini(&tf->server_cache);
+//	objcache_fini(&tf->sstate_cache);
 }
 
 int _tcpflow_ctor(struct tcpflow *tf)
 {
 	INIT_LIST_HEAD(&tf->lru);
-	INIT_LIST_HEAD(&tf->syn1);
+	INIT_LIST_HEAD(&tf->tmo_30);
 
-	dmesg(M_INFO, "tcpflow: %u bytes state, %u bytes session",
-		sizeof(*tf), sizeof(struct tcp_session));
+	dmesg(M_INFO, "tcpflow: %u bytes state", sizeof(*tf));
 
 	tf->session_cache = objcache_init("tcp_session",
 						sizeof(struct tcp_session));
 	if ( tf->session_cache == NULL )
+		return 0;
+
+	tf->server_cache = objcache_init("tcp_server",
+						sizeof(struct tcp_server));
+	if ( tf->server_cache == NULL )
+		return 0;
+
+	tf->sstate_cache = objcache_init("tcp_state",
+						sizeof(struct tcp_state));
+	if ( tf->sstate_cache == NULL )
 		return 0;
 
 	return 1;
