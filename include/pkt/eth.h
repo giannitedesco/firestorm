@@ -32,6 +32,12 @@ struct pkt_snaphdr {
 	uint16_t	proto;
 } _packed;
 
+#define VLAN_ID 0xffffff
+struct pkt_vlanhdr {
+	uint16_t	vlan;
+	uint16_t	proto;
+} _packed;
+
 void _eth_decode(struct _pkt *p);
 
 #endif /* _PKT_ETH_HEADER_INCLUDED_ */

@@ -8,7 +8,6 @@
 #include <f_packet.h>
 #include <f_decode.h>
 #include <pkt/eth.h>
-#include <pkt/vlan.h>
 
 #define DLT_EN10MB 1
 
