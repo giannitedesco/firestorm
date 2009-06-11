@@ -20,16 +20,16 @@
 
 #include "tcpip.h"
 
-#define STATE_DEBUG 1
-#define SEGMENT_DEBUG 1
-#define STREAM_DEBUG 1
+#define STATE_DEBUG 0
+#define SEGMENT_DEBUG 0
+#define STREAM_DEBUG 0
 
 #if STATE_DEBUG
 #define dmesg mesg
 #define dhex_dump hex_dump
 #else
-#define dmesg(x...) do{}while(0);
-#define dhex_dump(x...) do{}while(0);
+#define dmesg(x...) do{}while(0)
+#define dhex_dump(x...) do{}while(0)
 #endif
 
 #if SEGMENT_DEBUG
@@ -42,8 +42,6 @@ static const uint8_t minttl = 1;
 #define TCP_PAWS_24DAYS (60 * 60 * 24 * 24)
 #define TCP_PAWS_MSL 60
 #define TCP_PAWS_WINDOW 60
-
-#define TCP_TMO_SYN1 (90 * TIMESTAMP_HZ)
 
 struct tcpseg {
 	struct tcpflow *tf;
@@ -240,7 +238,7 @@ static int tcp_fast_options(struct tcpseg *cur)
 
 		step = *(tmp + 1);
 		if ( step < 2 ) {
-			dmesg(M_DEBUG, "Malformed tcp options");
+			mesg(M_DEBUG, "Malformed tcp options");
 			step = 2;
 		}
 		tmp += step;
@@ -311,7 +309,7 @@ static void tcp_syn_options(struct tcp_state *s,
 
 		step = *(tmp + 1);
 		if ( step < 2 ) {
-			dmesg(M_WARN, "Malformed tcp options");
+			mesg(M_WARN, "Malformed tcp options");
 			step = 2;
 		}
 
@@ -422,17 +420,17 @@ static void s1_processing(struct tcpseg *cur, struct tcp_session *s)
 	if ( cur->tcph->flags & TCP_ACK ) {
 		if ( !(between(cur->ack,
 				cur->rcv->snd_una, cur->rcv->snd_nxt)) ) {
-			dmesg(M_DEBUG, "bad ack on syn+ack");
+			state_err(cur, "bad ack on syn+ack");
 			return;
 		}
 	}else{
-		dmesg(M_DEBUG, "missing ack on syn+ack");
+		state_err(cur, "missing ack on syn+ack");
 		return;
 	}
 
 	/* Technically FIN is invalid here */
 	if ( cur->tcph->flags & (TCP_FIN|TCP_RST) ) {
-		mesg(M_DEBUG, "connection refused");
+		dmesg(M_DEBUG, "connection refused");
 		s->state = TCP_SESSION_C;
 		return;
 	}
@@ -476,7 +474,7 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 
 	if ( s->state == TCP_SESSION_S2 ) {
 		if ( !cur->to_server ) {
-			dmesg(M_DEBUG, "syn+ack resend?");
+			state_err(cur, "syn+ack resend?");
 			return 0;
 		}
 
@@ -489,7 +487,7 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 			s->c_wnd.snd_wl2 = cur->ack;
 			s->state = TCP_SESSION_S3;
 		}else{
-			dmesg(M_DEBUG, "bad ACK on 3whs");
+			state_err(cur, "bad ACK on 3whs");
 		}
 
 		return 1;
@@ -564,25 +562,25 @@ static void fin_processing(struct tcpseg *cur, struct tcp_session *s)
 	case TCP_SESSION_CF1:
 	case TCP_SESSION_CF2:
 		if ( cur->to_server ) {
-			dmesg(M_DEBUG, "fin resend?");
+			state_err(cur, "fin resend?");
 			return;
 		}
-		mesg(M_DEBUG, "server %sclose",
+		dmesg(M_DEBUG, "server %sclose",
 			(s->state == TCP_SESSION_CF1) ? "simultaneous " : "");
 		s->state++;
 		break;
 	case TCP_SESSION_SF1:
 	case TCP_SESSION_SF2:
 		if ( !cur->to_server ) {
-			dmesg(M_DEBUG, "fin resend?");
+			state_err(cur, "fin resend?");
 			return;
 		}
-		mesg(M_DEBUG, "client %sclose",
+		dmesg(M_DEBUG, "client %sclose",
 			(s->state == TCP_SESSION_SF1) ? "simultaneous " : "");
 		s->state++;
 		break;
 	default:
-		dmesg(M_DEBUG, "bad FIN");
+		state_err(cur, "FIN in wrong state");
 		return;
 	}
 	cur->snd->snd_nxt++;
@@ -601,7 +599,7 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 {
 	if ( s->state == TCP_SESSION_S1 ) {
 		if ( cur->to_server )
-			dmesg(M_DEBUG, "syn resend?");
+			state_err(cur, "syn resend?");
 		else
 			s1_processing(cur, s);
 		return;
@@ -611,7 +609,7 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 
 	/* First, check the sequence number */
 	if ( !sequence_check(cur, s) ) {
-		dmesg(M_DEBUG, "Failed sequence check");
+		state_err(cur, "Failed sequence check");
 		return;
 	}
 
@@ -632,9 +630,9 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 	/* Fourth, check the SYN bit */
 	if ( cur->tcph->flags & TCP_SYN ) {
 		if ( cur->tcph->flags & TCP_FIN ) {
-			dmesg(M_DEBUG, "XMAS attack");
+			state_err(cur, "XMAS attack");
 		}
-		dmesg(M_DEBUG, "In window SYN");
+		state_err(cur, "In window SYN");
 	}
 
 	cur->win <<= cur->snd->scale;
@@ -659,7 +657,9 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 
 		cur->snd->snd_una = cur->seq;
 		cur->snd->snd_nxt = cur->seq_end;
-		dhex_dump(cur->payload, cur->len, 16);
+		dmesg(M_DEBUG, "%u bytes data %.8x - %.8x",
+			cur->len, cur->seq, cur->seq_end);
+		//dhex_dump(cur->payload, cur->len, 16);
 	}
 
 	/* eighth, check the FIN bit */
@@ -787,9 +787,9 @@ void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 	dbg_stream("server", s->s_wnd);
 	if ( s->state == TCP_SESSION_C ) {
 		tcp_free(cur.tf, s);
-		mesg(M_DEBUG, "freed session state");
+		dmesg(M_DEBUG, "freed session state");
 	}
-	printf("\n\n");
+	dmesg(M_INFO, "");
 }
 
 void _tcpflow_dtor(struct tcpflow *tf)
