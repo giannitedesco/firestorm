@@ -56,6 +56,7 @@ struct tcpseg {
 	unsigned int saw_tstamp;
 	uint8_t *payload;
 	struct tcp_state *snd, *rcv;
+	unsigned int to_server;
 };
 
 static void dbg_segment(struct tcpseg *cur)
@@ -93,9 +94,10 @@ static void dbg_stream(const char *label, struct tcp_state *s)
 #if STREAM_DEBUG
 	if ( NULL == s )
 		return;
-	mesg(M_DEBUG, "\033[34m%s: su=%.8x sn=%.8x n=%.8x wup=%.8x w=%u\033[0m",
-		label, s->snd_una, s->snd_nxt,
-		s->rcv_nxt, s->rcv_wup, s->rcv_wnd);
+	mesg(M_DEBUG, "\033[34m%s: una=%.8x nxt=%.8x "
+			"wl1=%.8x wl2=%.8x wnd=%u\033[0m",
+			label, s->snd_una, s->snd_nxt,
+			s->snd_wl1, s->snd_wl2, s->snd_wnd);
 #endif
 }
 
@@ -120,7 +122,7 @@ static int between(uint32_t s1, uint32_t s2, uint32_t s3)
 
 static uint32_t tcp_receive_window(struct tcp_state *s)
 {
-	int32_t win = s->rcv_wup + s->rcv_wnd - s->rcv_nxt;
+	int32_t win = s->snd_wl2 + s->snd_wnd - s->snd_nxt;
 	if ( win < 0 )
 		win = 0;
 	return (uint32_t)win;
@@ -128,8 +130,8 @@ static uint32_t tcp_receive_window(struct tcp_state *s)
 
 static int tcp_sequence(struct tcp_state *s, uint32_t seq, uint32_t end_seq)
 {
-	return !tcp_before(end_seq, s->rcv_wup) &&
-		!tcp_after(seq, s->rcv_nxt + tcp_receive_window(s));
+	return !tcp_before(end_seq, s->snd_wl2) &&
+		!tcp_after(seq, s->snd_nxt + tcp_receive_window(s));
 }
 
 /* Hash function.
@@ -238,7 +240,7 @@ static int tcp_fast_options(struct tcpseg *cur)
 
 		step = *(tmp + 1);
 		if ( step < 2 ) {
-			dmesg(M_DEBUG, "Malicious tcp options");
+			dmesg(M_DEBUG, "Malformed tcp options");
 			step = 2;
 		}
 		tmp += step;
@@ -309,7 +311,7 @@ static void tcp_syn_options(struct tcp_state *s,
 
 		step = *(tmp + 1);
 		if ( step < 2 ) {
-			dmesg(M_WARN, "Malicious tcp options");
+			dmesg(M_WARN, "Malformed tcp options");
 			step = 2;
 		}
 
@@ -358,10 +360,11 @@ static void tcp_expire(struct tcpflow *tf,
 static void init_wnd(struct tcpseg *cur, struct tcp_state *s)
 {
 	memset(s, 0, sizeof(*s));
-	s->snd_una = cur->seq + 1;
+	s->snd_una = cur->seq;
 	s->snd_nxt = s->snd_una + 1;
-	s->rcv_wnd = cur->win;
-	s->rcv_wup = s->rcv_nxt;
+	s->snd_wnd = cur->win;
+	s->snd_wl1 = cur->seq;
+	s->snd_wl2 = cur->ack;
 	tcp_syn_options(s, cur->tcph, cur->ts / TIMESTAMP_HZ);
 }
 
@@ -413,141 +416,255 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 
 static void s1_processing(struct tcpseg *cur, struct tcp_session *s)
 {
+	assert(!cur->to_server);
+
+	/* Authenticate packet by checking ACK */
+	if ( cur->tcph->flags & TCP_ACK ) {
+		if ( !(between(cur->ack,
+				cur->rcv->snd_una, cur->rcv->snd_nxt)) ) {
+			dmesg(M_DEBUG, "bad ack on syn+ack");
+			return;
+		}
+	}else{
+		dmesg(M_DEBUG, "missing ack on syn+ack");
+		return;
+	}
+
+	/* Technically FIN is invalid here */
 	if ( cur->tcph->flags & (TCP_FIN|TCP_RST) ) {
-		/* FIXME: apply seq check */
 		mesg(M_DEBUG, "connection refused");
 		s->state = TCP_SESSION_C;
 		return;
 	}
 
 	if ( cur->tcph->flags & TCP_SYN ) {
-		dmesg(M_DEBUG, "#2 syn+ack");
+		cur->seq_end++;
+
+		dmesg(M_DEBUG, "#2 - syn+ack");
 		s->s_wnd = objcache_alloc(cur->tf->sstate_cache);
 		assert(NULL != s->s_wnd);
 		cur->snd = s->s_wnd;
 		init_wnd(cur, s->s_wnd);
+
+		if ( !(s->s_wnd->flags & TF_WSCALE_OK) ||
+			!(s->c_wnd.flags & TF_WSCALE_OK) ) {
+			s->s_wnd->scale = 0;
+			s->c_wnd.scale = 0;
+		}else{
+			dmesg(M_DEBUG, "wscale in use c=%u s=%u",
+				s->c_wnd.scale, s->s_wnd->scale);
+		}
+
+		s->s_wnd->snd_wnd = cur->win;
+		s->s_wnd->snd_wl1 = cur->seq;
+		s->s_wnd->snd_wl2 = cur->ack;
+
 		s->state = TCP_SESSION_S2;
 	}
 }
 
-static void s2_processing(struct tcpseg *cur, struct tcp_session *s)
+static int sequence_check(struct tcpseg *cur, struct tcp_session *s)
 {
-	if ( cur->tcph->flags & TCP_ACK ) {
-		dmesg(M_DEBUG, "#3 ack");
-		s->state = TCP_SESSION_S3;
-	}
+	if ( s->state == TCP_SESSION_S2 )
+		return (cur->seq == cur->snd->snd_nxt);
+	return tcp_sequence(cur->rcv, cur->seq, cur->seq_end);
 }
 
-static void e_processing(struct tcpseg *cur, struct tcp_session *s)
+static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 {
-	dhex_dump(cur->payload, cur->len, 16);
-	if ( cur->tcph->flags & TCP_FIN) {
-		if ( cur->snd == &s->c_wnd ) {
-			dmesg(M_DEBUG, "client close");
-			s->state = TCP_SESSION_CF1;
+	assert(cur->tcph->flags & TCP_ACK);
+
+	if ( s->state == TCP_SESSION_S2 ) {
+		if ( !cur->to_server ) {
+			dmesg(M_DEBUG, "syn+ack resend?");
+			return 0;
+		}
+
+		/* If SND.UNA =< SEG.ACK =< SND.NXT  */
+		if ( !tcp_after(s->s_wnd->snd_una, cur->ack) &&
+			!tcp_after(cur->ack, s->s_wnd->snd_nxt) ) {
+			dmesg(M_DEBUG, "#3 - ack");
+			s->c_wnd.snd_wnd = cur->win;
+			s->c_wnd.snd_wl1 = cur->seq;
+			s->c_wnd.snd_wl2 = cur->ack;
+			s->state = TCP_SESSION_S3;
 		}else{
-			dmesg(M_DEBUG, "server close");
-			s->state = TCP_SESSION_SF1;
+			dmesg(M_DEBUG, "bad ACK on 3whs");
+		}
+
+		return 1;
+	}
+
+	/* If SND.UNA < SEG.ACK =< SND.NXT then */
+	if ( tcp_before(cur->rcv->snd_una, cur->ack) &&
+		!tcp_after(cur->ack, cur->rcv->snd_nxt) ) {
+
+		/* set SND.UNA <- SEG.ACK. */
+		dmesg(M_DEBUG, "ack to %.8x", cur->ack);
+		cur->rcv->snd_una = cur->ack;
+
+		switch(s->state) {
+		case TCP_SESSION_CF1:
+			if ( !cur->to_server ) {
+				dmesg(M_DEBUG, "fin+ack for client");
+				s->state = TCP_SESSION_CF2;
+			}
+			break;
+		case TCP_SESSION_SF1:
+			if ( cur->to_server ) {
+				dmesg(M_DEBUG, "fin+ack for server");
+				s->state = TCP_SESSION_SF2;
+			}
+			break;
+		case TCP_SESSION_CF3:
+			if ( cur->to_server ) {
+				dmesg(M_DEBUG, "fin+ack for server");
+				s->state = TCP_SESSION_C;
+			}
+			break;
+		case TCP_SESSION_SF3:
+			if ( !cur->to_server ) {
+				dmesg(M_DEBUG, "fin+ack for client");
+				s->state = TCP_SESSION_C;
+			}
+			break;
+		}
+
+		/* the send window should be updated. 
+		 * If (SND.WL1 < SEG.SEQ or (SND.WL1 = SEG.SEQ and
+		 * SND.WL2 =< SEG.ACK)), set SND.WND <- SEG.WND, set
+		 * SND.WL1 <- SEG.SEQ, and set SND.WL2 <- SEG.ACK. */
+		if ( tcp_before(cur->snd->snd_wl1, cur->seq) ||
+			(cur->snd->snd_wl1 == cur->seq &&
+				!tcp_after(cur->snd->snd_wl2, cur->ack)) ) {
+			dmesg(M_DEBUG, "window update");
+			cur->snd->snd_wnd = cur->win;
+			cur->snd->snd_wl1 = cur->seq;
+			cur->snd->snd_wl2 = cur->ack;
 		}
 	}
+
+	return 1;
 }
 
-static void f1_processing(struct tcpseg *cur, struct tcp_session *s)
+static void fin_processing(struct tcpseg *cur, struct tcp_session *s)
 {
-	struct tcp_state *closer;
+	assert(cur->tcph->flags & TCP_FIN);
 
-	if ( s->state == TCP_SESSION_CF1 )
-		closer = &s->c_wnd;
-	else
-		closer = s->s_wnd;
-
-	if ( cur->snd == closer ) {
-		dmesg(M_DEBUG, "fin resend?");
+	switch(s->state) {
+	case TCP_SESSION_E:
+		if ( cur->to_server ) {
+			s->state = TCP_SESSION_CF1;
+			dmesg(M_DEBUG, "client close first");
+		}else{
+			s->state = TCP_SESSION_SF1;
+			dmesg(M_DEBUG, "server close first");
+		}
+		break;
+	case TCP_SESSION_CF1:
+	case TCP_SESSION_CF2:
+		if ( cur->to_server ) {
+			dmesg(M_DEBUG, "fin resend?");
+			return;
+		}
+		mesg(M_DEBUG, "server %sclose",
+			(s->state == TCP_SESSION_CF1) ? "simultaneous " : "");
+		s->state++;
+		break;
+	case TCP_SESSION_SF1:
+	case TCP_SESSION_SF2:
+		if ( !cur->to_server ) {
+			dmesg(M_DEBUG, "fin resend?");
+			return;
+		}
+		mesg(M_DEBUG, "client %sclose",
+			(s->state == TCP_SESSION_SF1) ? "simultaneous " : "");
+		s->state++;
+		break;
+	default:
+		dmesg(M_DEBUG, "bad FIN");
 		return;
 	}
-
-	if ( cur->tcph->flags & TCP_ACK ) {
-		dmesg(M_DEBUG, "ack for fin");
-		s->state++;
-	}
-
-	if ( cur->tcph->flags & TCP_FIN) {
-		dmesg(M_DEBUG, "simultaneous close");
-		s->state++;
-	}
+	cur->snd->snd_nxt++;
 }
 
-static void f2_processing(struct tcpseg *cur, struct tcp_session *s)
+static int paws_check(struct tcpseg *cur, struct tcp_session *s)
 {
-	struct tcp_state *closer;
-
-	if ( s->state == TCP_SESSION_CF2 )
-		closer = &s->c_wnd;
-	else
-		closer = s->s_wnd;
-
-	if ( cur->snd != closer && cur->tcph->flags & TCP_FIN ) {
-		dmesg(M_DEBUG, "final fin");
-		s->state++;
-	}
+	return 1;
 }
 
-static void f3_processing(struct tcpseg *cur, struct tcp_session *s)
+static void paws_update(struct tcpseg *cur, struct tcp_session *s)
 {
-	struct tcp_state *closer;
-
-	if ( s->state == TCP_SESSION_CF3 )
-		closer = &s->c_wnd;
-	else
-		closer = s->s_wnd;
-
-	if ( cur->snd == closer && cur->tcph->flags & TCP_ACK ) {
-		dmesg(M_DEBUG, "teardown");
-		s->state = TCP_SESSION_C;
-	}
 }
 
 static void state_track(struct tcpseg *cur, struct tcp_session *s)
 {
-	switch(s->state) {
-	case TCP_SESSION_S1:
-		if ( cur->snd != &s->c_wnd )
-			s1_processing(cur, s);
-		else
+	if ( s->state == TCP_SESSION_S1 ) {
+		if ( cur->to_server )
 			dmesg(M_DEBUG, "syn resend?");
-		break;
-	case TCP_SESSION_S2:
-		if ( cur->snd == &s->c_wnd )
-			s2_processing(cur, s);
 		else
-			dmesg(M_DEBUG, "syn+ack resend?");
-		break;
-	case TCP_SESSION_S3:
-		if ( cur->snd == &s->c_wnd )
-			dmesg(M_DEBUG, "client sent first data");
-		else
-			dmesg(M_DEBUG, "server sent first data");
-		s->state = TCP_SESSION_E;
-		/* fall through */
-	case TCP_SESSION_E:
-		e_processing(cur, s);
-		break;
-	case TCP_SESSION_CF1:
-	case TCP_SESSION_SF1:
-		f1_processing(cur, s);
-		break;
-	case TCP_SESSION_CF2:
-	case TCP_SESSION_SF2:
-		f2_processing(cur, s);
-		break;
-	case TCP_SESSION_CF3:
-	case TCP_SESSION_SF3:
-		f3_processing(cur, s);
-		break;
-	case TCP_SESSION_C:
-		dmesg(M_DEBUG, "2MSL timeout");
-		break;
+			s1_processing(cur, s);
+		return;
 	}
+
+	assert(cur->snd && cur->rcv);
+
+	/* First, check the sequence number */
+	if ( !sequence_check(cur, s) ) {
+		dmesg(M_DEBUG, "Failed sequence check");
+		return;
+	}
+
+	if ( !paws_check(cur, s) )
+		return;
+
+	/* Second, check the RST bit */
+	if ( cur->tcph->flags & TCP_RST ) {
+		dmesg(M_DEBUG, "connection reset by peer");
+		s->state = TCP_SESSION_C;
+		return;
+	}
+
+	paws_update(cur, s);
+
+	/* Third, check security and precendece (pfft) */
+
+	/* Fourth, check the SYN bit */
+	if ( cur->tcph->flags & TCP_SYN ) {
+		if ( cur->tcph->flags & TCP_FIN ) {
+			dmesg(M_DEBUG, "XMAS attack");
+		}
+		dmesg(M_DEBUG, "In window SYN");
+	}
+
+	cur->win <<= cur->snd->scale;
+
+	/* Fifth, check the ack field */
+	if ( cur->tcph->flags & TCP_ACK )
+		if ( !ack_processing(cur, s) )
+			return;
+
+	/* Sixth Check URG field */
+	if ( cur->tcph->flags & TCP_URG ) {
+		dmesg(M_DEBUG, "URG urgp=%u", sys_be16(cur->tcph->urp));
+	}
+
+	/* seventh process the segment text */
+	if ( cur->len ) {
+		if ( s->state == TCP_SESSION_S3 ) {
+			dmesg(M_DEBUG, "%s sent first data",
+				cur->to_server ? "client" : "server");
+			s->state = TCP_SESSION_E;
+		}
+
+		cur->snd->snd_una = cur->seq;
+		cur->snd->snd_nxt = cur->seq_end;
+		dhex_dump(cur->payload, cur->len, 16);
+	}
+
+	/* eighth, check the FIN bit */
+	if ( cur->tcph->flags & TCP_FIN )
+		fin_processing(cur, s);
 
 	/* TODO: update timeouts */
 	list_move(&cur->tf->lru, &s->lru);
@@ -627,7 +744,6 @@ static void seg_init(struct tcpseg *cur, struct ip_flow_state *ipfs,
 
 void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 {
-	unsigned int to_server;
 	struct tcp_session *s;
 	struct tcpseg cur;
 
@@ -647,14 +763,14 @@ void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 	}
 
 	s = tcp_collide(cur.tf->hash[cur.hash],
-			cur.iph, cur.tcph, &to_server);
+			cur.iph, cur.tcph, &cur.to_server);
 	if ( s == NULL ) {
 		s = new_session(&cur);
 		if ( s == NULL )
 			return;
 	}else{
 		/* Figure out which side is which */
-		if ( to_server ) {
+		if ( cur.to_server ) {
 			cur.snd = &s->c_wnd;
 			cur.rcv = s->s_wnd;
 		}else{

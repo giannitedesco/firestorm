@@ -68,10 +68,9 @@ struct tcp_state {
 
 	uint32_t	snd_una; /* first byte we want ack for */
 	uint32_t	snd_nxt; /* next sequence to send */
-
-	uint32_t	rcv_nxt; /* what we want to recv next */
-	uint32_t	rcv_wnd; /* receiver window */
-	uint32_t	rcv_wup; /* rcv_nxt on last window update */
+	uint32_t	snd_wnd; /* window size */
+	uint32_t	snd_wl1; /* seq for last wup */
+	uint32_t	snd_wl2; /* ack for last wup */
 
 	uint32_t	ts_recent; /* a recent timestamp */
 	uint32_t	ts_recent_stamp; /* local time on it */
@@ -110,9 +109,6 @@ struct tcp_session {
 
 	/* Per-server data structure */
 	struct tcp_server *server;
-
-	/* expiry time */
-	timestamp_t expire;
 };
 
 #define TCPHASH 509 /* prime */
