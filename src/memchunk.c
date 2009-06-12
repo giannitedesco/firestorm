@@ -346,6 +346,8 @@ void objcache_free(obj_cache_t o, void *obj)
 {
 	struct chunk_hdr *hdr;
 
+	memset(obj, 0xa5, o->o_sz);
+
 	/* 1. Add object back on to the free list */
 	hdr = ptr2hdr(o->o_chunk, obj);
 	assert(hdr->use >= 1);
