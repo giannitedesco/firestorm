@@ -132,6 +132,7 @@ struct tcpflow {
 	unsigned int num_active;
 	unsigned int max_active;
 	unsigned int num_segments;
+	unsigned int state_errs;
 
 	unsigned int num_csum_errs;
 	unsigned int num_ttl_errs;

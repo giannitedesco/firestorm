@@ -418,10 +418,12 @@ static void s1_processing(struct tcpseg *cur, struct tcp_session *s)
 		if ( !(between(cur->ack,
 				cur->rcv->snd_una, cur->rcv->snd_nxt)) ) {
 			dmesg(M_DEBUG, "bad ack on syn+ack");
+			cur->tf->state_errs++;
 			return;
 		}
 	}else{
 		dmesg(M_DEBUG, "missing ack on syn+ack");
+		cur->tf->state_errs++;
 		return;
 	}
 
@@ -473,6 +475,7 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 	if ( s->state == TCP_SESSION_S2 ) {
 		if ( !cur->to_server ) {
 			dmesg(M_DEBUG, "syn+ack resend?");
+			cur->tf->state_errs++;
 			return 0;
 		}
 
@@ -486,6 +489,7 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 			s->state = TCP_SESSION_S3;
 		}else{
 			dmesg(M_DEBUG, "bad ACK on 3whs");
+			cur->tf->state_errs++;
 		}
 
 		return 1;
@@ -610,6 +614,7 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 
 	/* First, check the sequence number */
 	if ( !sequence_check(cur, s) ) {
+		cur->tf->state_errs++;
 		dmesg(M_DEBUG, "Failed sequence check");
 		return;
 	}
@@ -806,8 +811,8 @@ void _tcpflow_dtor(struct tcpflow *tf)
 		tf->num_timeouts);
 	mesg(M_INFO,"tcpstream: max_active=%u num_active=%u",
 		tf->max_active, tf->num_active);
-	mesg(M_INFO,"tcpstream: %u segments processed",
-		tf->num_segments);
+	mesg(M_INFO,"tcpstream: %u segments processed, %u state errors",
+		tf->num_segments, tf->state_errs);
 //	objcache_fini(&tf->session_cache);
 //	objcache_fini(&tf->server_cache);
 //	objcache_fini(&tf->sstate_cache);
