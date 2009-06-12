@@ -203,7 +203,7 @@ static const struct pkt_iphdr *icmp_try_inner(struct _pkt *p,
 	}
 
 	if ( _ip_csum(iph) ) {
-		mesg(M_WARN, "icmp: bad ip checksum in payload");
+		dmesg(M_WARN, "icmp: bad ip checksum in payload");
 		return NULL;
 	}
 

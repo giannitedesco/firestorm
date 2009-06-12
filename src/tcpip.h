@@ -91,7 +91,7 @@ struct tcp_state {
 
 struct tcp_session {
 	/* Timeout and LRU list */
-	struct list_head lru;
+	struct list_head list;
 
 	/* Hash table collision chaining */
 	struct tcp_session **hash_pprev, *hash_next;
@@ -107,8 +107,9 @@ struct tcp_session {
 	struct tcp_state c_wnd;
 	struct tcp_state *s_wnd;
 
+	uint32_t expire;
 	/* Per-server data structure */
-	struct tcp_server *server;
+	//struct tcp_server *server;
 };
 
 #define TCPHASH 509 /* prime */
@@ -123,7 +124,9 @@ struct tcpflow {
 
 	/* timeout lists */
 	struct list_head lru;
-	struct list_head tmo_30;
+#define TCP_TMO_MSL  (30 * TIMESTAMP_HZ)
+#define TCP_TMO_2MSL  (2 * TCP_TMO_MSL)
+	struct list_head tmo_msl;
 
 	/* stats */
 	unsigned int num_active;
@@ -132,6 +135,7 @@ struct tcpflow {
 
 	unsigned int num_csum_errs;
 	unsigned int num_ttl_errs;
+	unsigned int num_timeouts;
 };
 
 #define IPHASH 127 /* Mersenne prime */

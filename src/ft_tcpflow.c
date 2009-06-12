@@ -99,19 +99,6 @@ static void dbg_stream(const char *label, struct tcp_state *s)
 #endif
 }
 
-static void state_err(struct tcpseg *cur, const char *msg)
-{
-#if STATE_DEBUG
-	ipstr_t sip, dip;
-
-	iptostr(sip, cur->iph->saddr);
-	iptostr(dip, cur->iph->daddr);
-	mesg(M_ERR, "%s:%u -> %s:%u - %s",
-		sip, sys_be16(cur->tcph->sport),
-		dip, sys_be16(cur->tcph->dport), msg);
-#endif
-}
-
 /* Wrap-safe seq/ack calculations */
 static int between(uint32_t s1, uint32_t s2, uint32_t s3)
 {
@@ -320,24 +307,23 @@ static void tcp_syn_options(struct tcp_state *s,
 static void tcp_free(struct tcpflow *tf, struct tcp_session *s)
 {
 	tcp_hash_unlink(s);
-	list_del(&s->lru);
+	list_del(&s->list);
 	if ( s->s_wnd )
 		objcache_free(tf->sstate_cache, s->s_wnd);
-	memset(s, 0xa5, sizeof(*s));
 	objcache_free(tf->session_cache, s);
 	tf->num_active--;
 }
 
 /* TMO: Check timeouts */
-#if 0
-static void tcp_tmo_check(struct tcpflow *tf, timestamp_t now)
+static void tcp_tmo_check(struct tcpflow *tf,
+			struct list_head *list, timestamp_t now)
 {
 	struct tcp_session *s;
 
 	/* Actually, the generic list API made this more ugly */
-	while ( !list_empty(&tf->syn1) ) {
-		s = list_entry(tf->syn1.prev, struct tcp_session, tmo);
-		if ( !time_before(s->expire, now) )
+	while ( !list_empty(list) ) {
+		s = list_entry(list->prev, struct tcp_session, list);
+		if ( !tcp_after(now / TIMESTAMP_HZ, s->expire) )
 			return;
 
 		tcp_free(tf, s);
@@ -346,14 +332,23 @@ static void tcp_tmo_check(struct tcpflow *tf, timestamp_t now)
 }
 
 /* TMO: Set expiry */
-static void tcp_expire(struct tcpflow *tf,
+static void set_expire(struct list_head *list,
 				struct tcp_session *s,
 				timestamp_t t)
 {
-	s->expire = t;
-	list_move(&tf->syn1, &s->tmo);
+	s->expire = t / TIMESTAMP_HZ;
+	list_move(&s->list, list);
 }
-#endif
+
+static void timer_msl(struct tcpseg *cur, struct tcp_session *s)
+{
+	set_expire(&cur->tf->tmo_msl, s, cur->ts + TCP_TMO_MSL);
+}
+
+static void lru(struct tcpseg *cur, struct tcp_session *s)
+{
+	set_expire(&cur->tf->lru, s, 0);
+}
 
 static void init_wnd(struct tcpseg *cur, struct tcp_state *s)
 {
@@ -377,7 +372,7 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 	 */
 	if ( (cur->tcph->flags & (TCP_SYN|TCP_ACK|TCP_FIN|TCP_RST))
 			!= TCP_SYN ) {
-		state_err(cur, "not a valid syn packet");
+		dmesg(M_DEBUG, "not a valid syn packet");
 		return NULL;
 	}
 
@@ -386,6 +381,8 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 		mesg(M_CRIT, "tcp OOM");
 		return NULL;
 	}
+
+	INIT_LIST_HEAD(&s->list);
 
 	dmesg(M_DEBUG, "#1 - syn: half-state allocated");
 
@@ -406,8 +403,8 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 	s->s_wnd = NULL;
 
 	/* link it all up and set up timeouts*/
-	list_add(&s->lru, &cur->tf->tmo_30);
 	tcp_hash_link(cur->tf, s, cur->hash);
+	timer_msl(cur, s);
 
 	return s;
 }
@@ -420,11 +417,11 @@ static void s1_processing(struct tcpseg *cur, struct tcp_session *s)
 	if ( cur->tcph->flags & TCP_ACK ) {
 		if ( !(between(cur->ack,
 				cur->rcv->snd_una, cur->rcv->snd_nxt)) ) {
-			state_err(cur, "bad ack on syn+ack");
+			dmesg(M_DEBUG, "bad ack on syn+ack");
 			return;
 		}
 	}else{
-		state_err(cur, "missing ack on syn+ack");
+		dmesg(M_DEBUG, "missing ack on syn+ack");
 		return;
 	}
 
@@ -458,6 +455,7 @@ static void s1_processing(struct tcpseg *cur, struct tcp_session *s)
 		s->s_wnd->snd_wl2 = cur->ack;
 
 		s->state = TCP_SESSION_S2;
+		lru(cur, s);
 	}
 }
 
@@ -474,7 +472,7 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 
 	if ( s->state == TCP_SESSION_S2 ) {
 		if ( !cur->to_server ) {
-			state_err(cur, "syn+ack resend?");
+			dmesg(M_DEBUG, "syn+ack resend?");
 			return 0;
 		}
 
@@ -487,7 +485,7 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 			s->c_wnd.snd_wl2 = cur->ack;
 			s->state = TCP_SESSION_S3;
 		}else{
-			state_err(cur, "bad ACK on 3whs");
+			dmesg(M_DEBUG, "bad ACK on 3whs");
 		}
 
 		return 1;
@@ -550,6 +548,7 @@ static void fin_processing(struct tcpseg *cur, struct tcp_session *s)
 	assert(cur->tcph->flags & TCP_FIN);
 
 	switch(s->state) {
+	case TCP_SESSION_S3:
 	case TCP_SESSION_E:
 		if ( cur->to_server ) {
 			s->state = TCP_SESSION_CF1;
@@ -562,7 +561,7 @@ static void fin_processing(struct tcpseg *cur, struct tcp_session *s)
 	case TCP_SESSION_CF1:
 	case TCP_SESSION_CF2:
 		if ( cur->to_server ) {
-			state_err(cur, "fin resend?");
+			dmesg(M_DEBUG, "fin resend?");
 			return;
 		}
 		dmesg(M_DEBUG, "server %sclose",
@@ -572,7 +571,7 @@ static void fin_processing(struct tcpseg *cur, struct tcp_session *s)
 	case TCP_SESSION_SF1:
 	case TCP_SESSION_SF2:
 		if ( !cur->to_server ) {
-			state_err(cur, "fin resend?");
+			dmesg(M_DEBUG, "fin resend?");
 			return;
 		}
 		dmesg(M_DEBUG, "client %sclose",
@@ -580,7 +579,7 @@ static void fin_processing(struct tcpseg *cur, struct tcp_session *s)
 		s->state++;
 		break;
 	default:
-		state_err(cur, "FIN in wrong state");
+		dmesg(M_DEBUG, "FIN in wrong state");
 		return;
 	}
 	cur->snd->snd_nxt++;
@@ -598,10 +597,12 @@ static void paws_update(struct tcpseg *cur, struct tcp_session *s)
 static void state_track(struct tcpseg *cur, struct tcp_session *s)
 {
 	if ( s->state == TCP_SESSION_S1 ) {
-		if ( cur->to_server )
-			state_err(cur, "syn resend?");
-		else
+		if ( cur->to_server ) {
+			dmesg(M_DEBUG, "syn resend?");
+			timer_msl(cur, s);
+		}else{
 			s1_processing(cur, s);
+		}
 		return;
 	}
 
@@ -609,7 +610,7 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 
 	/* First, check the sequence number */
 	if ( !sequence_check(cur, s) ) {
-		state_err(cur, "Failed sequence check");
+		dmesg(M_DEBUG, "Failed sequence check");
 		return;
 	}
 
@@ -630,12 +631,14 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 	/* Fourth, check the SYN bit */
 	if ( cur->tcph->flags & TCP_SYN ) {
 		if ( cur->tcph->flags & TCP_FIN ) {
-			state_err(cur, "XMAS attack");
+			dmesg(M_DEBUG, "XMAS attack");
 		}
-		state_err(cur, "In window SYN");
+		dmesg(M_DEBUG, "In window SYN");
 	}
 
 	cur->win <<= cur->snd->scale;
+
+	lru(cur, s);
 
 	/* Fifth, check the ack field */
 	if ( cur->tcph->flags & TCP_ACK )
@@ -644,7 +647,7 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 
 	/* Sixth Check URG field */
 	if ( cur->tcph->flags & TCP_URG ) {
-		dmesg(M_DEBUG, "URG urgp=%u", sys_be16(cur->tcph->urp));
+		mesg(M_DEBUG, "URG urgp=%u", sys_be16(cur->tcph->urp));
 	}
 
 	/* seventh process the segment text */
@@ -659,15 +662,12 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 		cur->snd->snd_nxt = cur->seq_end;
 		dmesg(M_DEBUG, "%u bytes data %.8x - %.8x",
 			cur->len, cur->seq, cur->seq_end);
-		//dhex_dump(cur->payload, cur->len, 16);
+		dhex_dump(cur->payload, cur->len, 16);
 	}
 
 	/* eighth, check the FIN bit */
 	if ( cur->tcph->flags & TCP_FIN )
 		fin_processing(cur, s);
-
-	/* TODO: update timeouts */
-	list_move(&cur->tf->lru, &s->lru);
 }
 
 static int tcp_csum(struct tcpseg *cur)
@@ -739,6 +739,8 @@ static void seg_init(struct tcpseg *cur, struct ip_flow_state *ipfs,
 
 	cur->tf->num_segments++;
 
+	tcp_tmo_check(cur->tf, &cur->tf->tmo_msl, cur->ts);
+
 	dbg_segment(cur);
 }
 
@@ -746,18 +748,19 @@ void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 {
 	struct tcp_session *s;
 	struct tcpseg cur;
+	int free = 0;
 
 	seg_init(&cur, sptr, pkt, (struct tcp_dcb *)dcb_ptr);
 
 	if ( cur.iph->ttl < minttl ) {
 		cur.tf->num_ttl_errs++;
-		state_err(&cur, "TTL evasion");
+		dmesg(M_DEBUG, "TTL evasion");
 		return;
 	}
 
 	if ( !tcp_csum(&cur) ) {
 		cur.tf->num_csum_errs++;
-		state_err(&cur, "bad checksum");
+		dmesg(M_DEBUG, "bad checksum");
 		dhex_dump(cur.payload, cur.len, 16);
 		return;
 	}
@@ -781,19 +784,26 @@ void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr)
 		tcp_hash_mtf(cur.tf, s, cur.hash);
 
 		state_track(&cur, s);
+		if ( s->state == TCP_SESSION_C )
+			free = 1;
 	}
 
 	dbg_stream("client", &s->c_wnd);
 	dbg_stream("server", s->s_wnd);
-	if ( s->state == TCP_SESSION_C ) {
+	if ( free ) {
 		tcp_free(cur.tf, s);
 		dmesg(M_DEBUG, "freed session state");
+
 	}
-	dmesg(M_INFO, "");
+	dmesg(M_INFO, "\n");
 }
 
 void _tcpflow_dtor(struct tcpflow *tf)
 {
+	mesg(M_INFO,"tcpstream: errors: %u csum, %u ttl, %u timeout",
+		tf->num_csum_errs,
+		tf->num_ttl_errs,
+		tf->num_timeouts);
 	mesg(M_INFO,"tcpstream: max_active=%u num_active=%u",
 		tf->max_active, tf->num_active);
 	mesg(M_INFO,"tcpstream: %u segments processed",
@@ -806,7 +816,7 @@ void _tcpflow_dtor(struct tcpflow *tf)
 int _tcpflow_ctor(struct tcpflow *tf)
 {
 	INIT_LIST_HEAD(&tf->lru);
-	INIT_LIST_HEAD(&tf->tmo_30);
+	INIT_LIST_HEAD(&tf->tmo_msl);
 
 	dmesg(M_INFO, "tcpflow: %u bytes state", sizeof(*tf));
 
