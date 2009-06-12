@@ -83,7 +83,7 @@ static struct _frame *live_dequeue(struct _source *s, struct iothread *io)
 	struct fpcap_priv *p = (struct fpcap_priv *)s;
 	int ret;
 	
-	ret = pcap_dispatch(p->pcap_desc, -1,
+	ret = pcap_dispatch(p->pcap_desc, 1,
 		(pcap_handler)lpf_callback, (u_char *)p);
 
 	if ( ret < 0 ) {
