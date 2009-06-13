@@ -20,9 +20,9 @@
 
 #include "tcpip.h"
 
-#define STATE_DEBUG 0
-#define SEGMENT_DEBUG 0
-#define STREAM_DEBUG 0
+#define STATE_DEBUG 1
+#define SEGMENT_DEBUG 1
+#define STREAM_DEBUG 1
 
 #if STATE_DEBUG
 #define dmesg mesg
@@ -304,12 +304,29 @@ static void tcp_syn_options(struct tcp_state *s,
 	}
 }
 
+static void reasm_fini(struct tcp_state *s)
+{
+	size_t sz;
+	uint8_t *ptr;
+
+	ptr = _tcp_reassemble(&s->reasm, s->snd_una, &sz);
+	if ( NULL != ptr ) {
+		mesg(M_DEBUG, "got %u bytes", sz);
+		hex_dump(ptr, sz, 16);
+		free(ptr);
+	}
+	_tcp_reasm_free(&s->reasm);
+}
+
 static void tcp_free(struct tcpflow *tf, struct tcp_session *s)
 {
 	tcp_hash_unlink(s);
 	list_del(&s->list);
-	if ( s->s_wnd )
+	reasm_fini(&s->c_wnd);
+	if ( s->s_wnd ) {
+		reasm_fini(s->s_wnd);
 		objcache_free(tf->sstate_cache, s->s_wnd);
+	}
 	objcache_free(tf->session_cache, s);
 	tf->num_active--;
 }
@@ -486,6 +503,10 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 			s->c_wnd.snd_wnd = cur->win;
 			s->c_wnd.snd_wl1 = cur->seq;
 			s->c_wnd.snd_wl2 = cur->ack;
+			s->c_wnd.reasm.reasm_begin =
+				s->c_wnd.snd_nxt;
+			s->s_wnd->reasm.reasm_begin =
+				s->s_wnd->snd_nxt;
 			s->state = TCP_SESSION_S3;
 		}else{
 			dmesg(M_DEBUG, "bad ACK on 3whs");
@@ -570,7 +591,7 @@ static void fin_processing(struct tcpseg *cur, struct tcp_session *s)
 		}
 		dmesg(M_DEBUG, "server %sclose",
 			(s->state == TCP_SESSION_CF1) ? "simultaneous " : "");
-		s->state++;
+		s->state = TCP_SESSION_CF3;
 		break;
 	case TCP_SESSION_SF1:
 	case TCP_SESSION_SF2:
@@ -580,7 +601,7 @@ static void fin_processing(struct tcpseg *cur, struct tcp_session *s)
 		}
 		dmesg(M_DEBUG, "client %sclose",
 			(s->state == TCP_SESSION_SF1) ? "simultaneous " : "");
-		s->state++;
+		s->state = TCP_SESSION_SF3;
 		break;
 	default:
 		dmesg(M_DEBUG, "FIN in wrong state");
@@ -668,6 +689,8 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 		dmesg(M_DEBUG, "%u bytes data %.8x - %.8x",
 			cur->len, cur->seq, cur->seq_end);
 		dhex_dump(cur->payload, cur->len, 16);
+		_tcp_reasm_inject(&cur->snd->reasm, cur->seq,
+					cur->len, cur->payload);
 	}
 
 	/* eighth, check the FIN bit */

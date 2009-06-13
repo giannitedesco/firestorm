@@ -15,19 +15,6 @@ SRC_PCAP = c_pcap.c
 endif
 
 firestorm_SOURCES = \
-	c_tcpdump.c \
-	$(SRC_PCAP) \
-	\
-	ft_ipdefrag.c \
-	ft_tcpflow.c \
-	p_ether.c \
-	p_ipx.c \
-	p_ipv4.c \
-	p_ipv6.c \
-	p_null.c \
-	p_sll.c \
-	p_arp.c \
-	\
 	memchunk.c \
 	timers.c \
 	mpool.c \
@@ -42,7 +29,22 @@ firestorm_SOURCES = \
 	capture.c \
 	packet.c \
 	decode.c \
+	c_tcpdump.c \
+	$(SRC_PCAP) \
+	\
+	p_null.c \
+	p_sll.c \
+	p_ether.c \
+	p_arp.c \
+	\
+	p_ipx.c \
+	p_ipv6.c \
+	\
+	p_ipv4.c \
+	ft_ipdefrag.c \
+	ft_tcpflow.c \
+	tcp_reasm.c \
 	\
 	s_pipeline.c \
-	sensor.c \
-	s_mesg.c
+	s_mesg.c \
+	sensor.c

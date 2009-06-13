@@ -6,6 +6,10 @@
 #define TCP_MAXWIN		65535
 #define TCP_MAX_WINSHIFT	16
 
+/* TIMEOUTS */
+#define TCP_TMO_MSL  (30ULL * TIMESTAMP_HZ)
+#define TCP_TMO_2MSL  (2ULL * TCP_TMO_MSL)
+
 /* OPTIONS */
 #define TCPOPT_EOL 0
 #define TCPOPT_NOP 1
@@ -89,11 +93,12 @@ struct tcp_phdr {
 /* Wrap-safe TCP seq number comparison */
 static inline int tcp_before(uint32_t s1, uint32_t s2)
 {
-	return (int32_t)(s1-s2) < 0;
+	return (int32_t)(s1 - s2) < 0;
 }
 
 static inline int tcp_after(uint32_t s1, uint32_t s2)
 {
-	return (int32_t)(s2-s1) < 0;
+	return (int32_t)(s2 - s1) < 0;
 }
+
 #endif /* _PKT_TCP_HEADER_INCLUDED_ */
