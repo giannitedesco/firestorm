@@ -59,7 +59,7 @@ struct tcp_server {
 /* Reassembly buffer */
 struct tcp_sbuf {
 	struct tcpr_node *root; /* root node of rbtree */
-	uint32_t begin; /* sequence number of first byte (not always rcv_nxt) */
+	uint32_t begin; /* sequence number of first byte */
 	uint32_t reasm_begin; /* sequence number of first unswallowed byte */
 };
 

@@ -463,7 +463,7 @@ static void reasm_pkt(struct tcp_sbuf *s, uint32_t seq,
 	struct rbuf *rb = NULL;
 	int side;
 
-	dmesg(M_DEBUG, " Split to %u-%u len=%u", seq, seq + len, len);
+	dmesg(M_DEBUG, " Split to %u-%u len=%u", begin, end, len);
 
 	for(p=&s->root, n = parent = NULL; *p; ) {
 		parent = *p;

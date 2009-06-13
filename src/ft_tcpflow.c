@@ -20,9 +20,9 @@
 
 #include "tcpip.h"
 
-#define STATE_DEBUG 1
-#define SEGMENT_DEBUG 1
-#define STREAM_DEBUG 1
+#define STATE_DEBUG 0
+#define SEGMENT_DEBUG 0
+#define STREAM_DEBUG 0
 
 #if STATE_DEBUG
 #define dmesg mesg
@@ -505,7 +505,11 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 			s->c_wnd.snd_wl2 = cur->ack;
 			s->c_wnd.reasm.reasm_begin =
 				s->c_wnd.snd_nxt;
+			s->c_wnd.reasm.begin =
+				s->c_wnd.snd_nxt;
 			s->s_wnd->reasm.reasm_begin =
+				s->s_wnd->snd_nxt;
+			s->s_wnd->reasm.begin =
 				s->s_wnd->snd_nxt;
 			s->state = TCP_SESSION_S3;
 		}else{
