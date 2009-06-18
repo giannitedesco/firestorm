@@ -73,7 +73,7 @@ static uint32_t node_len(struct tcpr_node *n)
 }
 
 /* Rbuf allocation
- * TODO: ditch malloc for a preallocated stack + eviction
+ * TODO: ditch malloc for objcache
  */
 static struct rbuf *rbuf_alloc(struct tcp_sbuf *s, uint32_t seq)
 {

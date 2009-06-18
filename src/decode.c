@@ -15,14 +15,14 @@
 #define NAMESPACE_ALLOC_MASK	(NAMESPACE_ALLOC_CHUNK-1)
 
 static struct _namespace ns_arr[NS_MAX] = {
-	[NS_DLT] {.ns_label = "DLT"},
-	[NS_UNIXPF] {.ns_label = "UNIX"},
-	[NS_ETHER] {.ns_label = "ETHER"},
-	[NS_INET] {.ns_label = "INET"},
-	[NS_INET6] {.ns_label = "INET6"},
-	[NS_IPX] {.ns_label = "IPX"},
-	[NS_APPLE] {.ns_label = "APPLE"},
-	[NS_CISCO] {.ns_label = "CISCO"},
+	[NS_DLT]	{.ns_label = "DLT"},
+	[NS_UNIXPF]	{.ns_label = "UNIX"},
+	[NS_ETHER]	{.ns_label = "ETHER"},
+	[NS_INET]	{.ns_label = "INET"},
+	[NS_INET6]	{.ns_label = "INET6"},
+	[NS_IPX]	{.ns_label = "IPX"},
+	[NS_APPLE]	{.ns_label = "APPLE"},
+	[NS_CISCO]	{.ns_label = "CISCO"},
 };
 
 static unsigned int num_decoders;
@@ -93,11 +93,13 @@ struct _dcb *decode_layer(pkt_t pkt, struct _proto *p)
 struct _dcb *decode_layer2(pkt_t pkt, struct _proto *p, size_t sz)
 {
 	struct _dcb *ret;
+	assert(sz <= p->p_dcb_sz);
 	ret = dcb_alloc(pkt, sz);
 	if ( ret )
 		ret->dcb_proto = p;
 	return ret;
 }
+
 void decode_next(pkt_t pkt, proto_ns_t ns, proto_id_t id)
 {
 	const struct _decoder *d;
@@ -191,7 +193,7 @@ void decode_init(void)
 				ns_arr[i].ns_label);
 		for(j = 0; j < ns_arr[i].ns_num_reg; j++)
 			fprintf(f, "\t\"ns_%s\" -> \"d_%s\" "
-				"[label=\"id 0x%x\"];\n",
+				"[label=\"0x%x\" color=red];\n",
 				ns_arr[i].ns_label,
 				ns_arr[i].ns_reg[j].nse_decoder->d_label,
 				ns_arr[i].ns_reg[j].nse_id);
@@ -217,7 +219,7 @@ void decode_init(void)
 	for(p = special_protos; p; p = p->p_next) {
 		if ( p->p_dcb_sz > max_dcb )
 			max_dcb = p->p_dcb_sz;
-		fprintf(f, "\t\"p_%s\" [label=\"%s\" "
+		fprintf(f, "\t\"p_%s\" [label=\"<< %s >>\" "
 			"fillcolor=\"#ffb0b0\"\n];",
 			p->p_label, p->p_label);
 	}

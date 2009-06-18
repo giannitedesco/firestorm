@@ -147,7 +147,6 @@ static void flowtrack_packet(struct _pipeline *p, struct _pkt *pkt)
 	}
 }
 
-
 static unsigned int do_dequeue(struct _pipeline *p, struct _source *s,
 				struct iothread *io)
 {

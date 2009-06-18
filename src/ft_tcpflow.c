@@ -119,6 +119,30 @@ static int tcp_sequence(struct tcp_state *s, uint32_t seq, uint32_t end_seq)
 		!tcp_after(seq, s->snd_nxt + tcp_receive_window(s));
 }
 
+static void reasm_init(struct tcp_state *s)
+{
+	s->reasm.reasm_begin = s->snd_nxt;
+	s->reasm.begin = s->snd_nxt;
+}
+
+static void reasm_fini(struct tcp_state *s)
+{
+	size_t sz;
+	uint8_t *ptr;
+
+	if ( NULL == s->reasm.root )
+		return;
+
+	ptr = _tcp_reassemble(&s->reasm, s->snd_una, &sz);
+	if ( NULL != ptr ) {
+		mesg(M_DEBUG, "got %u bytes", sz);
+		hex_dump(ptr, sz, 16);
+		free(ptr);
+	}
+
+	_tcp_reasm_free(&s->reasm);
+}
+
 /* Hash function.
  * Hashes to the same value even when source and destinations are inverted.
  */
@@ -302,20 +326,6 @@ static void tcp_syn_options(struct tcp_state *s,
 
 		tmp += step;
 	}
-}
-
-static void reasm_fini(struct tcp_state *s)
-{
-	size_t sz;
-	uint8_t *ptr;
-
-	ptr = _tcp_reassemble(&s->reasm, s->snd_una, &sz);
-	if ( NULL != ptr ) {
-		mesg(M_DEBUG, "got %u bytes", sz);
-		hex_dump(ptr, sz, 16);
-		free(ptr);
-	}
-	_tcp_reasm_free(&s->reasm);
 }
 
 static void tcp_free(struct tcpflow *tf, struct tcp_session *s)
@@ -503,14 +513,8 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 			s->c_wnd.snd_wnd = cur->win;
 			s->c_wnd.snd_wl1 = cur->seq;
 			s->c_wnd.snd_wl2 = cur->ack;
-			s->c_wnd.reasm.reasm_begin =
-				s->c_wnd.snd_nxt;
-			s->c_wnd.reasm.begin =
-				s->c_wnd.snd_nxt;
-			s->s_wnd->reasm.reasm_begin =
-				s->s_wnd->snd_nxt;
-			s->s_wnd->reasm.begin =
-				s->s_wnd->snd_nxt;
+			reasm_init(&s->c_wnd);
+			reasm_init(s->s_wnd);
 			s->state = TCP_SESSION_S3;
 		}else{
 			dmesg(M_DEBUG, "bad ACK on 3whs");

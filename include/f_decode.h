@@ -28,7 +28,6 @@ struct _decoder {
 	struct _proto *d_protos;
 	struct _decoder *d_next;
 	const char *d_label;
-	flow_tracker_t d_flowstate;
 };
 
 struct _ns_entry {
@@ -46,7 +45,7 @@ struct _proto {
 	unsigned int p_idx;
 	struct _proto *p_next;
 	struct _decoder *p_owner;
-	size_t p_dcb_sz;
+	size_t p_dcb_sz; /* max dcb size */
 	void (*p_flowtrack)(flow_state_t s, pkt_t pkt, dcb_t dcb);
 	const char *p_label;
 };
@@ -68,8 +67,7 @@ int decode_foreach_decoder(int(*cbfn)(decoder_t, void *priv), void *priv)
 /* ===[ Backend API: for protocol/decoder plugins ]=== */
 void decoder_add(struct _decoder *d);
 void decoder_register(struct _decoder *d, proto_ns_t ns, proto_id_t id);
-void proto_add(struct _decoder *d, struct _proto *p)
-		_nonull(1,2);
+void proto_add(struct _decoder *d, struct _proto *p) _nonull(2);
 void decode_next(pkt_t pkt, proto_ns_t ns, proto_id_t id);
 size_t decode_dcb_len(struct _dcb *dcb);
 struct _dcb *decode_layer(pkt_t pkt, struct _proto *p);
