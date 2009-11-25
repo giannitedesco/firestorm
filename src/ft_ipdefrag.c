@@ -439,7 +439,6 @@ static int queue_fragment(struct ipdefrag *ipd,
 	/* Don't bother wasting any more resources
 	 * when we know the packet is oversize (invalid) */
 	if ( qp->len > 0xffff ) {
-		/* FIXME: isn't this a bug? */
 		alert_oversize(pkt);
 		return 0;
 	}
