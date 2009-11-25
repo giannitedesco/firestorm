@@ -176,7 +176,7 @@ int memchunk_init(size_t numchunks)
 	return 1;
 
 out_free:
-	free(m);
+	chunk_free(m->m_chunks, m->m_size);
 out_err:
 	return 0;
 }
