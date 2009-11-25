@@ -101,4 +101,11 @@ static inline int tcp_after(uint32_t s1, uint32_t s2)
 	return (int32_t)(s2 - s1) < 0;
 }
 
+static inline uint32_t tcp_diff(uint32_t s1, uint32_t s2)
+{
+	if ( s2 < s1 )
+		return (0xffffffff - s1) + s2 + 1;
+	return (s2 - s1);
+}
+
 #endif /* _PKT_TCP_HEADER_INCLUDED_ */

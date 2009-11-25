@@ -47,20 +47,39 @@ struct ipq {
 	timestamp_t	time;
 };
 
-struct tcp_server {
-	struct tcp_server **hash_pprev, *hash_next;
-	uint32_t addr;
-	uint16_t port;
-	uint16_t _pad0;
-	unsigned int use;
-	// struct _proto *proto;
+struct tcp_rbuf {
+	/** List entry */
+	struct list_head	r_list;
+	/** sequence number of first byte of buffer */
+	uint32_t		r_seq;
+	/** buffer base pointer */
+	uint8_t			*r_base;
+};
+
+struct tcp_gap {
+	uint32_t 		g_begin;
+	uint32_t 		g_end;
 };
 
 /* Reassembly buffer */
+#define TCP_REASM_MAX_GAPS	8
 struct tcp_sbuf {
-	struct tcpr_node *root; /* root node of rbtree */
-	uint32_t begin; /* sequence number of first byte */
-	uint32_t reasm_begin; /* sequence number of first unswallowed byte */
+	/** begin seq for buffer purposes */
+	uint32_t		s_begin;
+	/** Sequence of first byte not reassembled */
+	uint32_t		s_reasm_begin;
+	/** Sequence number of last byte */
+	uint32_t		s_end;
+	/** Buffer list */
+	struct list_head	s_bufs;
+	/** last contiguous buffer */
+	struct tcp_rbuf		*s_contig;
+	/** sequence number of last contig byte */
+	uint32_t 		s_contig_seq;
+	/** number of gaps in reassembly */
+	unsigned int		s_num_gaps;
+	/** array of gap descriptors */
+	struct tcp_gap		*s_gap[TCP_REASM_MAX_GAPS];
 };
 
 /* A simplex tcp stream */
@@ -117,8 +136,6 @@ struct tcp_session {
 	struct tcp_state *s_wnd;
 
 	uint32_t expire;
-	/* Per-server data structure */
-	//struct tcp_server *server;
 };
 
 #define TCPHASH 509 /* prime */
@@ -128,8 +145,10 @@ struct tcpflow {
 
 	/* memory caches */
 	obj_cache_t session_cache;
-	obj_cache_t server_cache;
 	obj_cache_t sstate_cache;
+	obj_cache_t rbuf_cache;
+	obj_cache_t data_cache;
+	obj_cache_t gap_cache;
 
 	/* timeout lists */
 	struct list_head lru;
@@ -165,13 +184,16 @@ int _ipdefrag_ctor(struct ipdefrag *ipd);
 void _ipdefrag_dtor(struct ipdefrag *ipd);
 void _ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr);
 
-int _tcpflow_ctor(struct tcpflow *ipd);
-void _tcpflow_dtor(struct tcpflow *ipd);
+int _tcpflow_ctor(struct tcpflow *tf);
+void _tcpflow_dtor(struct tcpflow *tf);
 void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr);
 
-void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq,
-			uint32_t len, const void *buf);
+void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq, uint32_t len,
+			const uint8_t *buf);
+void _tcp_reasm_init(struct tcp_sbuf *s, uint32_t seq);
 void _tcp_reasm_free(struct tcp_sbuf *s);
 uint8_t *_tcp_reassemble(struct tcp_sbuf *s, uint32_t ack, size_t *len);
+int _tcp_reasm_ctor(struct tcpflow *tf);
+void _tcp_reasm_dtor(struct tcpflow *tf);
 
 #endif /* _TCPIP_HEADER_INCLUDED_ */
