@@ -23,9 +23,9 @@ struct per_decoder {
 };
 
 struct _pipeline {
+	struct iothread p_io;
 	struct list_head p_sources;
 	unsigned int p_async;
-	struct iothread p_io;
 	uint64_t p_num_pkt;
 	struct per_decoder p_pd[0];
 };
@@ -205,9 +205,9 @@ static int go_sync(struct _pipeline *p)
 
 static void a_rw(struct iothread *io, struct nbio *n)
 {
-	/* It suffices to get in to the active queue which is
-	 * manually processed in go_async()
-	 */
+	struct _pipeline *p = (struct _pipeline *)io;
+	while ( do_dequeue(p, (struct _source *)n, &p->p_io) )
+		/* nothing */;
 }
 
 static void a_dtor(struct iothread *io, struct nbio *n)
@@ -224,7 +224,6 @@ static const struct nbio_ops async_ops = {
 static int go_async(struct _pipeline *p)
 {
 	struct _source *s;
-	struct nbio *n, *tmp;
 
 	list_for_each_entry(s, &p->p_sources, s_list) {
 		mesg(M_INFO, "pipeline: starting async: %s[%s]",
@@ -234,17 +233,7 @@ static int go_async(struct _pipeline *p)
 	}
 	
 	do {
-		unsigned int tmo;
-
-		list_for_each_entry_safe(n, tmp, &p->p_io.active, list) {
-			while ( do_dequeue(p, (struct _source *)n, &p->p_io) )
-				/* nothing */;
-		}
-
-		/* No timers (yet) */
-		tmo = -1;
-
-		nbio_pump(&p->p_io, tmo);
+		nbio_pump(&p->p_io, -1);
 	}while( !list_empty(&p->p_io.active) ||
 		!list_empty(&p->p_io.inactive) );
 
