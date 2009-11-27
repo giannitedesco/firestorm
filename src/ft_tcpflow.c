@@ -879,5 +879,7 @@ int _tcpflow_ctor(struct tcpflow *tf)
 	if ( tf->sstate_cache == NULL )
 		return 0;
 
+	if ( reassemble && ! _tcp_reasm_ctor(tf) )
+		return 0;
 	return 1;
 }

@@ -30,19 +30,14 @@ static uint32_t seq_ofs(struct tcp_sbuf *s, uint32_t seq)
 	return tcp_diff(s->s_begin, seq) & RBUF_MASK;
 }
 
-/* Node allocation
- * TODO: ditch malloc for a preallocated stack + eviction
- */
-static struct tcp_gap *gap_alloc(void)
+static struct tcp_gap *gap_alloc(struct tcpflow *tf)
 {
-	struct tcp_gap *ret;
-	ret = calloc(1, sizeof(*ret));
-	return ret;
+	return objcache_alloc(tf->gap_cache);
 }
 
-static void gap_free(struct tcp_gap *n)
+static void gap_free(struct tcpflow *tf, struct tcp_gap *g)
 {
-	free(n);
+	objcache_free2(tf->gap_cache, g);
 }
 
 static inline uint32_t gap_len(struct tcp_gap *g)
@@ -51,25 +46,29 @@ static inline uint32_t gap_len(struct tcp_gap *g)
 	return tcp_diff(g->g_begin, g->g_end);
 }
 
-static struct tcp_rbuf *rbuf_alloc(struct tcp_sbuf *s, uint32_t seq)
+static struct tcp_rbuf *rbuf_alloc(struct tcpflow *tf, struct tcp_sbuf *s,
+					uint32_t seq)
 {
 	struct tcp_rbuf *r;
 	assert(((seq - s->s_begin) & RBUF_MASK) == 0);
-	r = calloc(1, sizeof(*r) + RBUF_SIZE);
+	r = objcache_alloc(tf->rbuf_cache);
 	if ( r ) {
 		INIT_LIST_HEAD(&r->r_list);
 		r->r_seq = seq;
-		r->r_base = (uint8_t *)&r[1];
-		memset(r->r_base, '#', RBUF_SIZE);
+		r->r_base = objcache_alloc(tf->data_cache);
+		if ( NULL == r->r_base ) {
+			objcache_free2(tf->rbuf_cache, r);
+			return NULL;
+		}
 		dprintf(" Allocated rbuf seq=%u\n", seq);
 	}
 	return r;
 }
 
-static void rbuf_free(struct tcp_rbuf *r)
+static void rbuf_free(struct tcpflow *tf, struct tcp_rbuf *r)
 {
 	list_del(&r->r_list);
-	free(r);
+	objcache_free2(tf->rbuf_cache, r);
 }
 
 static struct tcp_rbuf *rbuf_next(struct tcp_sbuf *s, struct tcp_rbuf *r)
@@ -82,13 +81,13 @@ static struct tcp_rbuf *rbuf_next(struct tcp_sbuf *s, struct tcp_rbuf *r)
 /* Allocates a new gap ready for insertion in to the tree with the given
  * particulars.
  */
-static struct tcp_gap *gap_new(uint32_t begin, uint32_t end)
+static struct tcp_gap *gap_new(struct tcpflow *tf, uint32_t begin, uint32_t end)
 {
 	struct tcp_gap *n;
 
 	assert(!tcp_after(begin, end));
 
-	n = gap_alloc();
+	n = gap_alloc(tf);
 	if ( NULL != n ) {
 		n->g_begin = begin;
 		n->g_end = end;
@@ -104,8 +103,8 @@ static struct tcp_rbuf *first_buffer(struct tcp_sbuf *s)
 	return list_entry(s->s_bufs.next, struct tcp_rbuf, r_list);
 }
 
-static struct tcp_rbuf *find_buf_fwd(struct tcp_sbuf *s, struct tcp_rbuf *r,
-					uint32_t seq)
+static struct tcp_rbuf *find_buf_fwd(struct tcpflow *tf, struct tcp_sbuf *s,
+					struct tcp_rbuf *r, uint32_t seq)
 {
 	struct tcp_rbuf *new;
 
@@ -113,7 +112,7 @@ static struct tcp_rbuf *find_buf_fwd(struct tcp_sbuf *s, struct tcp_rbuf *r,
 		if ( r->r_seq == seq )
 			break;
 		if ( tcp_after(r->r_seq, seq) ) {
-			new = rbuf_alloc(s, seq);
+			new = rbuf_alloc(tf, s, seq);
 			list_add_tail(&new->r_list, &r->r_list);
 			r = new;
 			break;
@@ -121,7 +120,7 @@ static struct tcp_rbuf *find_buf_fwd(struct tcp_sbuf *s, struct tcp_rbuf *r,
 	}
 
 	if ( NULL == r ) {
-		new = rbuf_alloc(s, seq);
+		new = rbuf_alloc(tf, s, seq);
 		list_add_tail(&new->r_list, &s->s_bufs);
 		r = new;
 	}
@@ -129,33 +128,36 @@ static struct tcp_rbuf *find_buf_fwd(struct tcp_sbuf *s, struct tcp_rbuf *r,
 	return r;
 }
 
-static struct tcp_rbuf *contig_buf(struct tcp_sbuf *s, uint32_t seq)
+static struct tcp_rbuf *contig_buf(struct tcpflow *tf, struct tcp_sbuf *s,
+					uint32_t seq)
 {
 	struct tcp_rbuf *r;
 
 	r = (s->s_contig) ? s->s_contig : first_buffer(s);
-	return find_buf_fwd(s, r, seq);
+	return find_buf_fwd(tf, s, r, seq);
 }
 
-static struct tcp_rbuf *discontig_buf(struct tcp_sbuf *s, uint32_t seq)
+static struct tcp_rbuf *discontig_buf(struct tcpflow *tf, struct tcp_sbuf *s,
+					uint32_t seq)
 {
 	struct tcp_rbuf *r;
-	r = find_buf_fwd(s, first_buffer(s), seq);
+	r = find_buf_fwd(tf, s, first_buffer(s), seq);
 	return r;
 }
 
-static void swallow_gap(struct tcp_sbuf *s, unsigned int i)
+static void swallow_gap(struct tcpflow *tf, struct tcp_sbuf *s, unsigned int i)
 {
 	dprintf("Swallow gap %u %u-%u\n", i,
 		s->s_gap[i]->g_begin, s->s_gap[i]->g_end);
-	gap_free(s->s_gap[i]);
+	gap_free(tf, s->s_gap[i]);
 	for(--s->s_num_gaps; i < s->s_num_gaps; i++) {
 		dprintf(" Shuffle gap %u to %u\n", i + 1, i);
 		s->s_gap[i] = s->s_gap[i + 1];
 	}
 }
 
-static void contig_eat_gaps(struct tcp_sbuf *s, uint32_t seq_end)
+static void contig_eat_gaps(struct tcpflow *tf, struct tcp_sbuf *s,
+				uint32_t seq_end)
 {
 	unsigned int i = 0;
 	struct tcp_gap *g = NULL;
@@ -169,7 +171,7 @@ static void contig_eat_gaps(struct tcp_sbuf *s, uint32_t seq_end)
 			g->g_begin = seq_end;
 			break;
 		}
-		swallow_gap(s, i);
+		swallow_gap(tf, s, i);
 		g = NULL;
 	}
 
@@ -187,16 +189,17 @@ static void contig_eat_gaps(struct tcp_sbuf *s, uint32_t seq_end)
 	}
 }
 
-static void append_gap(struct tcp_sbuf *s, struct tcp_rbuf *r,
-			uint32_t seq, uint32_t seq_end)
+static void append_gap(struct tcpflow *tf, struct tcp_sbuf *s,
+			struct tcp_rbuf *r, uint32_t seq, uint32_t seq_end)
 {
 	dprintf("Appending gap %u-%u\n", s->s_end, seq);
 	assert(s->s_num_gaps <= TCP_REASM_MAX_GAPS);
-	s->s_gap[s->s_num_gaps] = gap_new(s->s_end, seq);
+	s->s_gap[s->s_num_gaps] = gap_new(tf, s->s_end, seq);
 	s->s_num_gaps++;
 }
 
-static void split_gap(struct tcp_sbuf *s, int i, struct tcp_rbuf *r,
+static void split_gap(struct tcpflow *tf, struct tcp_sbuf *s,
+			int i, struct tcp_rbuf *r,
 			uint32_t seq, uint32_t seq_end)
 {
 	int n, j;
@@ -214,13 +217,13 @@ static void split_gap(struct tcp_sbuf *s, int i, struct tcp_rbuf *r,
 		s->s_gap[i]->g_begin, seq,
 		seq_end, s->s_gap[i]->g_end);
 
-	s->s_gap[n] = gap_new(seq_end, s->s_gap[i]->g_end);
+	s->s_gap[n] = gap_new(tf, seq_end, s->s_gap[i]->g_end);
 	s->s_gap[i]->g_end = seq;
 	s->s_num_gaps++;
 }
 
-static void frob_gaps(struct tcp_sbuf *s, struct tcp_rbuf *r,
-			uint32_t seq, uint32_t seq_end)
+static void frob_gaps(struct tcpflow *tf, struct tcp_sbuf *s,
+			struct tcp_rbuf *r, uint32_t seq, uint32_t seq_end)
 {
 	unsigned int i;
 
@@ -232,7 +235,7 @@ static void frob_gaps(struct tcp_sbuf *s, struct tcp_rbuf *r,
 
 			/* There can be...only one */
 			if ( tcp_before(seq_end, g->g_end) ) {
-				split_gap(s, i, r, seq, seq_end);
+				split_gap(tf, s, i, r, seq, seq_end);
 				return;
 			}
 
@@ -246,7 +249,7 @@ static void frob_gaps(struct tcp_sbuf *s, struct tcp_rbuf *r,
 				break;
 
 			if ( !tcp_before(seq_end, g->g_end) ) {
-				swallow_gap(s, i);
+				swallow_gap(tf, s, i);
 				i--;
 				continue;
 			}
@@ -290,17 +293,17 @@ void _tcp_reasm_inject(struct tcpflow *tf, struct tcp_sbuf *s, uint32_t seq,
 	/* Find or allocate buffer for first byte */
 	base = seq_base(s, seq);
 	if ( seq == s->s_contig_seq ) {
-		r = contig_buf(s, base);
-		contig_eat_gaps(s, seq_end);
+		r = contig_buf(tf, s, base);
+		contig_eat_gaps(tf, s, seq_end);
 		is_contig = 1;
 	}else{
 		assert(tcp_after(seq, s->s_contig_seq));
 		is_contig = 0;
-		r = discontig_buf(s, base);
+		r = discontig_buf(tf, s, base);
 		if ( tcp_after(seq, s->s_end) )
-			append_gap(s, r, seq, seq_end);
+			append_gap(tf, s, r, seq, seq_end);
 		else
-			frob_gaps(s, r, seq, seq_end);
+			frob_gaps(tf, s, r, seq, seq_end);
 	}
 
 	/* Copy payload data, allocating new buffers as needed */
@@ -313,16 +316,16 @@ void _tcp_reasm_inject(struct tcpflow *tf, struct tcp_sbuf *s, uint32_t seq,
 		clen = ((ofs + len) > RBUF_SIZE) ? (RBUF_SIZE - ofs) : len;
 
 		if ( NULL == r ) {
-			nr = rbuf_alloc(s, base);
+			nr = rbuf_alloc(tf, s, base);
 			list_add_tail(&nr->r_list, &s->s_bufs);
 			r = nr;
 		}else if ( tcp_after(base, r->r_seq) ) {
-			nr = rbuf_alloc(s, base);
+			nr = rbuf_alloc(tf, s, base);
 			dprintf(" ... and put it after %u\n", r->r_seq);
 			list_add(&nr->r_list, &r->r_list);
 			r = nr;
 		}else if ( tcp_before(base, r->r_seq) ) {
-			nr = rbuf_alloc(s, base);
+			nr = rbuf_alloc(tf, s, base);
 			dprintf(" ... and put it before %u\n", r->r_seq);
 			list_add_tail(&nr->r_list, &r->r_list);
 			r = nr;
@@ -358,12 +361,12 @@ void _tcp_reasm_free(struct tcpflow *tf, struct tcp_sbuf *s)
 
 	if ( s->s_bufs.prev ) {
 		list_for_each_entry_safe(r, tr, &s->s_bufs, r_list) {
-			rbuf_free(r);
+			rbuf_free(tf, r);
 		}
 	}
 
 	for(i = 0; i < s->s_num_gaps; i++)
-		gap_free(s->s_gap[i]);
+		gap_free(tf, s->s_gap[i]);
 }
 
 void _tcp_reasm_init(struct tcpflow *tf, struct tcp_sbuf *s, uint32_t isn)
@@ -423,7 +426,7 @@ uint8_t *_tcp_reassemble(struct tcpflow *tf, struct tcp_sbuf *s,
 		if ( brk )
 			break;
 
-		rbuf_free(r);
+		rbuf_free(tf, r);
 		ptr += sz;
 		if ( s->s_contig == r )
 			s->s_contig = NULL;
