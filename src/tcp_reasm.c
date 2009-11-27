@@ -79,13 +79,6 @@ static struct tcp_rbuf *rbuf_next(struct tcp_sbuf *s, struct tcp_rbuf *r)
 	return list_entry(r->r_list.next, struct tcp_rbuf, r_list);
 }
 
-static struct tcp_rbuf *rbuf_prev(struct tcp_sbuf *s, struct tcp_rbuf *r)
-{
-	if ( r->r_list.prev == &s->s_bufs )
-		return NULL;
-	return list_entry(r->r_list.prev, struct tcp_rbuf, r_list);
-}
-
 /* Allocates a new gap ready for insertion in to the tree with the given
  * particulars.
  */
@@ -268,7 +261,7 @@ static void frob_gaps(struct tcp_sbuf *s, struct tcp_rbuf *r,
 }
 
 /* input packet data in to the reassembly system */
-void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq,
+void _tcp_reasm_inject(struct tcpflow *tf, struct tcp_sbuf *s, uint32_t seq,
 			uint32_t len, const uint8_t *buf)
 {
 	uint32_t seq_end = seq + len;
@@ -358,7 +351,7 @@ void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq,
 	}
 }
 
-void _tcp_reasm_free(struct tcp_sbuf *s)
+void _tcp_reasm_free(struct tcpflow *tf, struct tcp_sbuf *s)
 {
 	struct tcp_rbuf *r, *tr;
 	unsigned int i;
@@ -373,23 +366,26 @@ void _tcp_reasm_free(struct tcp_sbuf *s)
 		gap_free(s->s_gap[i]);
 }
 
-void _tcp_reasm_init(struct tcp_sbuf *s, uint32_t seq_begin)
+void _tcp_reasm_init(struct tcpflow *tf, struct tcp_sbuf *s, uint32_t isn)
 {
 	memset(s, 0, sizeof(*s));
 	INIT_LIST_HEAD(&s->s_bufs);
-	s->s_begin = seq_begin;
-	s->s_reasm_begin = seq_begin;
-	s->s_end = seq_begin;
-	s->s_contig_seq = seq_begin;
+	s->s_begin = isn;
+	s->s_reasm_begin = isn;
+	s->s_end = isn;
+	s->s_contig_seq = isn;
 }
 
-uint8_t *_tcp_reassemble(struct tcp_sbuf *s, uint32_t ack, size_t *len)
+uint8_t *_tcp_reassemble(struct tcpflow *tf, struct tcp_sbuf *s,
+				uint32_t ack, size_t *len)
 {
 	struct tcp_rbuf *r, *tmp;
 	uint8_t *buf, *ptr;
 	size_t sz;
 
-	if ( tcp_after(ack, s->s_contig_seq) ) {
+	if ( tcp_before(ack, s->s_reasm_begin) )
+		return NULL;
+	if ( unlikely(tcp_after(ack, s->s_contig_seq)) ) {
 		mesg(M_CRIT, "missing segment in tcp stream %u-%u",
 			s->s_contig_seq, ack);
 		*len = 0;
@@ -397,7 +393,6 @@ uint8_t *_tcp_reassemble(struct tcp_sbuf *s, uint32_t ack, size_t *len)
 	}
 
 	assert(!tcp_before(s->s_reasm_begin, s->s_begin));
-	assert(!tcp_before(ack, s->s_reasm_begin));
 
 	sz = tcp_diff(s->s_reasm_begin, s->s_contig_seq);
 	ptr = buf = malloc(sz);

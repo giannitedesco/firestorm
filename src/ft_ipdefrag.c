@@ -67,7 +67,7 @@ static struct ipfrag *fragstruct_alloc(struct ipdefrag *ipd)
 
 static void fragstruct_free(struct ipdefrag *ipd, struct ipfrag *x)
 {
-	objcache_free(ipd->frag_cache, x);
+	objcache_free2(ipd->frag_cache, x);
 	ipd->mem -= sizeof(*x);
 }
 
@@ -142,7 +142,7 @@ static void ipq_kill(struct ipdefrag *ipd, struct ipq *qp)
 		ipd->ipq_latest = qp->next_time;
 
 	/* Free the ipq itself */
-	objcache_free(ipd->ipq_cache, qp);
+	objcache_free2(ipd->ipq_cache, qp);
 	ipd->mem -= sizeof(struct ipq);
 }
 

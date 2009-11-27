@@ -163,6 +163,9 @@ struct tcpflow {
 	unsigned int num_csum_errs;
 	unsigned int num_ttl_errs;
 	unsigned int num_timeouts;
+
+	unsigned int max_gaps;
+	unsigned int num_reasm;
 };
 
 #define IPHASH 127 /* Mersenne prime */
@@ -188,11 +191,13 @@ int _tcpflow_ctor(struct tcpflow *tf);
 void _tcpflow_dtor(struct tcpflow *tf);
 void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr);
 
-void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq, uint32_t len,
+void _tcp_reasm_init(struct tcpflow *tf, struct tcp_sbuf *s, uint32_t isn);
+void _tcp_reasm_inject(struct tcpflow *tf, struct tcp_sbuf *s,
+			uint32_t seq, uint32_t len,
 			const uint8_t *buf);
-void _tcp_reasm_init(struct tcp_sbuf *s, uint32_t seq);
-void _tcp_reasm_free(struct tcp_sbuf *s);
-uint8_t *_tcp_reassemble(struct tcp_sbuf *s, uint32_t ack, size_t *len);
+void _tcp_reasm_free(struct tcpflow *tf, struct tcp_sbuf *s);
+uint8_t *_tcp_reassemble(struct tcpflow *tf, struct tcp_sbuf *s,
+			uint32_t ack, size_t *len);
 int _tcp_reasm_ctor(struct tcpflow *tf);
 void _tcp_reasm_dtor(struct tcpflow *tf);
 

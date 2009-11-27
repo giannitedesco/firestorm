@@ -72,8 +72,8 @@ obj_cache_t objcache_init(const char *l, size_t obj_sz) _malloc;
 void objcache_fini(obj_cache_t o);
 void *objcache_alloc(obj_cache_t o) _malloc;
 void *objcache_alloc0(obj_cache_t o) _malloc;
-void objcache_free(obj_cache_t o, void *obj);
-void memchunk_free_obj(void *chunk);
+void objcache_free(void *obj);
+void objcache_free2(obj_cache_t o, void *obj);
 
 /* --- Data-source plugins */
 source_t capture_tcpdump_open(const char *fn);

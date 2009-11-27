@@ -10,6 +10,13 @@
 #define MEMCHUNK_SIZE	(1 << MEMCHUNK_SHIFT)
 #define MEMCHUNK_MASK	(MEMCHUNK_SIZE - 1)
 
+#define MEMCHUNK_DEBUG_FREE 0
+#define MEMCHUNK_POISON 1
+#define MEMCHUNK_POISON_PATTERN 0x5a
+#define OBJCACHE_DEBUG_FREE 0
+#define OBJCACHE_POISON 1
+#define OBJCACHE_POISON_PATTERN 0xa5
+
 void *memchunk_alloc(memchunk_t m) _malloc;
 void memchunk_free(memchunk_t m, void *chunk);
 
