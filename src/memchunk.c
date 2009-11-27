@@ -316,6 +316,8 @@ static void *alloc_from_partial(struct _obj_cache *o, struct chunk_hdr *c)
 	void *ret;
 	ret = c->c_o.free_list;
 	c->c_o.free_list = *(uint8_t **)ret;
+	if ( NULL == c->c_o.free_list )
+		list_del(&c->c_o.list);
 	c->c_o.inuse++;
 	O_POISON(ret, o->o_sz);
 	return ret;
@@ -403,9 +405,9 @@ static void do_cache_free(struct _obj_cache *o, struct chunk_hdr *c, void *obj)
 	assert(c->c_o.inuse <= o->o_num);
 
 	/* First add to partials if this is first free from chunk */
-	if ( list_empty(&c->c_o.list) ) {
+	if ( NULL == c->c_o.free_list ) {
+		assert(list_empty(&c->c_o.list));
 		assert(c == o->o_cur || c->c_o.inuse == o->o_num);
-		assert(NULL == c->c_o.free_list);
 		list_add(&c->c_o.list, &o->o_partials);
 	}
 
