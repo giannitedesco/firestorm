@@ -24,6 +24,16 @@
 #include <f_time.h>
 #include <f_os.h>
 
+struct vec {
+	uint8_t *v_ptr;
+	size_t v_len;
+};
+
+struct ro_vec {
+	const uint8_t *v_ptr;
+	size_t v_len;
+};
+
 typedef struct _memchunk *memchunk_t;
 typedef struct _obj_cache *obj_cache_t;
 
