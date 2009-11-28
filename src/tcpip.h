@@ -62,7 +62,7 @@ struct tcp_gap {
 };
 
 /* Reassembly buffer */
-#define TCP_REASM_MAX_GAPS	8
+#define TCP_REASM_MAX_GAPS	12
 struct tcp_sbuf {
 	/** begin seq for buffer purposes */
 	uint32_t		s_begin;
@@ -128,8 +128,9 @@ struct tcp_session {
 	uint32_t c_addr, s_addr;
 	uint16_t c_port, s_port;
 
-	uint16_t state;
-	uint16_t _pad0;
+	uint8_t state;
+	uint8_t _pad0;
+	uint16_t _pad1;
 
 	/* TCP state: host byte order */
 	struct tcp_state c_wnd;
@@ -166,6 +167,7 @@ struct tcpflow {
 
 	unsigned int max_gaps;
 	unsigned int num_reasm;
+	unsigned int reasm_bytes;
 };
 
 #define IPHASH 127 /* Mersenne prime */

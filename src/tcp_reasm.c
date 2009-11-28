@@ -15,7 +15,7 @@
 #define dprintf(x...) do { } while(0);
 #endif
 
-#define RBUF_SHIFT	7
+#define RBUF_SHIFT	8
 #define RBUF_SIZE	(1<<RBUF_SHIFT)
 #define RBUF_MASK	(RBUF_SIZE - 1)
 #define RBUF_BASE	(~RBUF_MASK)
@@ -78,6 +78,13 @@ static struct tcp_rbuf *rbuf_next(struct tcp_sbuf *s, struct tcp_rbuf *r)
 	return list_entry(r->r_list.next, struct tcp_rbuf, r_list);
 }
 
+static struct tcp_rbuf *rbuf_prev(struct tcp_sbuf *s, struct tcp_rbuf *r)
+{
+	if ( r->r_list.prev == &s->s_bufs )
+		return NULL;
+	return list_entry(r->r_list.prev, struct tcp_rbuf, r_list);
+}
+
 /* Allocates a new gap ready for insertion in to the tree with the given
  * particulars.
  */
@@ -101,6 +108,13 @@ static struct tcp_rbuf *first_buffer(struct tcp_sbuf *s)
 	if ( list_empty(&s->s_bufs) )
 		return NULL;
 	return list_entry(s->s_bufs.next, struct tcp_rbuf, r_list);
+}
+
+static struct tcp_rbuf *last_buffer(struct tcp_sbuf *s)
+{
+	if ( list_empty(&s->s_bufs) )
+		return NULL;
+	return list_entry(s->s_bufs.prev, struct tcp_rbuf, r_list);
 }
 
 static struct tcp_rbuf *find_buf_fwd(struct tcpflow *tf, struct tcp_sbuf *s,
@@ -128,6 +142,25 @@ static struct tcp_rbuf *find_buf_fwd(struct tcpflow *tf, struct tcp_sbuf *s,
 	return r;
 }
 
+static struct tcp_rbuf *find_buf_rev(struct tcpflow *tf, struct tcp_sbuf *s,
+					struct tcp_rbuf *r, uint32_t seq)
+{
+	struct tcp_rbuf *new;
+
+	for(; r; r = rbuf_prev(s, r)) {
+		if ( r->r_seq == seq )
+			break;
+		if ( tcp_before(r->r_seq, seq) ) {
+			new = rbuf_alloc(tf, s, seq);
+			list_add(&new->r_list, &r->r_list);
+			r = new;
+			break;
+		}
+	}
+
+	return r;
+}
+
 static struct tcp_rbuf *contig_buf(struct tcpflow *tf, struct tcp_sbuf *s,
 					uint32_t seq)
 {
@@ -141,7 +174,7 @@ static struct tcp_rbuf *discontig_buf(struct tcpflow *tf, struct tcp_sbuf *s,
 					uint32_t seq)
 {
 	struct tcp_rbuf *r;
-	r = find_buf_fwd(tf, s, first_buffer(s), seq);
+	r = find_buf_rev(tf, s, last_buffer(s), seq);
 	return r;
 }
 
@@ -195,7 +228,8 @@ static void append_gap(struct tcpflow *tf, struct tcp_sbuf *s,
 	dprintf("Appending gap %u-%u\n", s->s_end, seq);
 	assert(s->s_num_gaps <= TCP_REASM_MAX_GAPS);
 	s->s_gap[s->s_num_gaps] = gap_new(tf, s->s_end, seq);
-	s->s_num_gaps++;
+	if ( ++s->s_num_gaps > tf->max_gaps )
+		tf->max_gaps = s->s_num_gaps;
 }
 
 static void split_gap(struct tcpflow *tf, struct tcp_sbuf *s,
@@ -219,7 +253,8 @@ static void split_gap(struct tcpflow *tf, struct tcp_sbuf *s,
 
 	s->s_gap[n] = gap_new(tf, seq_end, s->s_gap[i]->g_end);
 	s->s_gap[i]->g_end = seq;
-	s->s_num_gaps++;
+	if ( ++s->s_num_gaps > tf->max_gaps )
+		tf->max_gaps = s->s_num_gaps;
 }
 
 static void frob_gaps(struct tcpflow *tf, struct tcp_sbuf *s,
@@ -405,6 +440,8 @@ uint8_t *_tcp_reassemble(struct tcpflow *tf, struct tcp_sbuf *s,
 	}
 
 	*len = sz;
+	tf->num_reasm++;
+	tf->reasm_bytes += sz;
 
 	list_for_each_entry_safe(r, tmp, &s->s_bufs, r_list) {
 		uint8_t *end = r->r_base + RBUF_SIZE;
@@ -464,12 +501,14 @@ int _tcp_reasm_ctor(struct tcpflow *tf)
 
 void _tcp_reasm_dtor(struct tcpflow *tf)
 {
+	mesg(M_INFO, "tcp_reasm: reasm=%u avg_bytes=%u max_gaps=%u",
+		tf->num_reasm, tf->reasm_bytes / tf->num_reasm, tf->max_gaps);
 	//objcache_fini(tf->rbuf_cache);
 	//objcache_fini(tf->data_cache);
 	//objcache_fini(tf->gap_cache);
 }
 
-#if TCP_REASM_TEST_RIG
+#if 0
 static void print_gap(uint32_t len)
 {
 	dprintf("\033[31m");
