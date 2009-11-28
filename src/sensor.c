@@ -17,7 +17,7 @@ int main(int argc, char **argv)
 	mesg(M_INFO,"This program is free software; released under "
 		"the GNU GPL v3 (see: COPYING)");
 
-	if ( !memchunk_init(8192) )
+	if ( !memchunk_init(32768) )
 		return EXIT_FAILURE;
 
 	decode_init();
