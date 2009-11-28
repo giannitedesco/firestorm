@@ -270,7 +270,7 @@ void decoder_register(struct _decoder *d, proto_ns_t ns, proto_id_t id)
 	unsigned int i;
 	assert(ns < NS_MAX);
 
-	for(i = id; i < ns_arr[ns].ns_num_reg; i++) {
+	for(i = 0; i < ns_arr[ns].ns_num_reg; i++) {
 		if ( ns_arr[ns].ns_reg[i].nse_id == id ) {
 			mesg(M_WARN, "decode: %s: %s / 0x%x registered by %s",
 				d->d_label, ns_arr[ns].ns_label, id,
@@ -287,8 +287,6 @@ void decoder_register(struct _decoder *d, proto_ns_t ns, proto_id_t id)
 	ns_arr[ns].ns_reg[ns_arr[ns].ns_num_reg].nse_id = id;
 	ns_arr[ns].ns_reg[ns_arr[ns].ns_num_reg].nse_decoder = d;
 	ns_arr[ns].ns_num_reg++;
-
-	return;
 }
 
 int decode_foreach_protocol(int(*cbfn)(struct _proto *p, void *priv),
