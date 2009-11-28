@@ -76,8 +76,10 @@ struct tcp_sbuf {
 	struct tcp_rbuf		*s_contig;
 	/** sequence number of last contig byte */
 	uint32_t 		s_contig_seq;
+	uint16_t		_pad0;
+	uint8_t			s_num_rbuf;
 	/** number of gaps in reassembly */
-	unsigned int		s_num_gaps;
+	uint8_t			s_num_gaps;
 	/** array of gap descriptors */
 	struct tcp_gap		*s_gap[TCP_REASM_MAX_GAPS];
 };
@@ -137,6 +139,8 @@ struct tcp_session {
 	struct tcp_state *s_wnd;
 
 	uint32_t expire;
+
+	const struct _sproto *proto;
 };
 
 #define TCPHASH 509 /* prime */
@@ -193,14 +197,15 @@ int _tcpflow_ctor(struct tcpflow *tf);
 void _tcpflow_dtor(struct tcpflow *tf);
 void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr);
 
+int _tcp_reasm_ctor(struct tcpflow *tf);
+void _tcp_reasm_dtor(struct tcpflow *tf);
 void _tcp_reasm_init(struct tcpflow *tf, struct tcp_sbuf *s, uint32_t isn);
 void _tcp_reasm_inject(struct tcpflow *tf, struct tcp_sbuf *s,
 			uint32_t seq, uint32_t len,
 			const uint8_t *buf);
+void _tcp_reassemble(struct tcpflow *tf, struct tcp_sbuf *s, uint32_t ack);
 void _tcp_reasm_free(struct tcpflow *tf, struct tcp_sbuf *s);
-uint8_t *_tcp_reassemble(struct tcpflow *tf, struct tcp_sbuf *s,
-			uint32_t ack, size_t *len);
-int _tcp_reasm_ctor(struct tcpflow *tf);
-void _tcp_reasm_dtor(struct tcpflow *tf);
+
+void *_tcp_alloc(struct tcpflow *tf, struct tcp_session *s, obj_cache_t o);
 
 #endif /* _TCPIP_HEADER_INCLUDED_ */

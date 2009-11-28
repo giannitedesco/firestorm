@@ -5,6 +5,7 @@
  * contiguous chunks of memory (say 2 to the power of 7-9 bytes).
 */
 #include <firestorm.h>
+#include <f_stream.h>
 #include <pkt/tcp.h>
 #include <list.h>
 #include "tcpip.h"
@@ -414,20 +415,18 @@ void _tcp_reasm_init(struct tcpflow *tf, struct tcp_sbuf *s, uint32_t isn)
 	s->s_contig_seq = isn;
 }
 
-uint8_t *_tcp_reassemble(struct tcpflow *tf, struct tcp_sbuf *s,
-				uint32_t ack, size_t *len)
+void _tcp_reassemble(struct tcpflow *tf, struct tcp_sbuf *s, uint32_t ack)
 {
 	struct tcp_rbuf *r, *tmp;
 	uint8_t *buf, *ptr;
 	size_t sz;
 
 	if ( tcp_before(ack, s->s_reasm_begin) )
-		return NULL;
+		return;
 	if ( unlikely(tcp_after(ack, s->s_contig_seq)) ) {
 		mesg(M_CRIT, "missing segment in tcp stream %u-%u",
 			s->s_contig_seq, ack);
-		*len = 0;
-		return NULL;
+		return;
 	}
 
 	assert(!tcp_before(s->s_reasm_begin, s->s_begin));
@@ -435,11 +434,9 @@ uint8_t *_tcp_reassemble(struct tcpflow *tf, struct tcp_sbuf *s,
 	sz = tcp_diff(s->s_reasm_begin, s->s_contig_seq);
 	ptr = buf = malloc(sz);
 	if ( NULL == buf ) {
-		*len = 0;
-		return NULL;
+		return;
 	}
 
-	*len = sz;
 	tf->num_reasm++;
 	tf->reasm_bytes += sz;
 
@@ -479,7 +476,8 @@ uint8_t *_tcp_reassemble(struct tcpflow *tf, struct tcp_sbuf *s,
 
 	assert(!tcp_before(s->s_contig_seq, s->s_begin));
 	assert(!tcp_before(s->s_contig_seq, s->s_reasm_begin));
-	return buf;
+	free(buf);
+	return;
 }
 
 int _tcp_reasm_ctor(struct tcpflow *tf)
@@ -501,8 +499,13 @@ int _tcp_reasm_ctor(struct tcpflow *tf)
 
 void _tcp_reasm_dtor(struct tcpflow *tf)
 {
+	unsigned int avg;
+
+	avg = tf->reasm_bytes / ((tf->num_reasm) ? tf->num_reasm : 1);
+
 	mesg(M_INFO, "tcp_reasm: reasm=%u avg_bytes=%u max_gaps=%u",
-		tf->num_reasm, tf->reasm_bytes / tf->num_reasm, tf->max_gaps);
+		tf->num_reasm, avg, tf->max_gaps);
+
 	//objcache_fini(tf->rbuf_cache);
 	//objcache_fini(tf->data_cache);
 	//objcache_fini(tf->gap_cache);

@@ -6,13 +6,12 @@
  * TODO:
  *  o Put state data in to DCB
  *  o Handle ICMP errors
- *  o Reassembly
- *  o Application layer infrastructure
  *  o check for broadcasts if possible
 */
 #include <firestorm.h>
 #include <f_packet.h>
 #include <f_decode.h>
+#include <f_stream.h>
 #include <pkt/ip.h>
 #include <pkt/tcp.h>
 #include <pkt/icmp.h>
@@ -125,18 +124,24 @@ static void reassemble_point(struct tcpflow *tf,
 				struct tcp_state *wnd,
 				uint32_t ack)
 {
-	size_t sz;
-	uint8_t *ptr;
-
 	if ( !reassemble )
 		return;
+	if ( !s->proto )
+		return;
+	_tcp_reassemble(tf, &wnd->reasm, ack);
+}
 
-	ptr = _tcp_reassemble(tf, &wnd->reasm, ack, &sz);
-	if ( NULL != ptr ) {
-		dmesg(M_DEBUG, "REASSEMBLY got %u bytes", sz);
-		dhex_dump(ptr, sz, 16);
-		free(ptr);
-	}
+static void reasm_data(struct tcpflow *tf,
+			struct tcp_session *s,
+			struct tcp_sbuf *sbuf,
+			uint32_t seq, uint32_t len,
+			const uint8_t *buf)
+{
+	if ( !reassemble )
+		return;
+	if ( !s->proto )
+		return;
+	_tcp_reasm_inject(tf, sbuf, seq, len, buf);
 }
 
 /* Hash function.
@@ -431,6 +436,8 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 	tcp_hash_link(cur->tf, s, cur->hash);
 	timer_msl(cur, s);
 
+	s->proto = NULL;
+
 	return s;
 }
 
@@ -702,6 +709,10 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 			dmesg(M_DEBUG, "%s sent first data",
 				cur->to_server ? "client" : "server");
 			s->state = TCP_SESSION_E;
+			s->proto = sproto_find(SNS_TCP, s->s_port);
+			if ( s->proto )
+				mesg(M_DEBUG, "%u -> %s", s->s_port,
+					s->proto->sp_label);
 		}
 
 		cur->snd->snd_una = cur->seq;
@@ -709,9 +720,8 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 		dmesg(M_DEBUG, "%u bytes data %.8x - %.8x",
 			cur->len, cur->seq, cur->seq_end);
 		//dhex_dump(cur->payload, cur->len, 16);
-		if ( reassemble )
-			_tcp_reasm_inject(cur->tf, &cur->snd->reasm, cur->seq,
-					cur->len, cur->payload);
+		reasm_data(cur->tf, s, &cur->snd->reasm,
+				cur->seq, cur->len, cur->payload);
 	}
 
 	/* eighth, check the FIN bit */

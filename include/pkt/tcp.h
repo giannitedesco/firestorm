@@ -1,6 +1,10 @@
 #ifndef _PKT_TCP_HEADER_INCLUDED_
 #define _PKT_TCP_HEADER_INCLUDED_
 
+/* Stream decoding */
+#define TCP_CHAN_TO_SERVER	0
+#define TCP_CHAN_TO_CLIENT	1
+
 /* MISC */
 #define TCP_MSS			512
 #define TCP_MAXWIN		65535

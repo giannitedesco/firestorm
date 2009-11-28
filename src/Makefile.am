@@ -29,6 +29,8 @@ firestorm_SOURCES = \
 	capture.c \
 	packet.c \
 	decode.c \
+	stream.c \
+	\
 	c_tcpdump.c \
 	$(SRC_PCAP) \
 	\
@@ -44,6 +46,8 @@ firestorm_SOURCES = \
 	ft_ipdefrag.c \
 	ft_tcpflow.c \
 	tcp_reasm.c \
+	\
+	sp_http.c \
 	\
 	s_pipeline.c \
 	s_mesg.c \
