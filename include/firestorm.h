@@ -51,8 +51,6 @@ typedef struct _dcb *dcb_t;
 typedef unsigned int proto_ns_t;
 typedef unsigned int proto_id_t;
 
-typedef void *flow_state_t;
-
 typedef uint8_t mesg_code_t;
 
 /* Message codes */

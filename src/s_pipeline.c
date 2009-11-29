@@ -18,16 +18,11 @@
 #define dhex_dump(x...) do{}while(0);
 #endif
 
-struct per_decoder {
-	flow_state_t pd_flow;
-};
-
 struct _pipeline {
 	struct iothread p_io;
 	struct list_head p_sources;
 	unsigned int p_async;
 	uint64_t p_num_pkt;
-	struct per_decoder p_pd[0];
 };
 
 static void analyze_packet(struct _pipeline *p, struct _pkt *pkt)
@@ -43,14 +38,10 @@ static void analyze_packet(struct _pipeline *p, struct _pkt *pkt)
 
 static int pd_init(struct _decoder *d, void *priv)
 {
-	struct _pipeline *p = priv;
-	struct per_decoder *pd;
-
-	pd = &p->p_pd[d->d_idx];
+	//struct _pipeline *p = priv;
 
 	if ( d->d_flow_ctor ) {
-		pd->pd_flow = d->d_flow_ctor();
-		if ( pd->pd_flow == NULL )
+		if ( !d->d_flow_ctor() )
 			return 0;
 	}
 
@@ -62,11 +53,10 @@ pipeline_t pipeline_new(void)
 	struct _pipeline *p = NULL;
 	unsigned int num;
 
+	p = calloc(1, sizeof(*p));
+	if ( NULL == p )
+		return NULL;
 	num = decode_num_protocols();
-
-	p = calloc(1, sizeof(*p) + sizeof(*p->p_pd) * num);
-	if ( p == NULL )
-		goto out;
 
 	INIT_LIST_HEAD(&p->p_sources);
 
@@ -84,13 +74,10 @@ out:
 
 static int pd_fini(struct _decoder *d, void *priv)
 {
-	struct _pipeline *p = priv;
-	struct per_decoder *pd;
-
-	pd = &p->p_pd[d->d_idx];
+	//struct _pipeline *p = priv;
 
 	if ( d->d_flow_dtor )
-		d->d_flow_dtor(pd->pd_flow);
+		d->d_flow_dtor();
 
 	return 1;
 }
@@ -135,14 +122,12 @@ int pipeline_add_source(pipeline_t p, source_t s)
 static void flowtrack_packet(struct _pipeline *p, struct _pkt *pkt)
 {
 	struct _dcb *cur;
-	struct per_decoder *pd;
 
 	for(cur = pkt->pkt_dcb; cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
 		if ( cur->dcb_proto->p_flowtrack ) {
-			pd = &p->p_pd[cur->dcb_proto->p_owner->d_idx];
 			dmesg(M_DEBUG, "FLOW TRACK: %s",
 				cur->dcb_proto->p_label);
-			cur->dcb_proto->p_flowtrack(pd->pd_flow, pkt, cur);
+			cur->dcb_proto->p_flowtrack(pkt, cur);
 		}
 	}
 }

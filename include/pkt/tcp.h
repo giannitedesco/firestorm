@@ -14,6 +14,11 @@
 #define TCP_TMO_MSL  (30ULL * TIMESTAMP_HZ)
 #define TCP_TMO_2MSL  (2ULL * TCP_TMO_MSL)
 
+/* PAWS */
+#define TCP_PAWS_24DAYS (60 * 60 * 24 * 24)
+#define TCP_PAWS_MSL 60
+#define TCP_PAWS_WINDOW 60
+
 /* OPTIONS */
 #define TCPOPT_EOL 0
 #define TCPOPT_NOP 1

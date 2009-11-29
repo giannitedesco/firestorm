@@ -23,8 +23,8 @@ enum {
 struct _decoder {
 	unsigned int d_idx;
 	void (*d_decode)(struct _pkt *p);
-	flow_state_t (*d_flow_ctor)(void);
-	void (*d_flow_dtor)(flow_state_t s);
+	int (*d_flow_ctor)(void);
+	void (*d_flow_dtor)(void);
 	struct _proto *d_protos;
 	struct _decoder *d_next;
 	const char *d_label;
@@ -46,7 +46,7 @@ struct _proto {
 	struct _proto *p_next;
 	struct _decoder *p_owner;
 	size_t p_dcb_sz; /* max dcb size */
-	void (*p_flowtrack)(flow_state_t s, pkt_t pkt, dcb_t dcb);
+	void (*p_flowtrack)(pkt_t pkt, dcb_t dcb);
 	const char *p_label;
 };
 

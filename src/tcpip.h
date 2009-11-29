@@ -143,69 +143,22 @@ struct tcp_session {
 	const struct _sproto *proto;
 };
 
-#define TCPHASH 509 /* prime */
-struct tcpflow {
-	/* flow hash */
-	struct tcp_session *hash[TCPHASH];
+int _ipdefrag_ctor(void);
+void _ipdefrag_dtor(void);
+void _ipdefrag_track(pkt_t pkt, dcb_t dcb_ptr);
 
-	/* memory caches */
-	obj_cache_t session_cache;
-	obj_cache_t sstate_cache;
-	obj_cache_t rbuf_cache;
-	obj_cache_t data_cache;
-	obj_cache_t gap_cache;
+int _tcpflow_ctor(void);
+void _tcpflow_dtor(void);
+void _tcpflow_track(pkt_t pkt, dcb_t dcb_ptr);
 
-	/* timeout lists */
-	struct list_head lru;
-	struct list_head tmo_msl;
-
-	/* stats */
-	unsigned int num_active;
-	unsigned int max_active;
-	unsigned int num_segments;
-	unsigned int state_errs;
-
-	unsigned int num_csum_errs;
-	unsigned int num_ttl_errs;
-	unsigned int num_timeouts;
-
-	unsigned int max_gaps;
-	unsigned int num_reasm;
-	unsigned int reasm_bytes;
-};
-
-#define IPHASH 127 /* Mersenne prime */
-struct ipdefrag {
-	struct ipq *ipq_latest;
-	struct ipq *ipq_oldest;
-	size_t mem;
-	struct ipq *hash[IPHASH]; /* IP fragment hash table */
-	obj_cache_t ipq_cache;
-	obj_cache_t frag_cache;
-};
-
-struct ip_flow_state {
-	struct tcpflow tcpflow;
-	struct ipdefrag ipdefrag;
-};
-
-int _ipdefrag_ctor(struct ipdefrag *ipd);
-void _ipdefrag_dtor(struct ipdefrag *ipd);
-void _ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr);
-
-int _tcpflow_ctor(struct tcpflow *tf);
-void _tcpflow_dtor(struct tcpflow *tf);
-void _tcpflow_track(flow_state_t sptr, pkt_t pkt, dcb_t dcb_ptr);
-
-int _tcp_reasm_ctor(struct tcpflow *tf);
-void _tcp_reasm_dtor(struct tcpflow *tf);
-void _tcp_reasm_init(struct tcpflow *tf, struct tcp_sbuf *s, uint32_t isn);
-void _tcp_reasm_inject(struct tcpflow *tf, struct tcp_sbuf *s,
-			uint32_t seq, uint32_t len,
+int _tcp_reasm_ctor(void);
+void _tcp_reasm_dtor(void);
+void _tcp_reasm_init(struct tcp_sbuf *s, uint32_t isn);
+void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq, uint32_t len,
 			const uint8_t *buf);
-void _tcp_reassemble(struct tcpflow *tf, struct tcp_sbuf *s, uint32_t ack);
-void _tcp_reasm_free(struct tcpflow *tf, struct tcp_sbuf *s);
+void _tcp_reassemble(struct tcp_sbuf *s, uint32_t ack);
+void _tcp_reasm_free(struct tcp_sbuf *s);
 
-void *_tcp_alloc(struct tcpflow *tf, struct tcp_session *s, obj_cache_t o);
+void *_tcp_alloc(struct tcp_session *s, obj_cache_t o);
 
 #endif /* _TCPIP_HEADER_INCLUDED_ */
