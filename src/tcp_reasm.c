@@ -11,9 +11,9 @@
 #include "tcpip.h"
 
 #if 0
-#define dprintf printf
+#define dmesg mesg
 #else
-#define dprintf(x...) do { } while(0);
+#define dmesg(x...) do { } while(0);
 #endif
 
 #define RBUF_SHIFT	8
@@ -68,7 +68,7 @@ static struct tcp_rbuf *rbuf_alloc(struct tcp_sbuf *s,
 			objcache_free2(rbuf_cache, r);
 			return NULL;
 		}
-		dprintf(" Allocated rbuf seq=%u\n", seq);
+		dmesg(M_DEBUG, " Allocated rbuf seq=%u\n", seq);
 	}
 	return r;
 }
@@ -188,11 +188,11 @@ static struct tcp_rbuf *discontig_buf(struct tcp_sbuf *s,
 
 static void swallow_gap(struct tcp_sbuf *s, unsigned int i)
 {
-	dprintf("Swallow gap %u %u-%u\n", i,
+	dmesg(M_DEBUG, "Swallow gap %u %u-%u\n", i,
 		s->s_gap[i]->g_begin, s->s_gap[i]->g_end);
 	gap_free(s->s_gap[i]);
 	for(--s->s_num_gaps; i < s->s_num_gaps; i++) {
-		dprintf(" Shuffle gap %u to %u\n", i + 1, i);
+		dmesg(M_DEBUG, " Shuffle gap %u to %u\n", i + 1, i);
 		s->s_gap[i] = s->s_gap[i + 1];
 	}
 }
@@ -217,11 +217,11 @@ static void contig_eat_gaps(struct tcp_sbuf *s,
 	}
 
 	if ( g ) {
-		dprintf(" new contig_seq: %u -> %u\n",
+		dmesg(M_DEBUG, " new contig_seq: %u -> %u\n",
 			s->s_contig_seq, g->g_begin);
 		s->s_contig_seq = g->g_begin;
 	}else{
-		dprintf(" new contig_seq: %u -> %u (buffer contig)\n",
+		dmesg(M_DEBUG, " new contig_seq: %u -> %u (buffer contig)\n",
 			s->s_contig_seq, seq_end);
 		if ( tcp_after(seq_end, s->s_end) )
 			s->s_contig_seq = seq_end;
@@ -233,7 +233,7 @@ static void contig_eat_gaps(struct tcp_sbuf *s,
 static void append_gap(struct tcp_sbuf *s,
 			struct tcp_rbuf *r, uint32_t seq, uint32_t seq_end)
 {
-	dprintf("Appending gap %u-%u\n", s->s_end, seq);
+	dmesg(M_DEBUG, "Appending gap %u-%u\n", s->s_end, seq);
 	assert(s->s_num_gaps <= TCP_REASM_MAX_GAPS);
 	s->s_gap[s->s_num_gaps] = gap_new(s->s_end, seq);
 	if ( ++s->s_num_gaps > max_gaps )
@@ -248,13 +248,13 @@ static void split_gap(struct tcp_sbuf *s,
 
 	assert(s->s_num_gaps <= TCP_REASM_MAX_GAPS);
 
-	dprintf("Split gap\n");
+	dmesg(M_DEBUG, "Split gap\n");
 	for(n = i + 1, j = s->s_num_gaps; j > n; --j) {
-		dprintf(" Shuffle gap %d to %d\n", j - 1, j);
+		dmesg(M_DEBUG, " Shuffle gap %d to %d\n", j - 1, j);
 		s->s_gap[j] = s->s_gap[j - 1];
 	}
 
-	dprintf(" gap %d-%u: %u-%u -> (%u-%u, %u-%u)\n", i, n,
+	dmesg(M_DEBUG, " gap %d-%u: %u-%u -> (%u-%u, %u-%u)\n", i, n,
 		s->s_gap[i]->g_begin, s->s_gap[i]->g_end,
 		s->s_gap[i]->g_begin, seq,
 		seq_end, s->s_gap[i]->g_end);
@@ -282,8 +282,8 @@ static void frob_gaps(struct tcp_sbuf *s,
 				return;
 			}
 
-			dprintf("Backward overlap\n");
-			dprintf(" %u-%u -> %u-%u\n",
+			dmesg(M_DEBUG, "Backward overlap\n");
+			dmesg(M_DEBUG, " %u-%u -> %u-%u\n",
 				g->g_begin, g->g_end,
 				g->g_begin, seq);
 			g->g_end = seq;
@@ -297,8 +297,8 @@ static void frob_gaps(struct tcp_sbuf *s,
 				continue;
 			}
 
-			dprintf("Forward overlap\n");
-			dprintf(" %u-%u -> %u-%u\n",
+			dmesg(M_DEBUG, "Forward overlap\n");
+			dmesg(M_DEBUG, " %u-%u -> %u-%u\n",
 				g->g_begin, g->g_end,
 				seq_end, g->g_end);
 			g->g_begin = seq_end;
@@ -315,7 +315,7 @@ void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq,
 	int is_contig;
 	struct tcp_rbuf *r, *lr;
 
-	dprintf("Inject Packet: %u - %u : '%.*s'\n",
+	dmesg(M_DEBUG, "Inject Packet: %u - %u : '%.*s'\n",
 		seq, seq + len, len, buf);
 
 	/* Discard everything before contig_seq */
@@ -330,7 +330,7 @@ void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq,
 	if ( len == 0 )
 		return;
 
-	dprintf(" Trimmed data: %u - %u : '%.*s'\n",
+	dmesg(M_DEBUG, " Trimmed data: %u - %u : '%.*s'\n",
 		seq, seq + len, len, buf);
 
 	/* Find or allocate buffer for first byte */
@@ -350,7 +350,7 @@ void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq,
 	}
 
 	/* Copy payload data, allocating new buffers as needed */
-	dprintf("Copying data to buffers:\n");
+	dmesg(M_DEBUG, "Copying data to buffers:\n");
 	for(sseq = seq; tcp_before(sseq, seq_end); r = rbuf_next(s, r)) {
 		struct tcp_rbuf *nr;
 
@@ -364,17 +364,17 @@ void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq,
 			r = nr;
 		}else if ( tcp_after(base, r->r_seq) ) {
 			nr = rbuf_alloc(s, base);
-			dprintf(" ... and put it after %u\n", r->r_seq);
+			dmesg(M_DEBUG, " ... and put it after %u\n", r->r_seq);
 			list_add(&nr->r_list, &r->r_list);
 			r = nr;
 		}else if ( tcp_before(base, r->r_seq) ) {
 			nr = rbuf_alloc(s, base);
-			dprintf(" ... and put it before %u\n", r->r_seq);
+			dmesg(M_DEBUG, " ... and put it before %u\n", r->r_seq);
 			list_add_tail(&nr->r_list, &r->r_list);
 			r = nr;
 		}
 
-		dprintf(" Copy data: base=%u:%u ofs=%u len=%u : '%.*s'\n",
+		dmesg(M_DEBUG, " Copy data: base=%u:%u ofs=%u len=%u : '%.*s'\n",
 			r->r_seq, base, ofs, clen, clen, buf);
 		assert(r->r_seq == base);
 
@@ -392,7 +392,7 @@ void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq,
 	}
 
 	if ( tcp_after(seq_end, s->s_end) ) {
-		dprintf(" Setting seq_end to %u\n", seq_end);
+		dmesg(M_DEBUG, " Setting seq_end to %u\n", seq_end);
 		s->s_end = seq_end;
 	}
 }
@@ -410,6 +410,8 @@ void _tcp_reasm_free(struct tcp_sbuf *s)
 
 	for(i = 0; i < s->s_num_gaps; i++)
 		gap_free(s->s_gap[i]);
+
+	s->s_num_gaps = 0;
 }
 
 void _tcp_reasm_init(struct tcp_sbuf *s, uint32_t isn)
@@ -422,69 +424,156 @@ void _tcp_reasm_init(struct tcp_sbuf *s, uint32_t isn)
 	s->s_contig_seq = isn;
 }
 
-void _tcp_reassemble(struct tcp_sbuf *s, uint32_t ack)
+static size_t fill_vectors(struct tcp_sbuf *s, uint32_t seq,
+			struct ro_vec *vec, size_t numv)
 {
 	struct tcp_rbuf *r, *tmp;
-	uint8_t *buf, *ptr;
-	size_t sz;
-
-	if ( tcp_before(ack, s->s_reasm_begin) )
-		return;
-	if ( unlikely(tcp_after(ack, s->s_contig_seq)) ) {
-		mesg(M_CRIT, "missing segment in tcp stream %u-%u",
-			s->s_contig_seq, ack);
-		return;
-	}
-
-	assert(!tcp_before(s->s_reasm_begin, s->s_begin));
-
-	sz = tcp_diff(s->s_reasm_begin, s->s_contig_seq);
-	ptr = buf = malloc(sz);
-	if ( NULL == buf ) {
-		return;
-	}
-
-	num_reasm++;
-	reasm_bytes += sz;
+	size_t i = 0, bytes = 0;
 
 	list_for_each_entry_safe(r, tmp, &s->s_bufs, r_list) {
 		uint8_t *end = r->r_base + RBUF_SIZE;
 		uint8_t *cp = r->r_base;
+		size_t sz;
 		int brk = 0;
 
 		if ( tcp_before(r->r_seq, s->s_reasm_begin) )
 			cp += tcp_diff(r->r_seq, s->s_reasm_begin);
 
-		if ( tcp_before(ack, r->r_seq + RBUF_SIZE) ) {
-			end -= (RBUF_SIZE - seq_ofs(s, ack));
+		if ( tcp_before(seq, r->r_seq + RBUF_SIZE) ) {
+			end -= (RBUF_SIZE - seq_ofs(s, seq));
 			brk = 1;
 		}
 
 		assert(end >= cp);
 		sz = end - cp;
 
-		memcpy(ptr, cp, sz);
+		dmesg(M_DEBUG, " vec[%u] is %u bytes", i, sz);
+		assert(i < numv);
+		vec[i].v_ptr = cp;
+		vec[i].v_len = sz;
+		bytes += sz;
+		i++;
+
 		if ( brk )
 			break;
+	}
 
-		rbuf_free(r);
-		ptr += sz;
+	return bytes;
+}
+
+static size_t num_vectors(struct tcp_sbuf *s, uint32_t seq)
+{
+	struct tcp_rbuf *r, *tmp;
+	size_t cnt = 0;
+
+	list_for_each_entry_safe(r, tmp, &s->s_bufs, r_list) {
+		cnt++;
+		if ( tcp_before(seq, r->r_seq + RBUF_SIZE) ) {
+			break;
+		}
+	}
+
+	return cnt;
+}
+
+static struct ro_vec *advance_reasm_begin(struct tcp_sbuf *s,
+						struct ro_vec *vec,
+						size_t *numv,
+						size_t bytes)
+{
+	size_t i, n = *numv;
+
+	s->s_reasm_begin += bytes;
+
+	for(i = 0; i < n; i++, vec++, (*numv)--) {
+		struct tcp_rbuf *r = first_buffer(s);
+
+		s->s_begin = r->r_seq;
+		if ( vec->v_ptr + vec->v_len == r->r_base + RBUF_SIZE )
+			rbuf_free(r);
 		if ( s->s_contig == r )
 			s->s_contig = NULL;
+
+		if ( bytes < vec->v_len ) {
+			vec->v_len -= bytes;
+			vec->v_ptr += bytes;
+			break;
+		}
+
+		bytes -= vec->v_len;
+	}
+
+	return vec;
+
+}
+
+int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t seq)
+{
+	struct _stream stream;
+	unsigned int chan;
+	size_t sz, sz2, numv;
+	struct ro_vec *vec, *vbuf;
+	char *str;
+
+	if ( s == &ss->c_wnd.reasm) {
+		chan = TCP_CHAN_TO_SERVER;
+		str = "to_server";
+	}else{
+		chan = TCP_CHAN_TO_CLIENT;
+		str = "to_client";
+	}
+
+	assert(!tcp_before(s->s_reasm_begin, s->s_begin));
+	if ( !tcp_after(seq, s->s_reasm_begin) )
+		return 1;
+	if ( unlikely(tcp_after(seq, s->s_contig_seq)) ) {
+		mesg(M_CRIT, "missing segment in tcp stream %u-%u",
+			s->s_contig_seq, seq);
+		return 1;
+	}
+
+	sz = tcp_diff(s->s_reasm_begin, seq);
+
+	numv = num_vectors(s, seq);
+	vbuf = vec = calloc(numv, sizeof(*vec));
+	if ( NULL == vec )
+		return 1;
+
+	dmesg(M_DEBUG, "tcp_reasm(%s): alloc %u vectors", str, numv);
+
+	sz2 = fill_vectors(s, seq, vec, numv);
+	assert(sz == sz2);
+
+	stream.s_reasm = NULL;
+	stream.s_flow = ss->flow;
+
+	while(sz) {
+		ssize_t ret;
+		ret = ss->proto->sp_push(&stream, chan, vec, numv, sz);
+		dmesg(M_DEBUG, " sp_push: %i/%u bytes taken", ret, sz);
+		if ( ret < 0 ) {
+			dmesg(M_CRIT, "tcp_reasm(%s): desynchronised", str);
+			return 0;
+		}
+		if ( ret == 0)
+			break;
+
+		assert((size_t)ret <= sz);
+		sz -= (size_t)ret;
+		vec = advance_reasm_begin(s, vec, &numv, ret);
 	}
 
 	if ( list_empty(&s->s_bufs) ) {
-		s->s_begin = ack;
-		s->s_reasm_begin = ack;
-	}else{
-		s->s_begin = seq_base(s, ack);
-		s->s_reasm_begin = ack;
+		assert(s->s_end == s->s_contig_seq);
+		assert(s->s_reasm_begin == s->s_contig_seq);
+		s->s_begin = s->s_contig_seq;
 	}
 
 	assert(!tcp_before(s->s_contig_seq, s->s_begin));
 	assert(!tcp_before(s->s_contig_seq, s->s_reasm_begin));
-	free(buf);
-	return;
+
+	free(vbuf);
+	return 1;
 }
 
 int _tcp_reasm_ctor(void)
@@ -521,10 +610,10 @@ void _tcp_reasm_dtor(void)
 #if 0
 static void print_gap(uint32_t len)
 {
-	dprintf("\033[31m");
+	dmesg(M_DEBUG, "\033[31m");
 	while (len--)
-		dprintf("#");
-	dprintf("\033[0m");
+		dmesg(M_DEBUG, "#");
+	dmesg(M_DEBUG, "\033[0m");
 }
 static void stream_print(struct tcp_sbuf *s)
 {
@@ -532,21 +621,21 @@ static void stream_print(struct tcp_sbuf *s)
 	struct tcp_gap *n;
 	unsigned int i;
 
-	dprintf("Stream begins at %u\n", s->s_begin);
+	dmesg(M_DEBUG, "Stream begins at %u\n", s->s_begin);
 	if ( s->s_contig ) {
-		dprintf(" contig = %u - %u\n",
+		dmesg(M_DEBUG, " contig = %u - %u\n",
 			s->s_contig->r_seq,
 			s->s_contig_seq);
 	}
 
-	dprintf(" data: '");
+	dmesg(M_DEBUG, " data: '");
 	list_for_each_entry(r, &s->s_bufs, r_list) {
 		if ( tcp_before(s->s_contig_seq, r->r_seq + RBUF_SIZE) ) {
-			dprintf("%.*s",
+			dmesg(M_DEBUG, "%.*s",
 				seq_ofs(s, s->s_contig_seq), r->r_base);
 			break;
 		}
-		dprintf("%.*s", RBUF_SIZE, r->r_base);
+		dmesg(M_DEBUG, "%.*s", RBUF_SIZE, r->r_base);
 	}
 
 	for(i = 0; i < s->s_num_gaps; ++i) {
@@ -566,7 +655,7 @@ static void stream_print(struct tcp_sbuf *s)
 			begin = r->r_base;
 			end = r->r_base + RBUF_SIZE;
 			buf_end = r->r_seq + RBUF_SIZE;
-			//dprintf("\033[33m%u:%u:%u:%u\033[0m",
+			//dmesg(M_DEBUG, "\033[33m%u:%u:%u:%u\033[0m",
 			//	r->r_seq, n->g_begin, n->g_end, nxt);
 
 			if ( !tcp_after(buf_end, n->g_end) )
@@ -581,13 +670,13 @@ static void stream_print(struct tcp_sbuf *s)
 
 			assert(end >= begin);
 			assert((end - begin) <= RBUF_SIZE);
-			dprintf("\033[32m%.*s\033[0m", end - begin, begin);
+			dmesg(M_DEBUG, "\033[32m%.*s\033[0m", end - begin, begin);
 			if ( !tcp_before(buf_end, nxt) )
 				break;
 		}
 	}
 
-	dprintf("'\n\n");
+	dmesg(M_DEBUG, "'\n\n");
 }
 
 #define PKT_OFS 0xfffffff0
@@ -623,7 +712,7 @@ static void reseed_random(void)
 #else
 	seed = 1906306429;
 #endif
-	dprintf("Random seed: %u\n", seed);
+	dmesg(M_DEBUG, "Random seed: %u\n", seed);
 	srand(seed);
 }
 
@@ -673,7 +762,7 @@ static void test_contig(const char *buf, size_t sz, size_t csz)
 
 int main(int argc, char **argv)
 {
-	dprintf("TCP Reassembly Test Rig.\n"
+	dmesg(M_DEBUG, "TCP Reassembly Test Rig.\n"
 		"========================\n"
 		"%u byte buffers, rbuf = %u bytes\n"
 		"stream = %u bytes, gap = %u bytes\n\n",

@@ -47,6 +47,7 @@ static struct tcp_session *hash[TCPHASH];
 /* memory caches */
 static obj_cache_t session_cache;
 static obj_cache_t sstate_cache;
+static obj_cache_t flow_cache;
 
 /* timeout lists */
 static struct list_head lru;
@@ -137,6 +138,45 @@ static int tcp_sequence(struct tcp_state *s, uint32_t seq, uint32_t end_seq)
 		!tcp_after(seq, s->snd_nxt + tcp_receive_window(s));
 }
 
+static void detach_protocol(struct tcp_session *s)
+{
+	if ( NULL == s->proto )
+		return;
+	if ( s->flow ) {
+		s->proto->sp_flow_fini(s->flow);
+		objcache_free2(flow_cache, s->flow);
+	}
+	s->proto = s->flow = NULL;
+}
+
+static void abort_reassembly(struct tcp_session *s)
+{
+	_tcp_reasm_free(&s->c_wnd.reasm);
+	if ( s->s_wnd )
+		_tcp_reasm_free(&s->s_wnd->reasm);
+	detach_protocol(s);
+}
+
+static void attach_protocol(struct tcp_session *s)
+{
+	void *flow = NULL;
+
+	s->proto = sproto_find(SNS_TCP, s->s_port);
+	if ( NULL == s->proto )
+		goto fuckit;
+
+	if ( flow_cache )
+		flow = objcache_alloc(flow_cache);
+
+	if ( s->proto->sp_flow_sz && !s->proto->sp_flow_init(flow) )
+		goto fuckit;
+
+	return;
+
+fuckit:
+	abort_reassembly(s);
+}
+
 static void reassemble_point(struct tcp_session *s,
 				struct tcp_state *wnd,
 				uint32_t ack)
@@ -145,7 +185,8 @@ static void reassemble_point(struct tcp_session *s,
 		return;
 	if ( !s->proto )
 		return;
-	_tcp_reassemble(&wnd->reasm, ack);
+	if ( !_tcp_stream_push(s, &wnd->reasm, ack) )
+		abort_reassembly(s);
 }
 
 static void reasm_data(struct tcp_session *s,
@@ -450,6 +491,7 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 	timer_msl(cur, s);
 
 	s->proto = NULL;
+	s->flow = NULL;
 
 	return s;
 }
@@ -722,10 +764,7 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 			dmesg(M_DEBUG, "%s sent first data",
 				cur->to_server ? "client" : "server");
 			s->state = TCP_SESSION_E;
-			s->proto = sproto_find(SNS_TCP, s->s_port);
-			if ( s->proto )
-				mesg(M_DEBUG, "%u -> %s", s->s_port,
-					s->proto->sp_label);
+			attach_protocol(s);
 		}
 
 		cur->snd->snd_una = cur->seq;
@@ -885,6 +924,8 @@ void _tcpflow_dtor(void)
 
 int _tcpflow_ctor(void)
 {
+	size_t flowsz;
+
 	INIT_LIST_HEAD(&lru);
 	INIT_LIST_HEAD(&tmo_msl);
 
@@ -895,6 +936,11 @@ int _tcpflow_ctor(void)
 
 	sstate_cache = objcache_init("tcp_state", sizeof(struct tcp_state));
 	if ( sstate_cache == NULL )
+		return 0;
+
+	flowsz = stream_max_flow_size(SNS_TCP);
+	flow_cache = objcache_init("tcp_flow", flowsz);
+	if ( flowsz && NULL == flow_cache )
 		return 0;
 
 	if ( reassemble && ! _tcp_reasm_ctor() )
