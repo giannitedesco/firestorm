@@ -24,6 +24,7 @@ firestorm_SOURCES = \
 	nbio-poll.c \
 	mesg.c \
 	util.c \
+	vec.c \
 	os.c \
 	\
 	capture.c \

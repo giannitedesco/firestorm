@@ -68,6 +68,11 @@ void *_firestorm_unimplemented(void);
 void mesg(mesg_code_t code, const char *fmt, ...) _printf(2,3);
 void hex_dump(const uint8_t *tmp, size_t len, size_t llen);
 
+int vcasecmp(const struct ro_vec *v1, const struct ro_vec *v2);
+int vcmp(const struct ro_vec *v1, const struct ro_vec *v2);
+int vstrcmp(const struct ro_vec *v1, const char *str);
+size_t vtouint(struct ro_vec *v, unsigned int *u);
+
 /* --- Packet routines */
 pkt_t pkt_new(struct _frame *owner) _malloc;
 void pkt_free(pkt_t pkt);
