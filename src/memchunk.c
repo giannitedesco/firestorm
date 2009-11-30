@@ -295,6 +295,9 @@ obj_cache_t objcache_init(const char *label, size_t obj_sz)
 
 	assert(obj_sz < MEMCHUNK_SIZE);
 
+	if ( 0 == obj_sz )
+		return NULL;
+
 	if ( obj_sz < sizeof(void *) )
 		obj_sz = sizeof(void *);
 
