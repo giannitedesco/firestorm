@@ -15,13 +15,15 @@ enum {
 };
 
 struct _stream {
-	uint8_t *(*s_reasm)(struct _stream *s, size_t bytes);
+	size_t (*s_reasm)(struct _stream *s, uint8_t *buf, size_t bytes);
 	void *s_flow;
 };
 
 struct _sproto {
 	ssize_t (*sp_push)(struct _stream *s, unsigned int chan,
 				struct ro_vec *vec, size_t numv, size_t bytes);
+	int (*sp_flow_init)(void *flow);
+	void (*sp_flow_fini)(void *flow);
 	size_t sp_flow_sz;
 	struct _sproto *sp_next;
 	unsigned int sp_idx;

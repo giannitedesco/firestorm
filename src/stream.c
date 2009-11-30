@@ -79,6 +79,8 @@ void sproto_register(struct _sproto *sp, proto_ns_t ns, proto_id_t id)
 		return;
 	}
 
+	mesg(M_DEBUG, "stream: ns[%s].proto[%u] = %s",
+		ns_arr[ns].ns_label, id, sp->sp_label);
 	ns_arr[ns].ns_reg[ns_arr[ns].ns_num_reg].nse_id = id;
 	ns_arr[ns].ns_reg[ns_arr[ns].ns_num_reg].nse_sproto = sp;
 	ns_arr[ns].ns_num_reg++;
@@ -104,4 +106,22 @@ const struct _sproto *sproto_find(proto_ns_t ns, proto_id_t id)
 	}
 
 	return NULL;
+}
+
+static int nsentry_cmp(const void *A, const void *B)
+{
+	const struct _sns_entry *a = A, *b = B;
+	return a->nse_id - b->nse_id;
+}
+
+void stream_init(void)
+{
+	unsigned int i;
+
+	for(i = 0; i < SNS_MAX; i++) {
+		qsort(ns_arr[i].ns_reg,
+			ns_arr[i].ns_num_reg,
+			sizeof(*ns_arr[i].ns_reg),
+			nsentry_cmp);
+	}
 }
