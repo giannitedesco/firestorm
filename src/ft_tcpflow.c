@@ -11,7 +11,6 @@
 #include <firestorm.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_stream.h>
 #include <pkt/ip.h>
 #include <pkt/tcp.h>
 #include <pkt/icmp.h>
@@ -171,6 +170,7 @@ static void attach_protocol(struct tcp_session *s)
 	if ( s->proto->sp_flow_sz && !s->proto->sp_flow_init(flow) )
 		goto fuckit;
 
+	s->flow = flow;
 	return;
 
 fuckit:

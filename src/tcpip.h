@@ -6,6 +6,8 @@
 #ifndef _TCPIP_HEADER_INCLUDED_
 #define _TCPIP_HEADER_INCLUDED_
 
+#include <f_stream.h>
+
 /* Keeps each individual fragment */
 struct ipfrag {
 	struct ipfrag		*next;
@@ -142,6 +144,11 @@ struct tcp_session {
 
 	const struct _sproto *proto;
 	void *flow;
+};
+
+struct tcp_stream {
+	struct _stream stream;
+	struct tcp_sbuf *sbuf;
 };
 
 int _ipdefrag_ctor(void);

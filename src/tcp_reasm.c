@@ -5,7 +5,6 @@
  * contiguous chunks of memory (say 2 to the power of 7-9 bytes).
 */
 #include <firestorm.h>
-#include <f_stream.h>
 #include <pkt/tcp.h>
 #include <list.h>
 #include "tcpip.h"
@@ -26,7 +25,8 @@ static obj_cache_t data_cache;
 static obj_cache_t gap_cache;
 static unsigned int max_gaps;
 static unsigned int num_reasm;
-static uint64_t reasm_bytes;
+static unsigned int num_push;
+static uint64_t push_bytes;
 
 static uint32_t seq_base(struct tcp_sbuf *s, uint32_t seq)
 {
@@ -424,53 +424,90 @@ void _tcp_reasm_init(struct tcp_sbuf *s, uint32_t isn)
 	s->s_contig_seq = isn;
 }
 
-static size_t fill_vectors(struct tcp_sbuf *s, uint32_t seq,
-			struct ro_vec *vec, size_t numv)
+static size_t do_reasm(struct _stream *ss, uint8_t *buf, size_t sz)
 {
-	struct tcp_rbuf *r, *tmp;
-	size_t i = 0, bytes = 0;
+	struct tcp_stream *st = (struct tcp_stream *)ss;
+	struct tcp_sbuf *s = st->sbuf;
+	struct tcp_rbuf *r;
+	size_t left = sz;
 
-	list_for_each_entry_safe(r, tmp, &s->s_bufs, r_list) {
-		uint8_t *end = r->r_base + RBUF_SIZE;
+	if ( NULL == buf || 0 == sz )
+		return 0;
+	if ( tcp_after(s->s_reasm_begin + sz, s->s_contig_seq) )
+		return 0;
+
+	list_for_each_entry(r, &s->s_bufs, r_list) {
 		uint8_t *cp = r->r_base;
-		size_t sz;
-		int brk = 0;
+		size_t csz = RBUF_SIZE;
 
-		if ( tcp_before(r->r_seq, s->s_reasm_begin) )
+		if ( tcp_before(r->r_seq, s->s_reasm_begin) ) {
 			cp += tcp_diff(r->r_seq, s->s_reasm_begin);
-
-		if ( tcp_before(seq, r->r_seq + RBUF_SIZE) ) {
-			end -= (RBUF_SIZE - seq_ofs(s, seq));
-			brk = 1;
+			csz -= tcp_diff(r->r_seq, s->s_reasm_begin);
 		}
 
-		assert(end >= cp);
-		sz = end - cp;
+		if ( left < csz )
+			csz = left;
+
+		memcpy(buf, cp, csz);
+		buf += csz;
+		left -= csz;
+		if ( 0 == left )
+			break;
+	}
+
+	num_reasm++;
+	return sz;
+}
+
+static size_t fill_vectors(struct tcp_sbuf *s, size_t bytes,
+			struct ro_vec *vec, size_t numv)
+{
+	struct tcp_rbuf *r;
+	size_t i = 0, ret = 0;
+	size_t left = bytes;
+
+	list_for_each_entry(r, &s->s_bufs, r_list) {
+		uint8_t *cp = r->r_base;
+		size_t sz = RBUF_SIZE;
+
+		if ( tcp_before(r->r_seq, s->s_reasm_begin) ) {
+			cp += tcp_diff(r->r_seq, s->s_reasm_begin);
+			sz -= tcp_diff(r->r_seq, s->s_reasm_begin);
+		}
+
+		if ( left < sz )
+			sz = left;
 
 		dmesg(M_DEBUG, " vec[%u] is %u bytes", i, sz);
 		assert(i < numv);
 		vec[i].v_ptr = cp;
 		vec[i].v_len = sz;
-		bytes += sz;
 		i++;
-
-		if ( brk )
+		left -= sz;
+		ret += sz;
+		if ( 0 == left )
 			break;
 	}
 
-	return bytes;
+	return ret;
 }
 
-static size_t num_vectors(struct tcp_sbuf *s, uint32_t seq)
+static size_t num_vectors(struct tcp_sbuf *s, size_t bytes)
 {
-	struct tcp_rbuf *r, *tmp;
+	struct tcp_rbuf *r;
+	size_t left = bytes;
 	size_t cnt = 0;
 
-	list_for_each_entry_safe(r, tmp, &s->s_bufs, r_list) {
+	list_for_each_entry(r, &s->s_bufs, r_list) {
+		size_t sz = RBUF_SIZE;
+		if ( tcp_before(r->r_seq, s->s_reasm_begin) )
+			sz -= tcp_diff(r->r_seq, s->s_reasm_begin);
+		if ( left < sz )
+			sz = left;
+		left -= sz;
 		cnt++;
-		if ( tcp_before(seq, r->r_seq + RBUF_SIZE) ) {
+		if ( 0 == left )
 			break;
-		}
 	}
 
 	return cnt;
@@ -488,17 +525,17 @@ static struct ro_vec *advance_reasm_begin(struct tcp_sbuf *s,
 	for(i = 0; i < n; i++, vec++, (*numv)--) {
 		struct tcp_rbuf *r = first_buffer(s);
 
-		s->s_begin = r->r_seq;
-		if ( vec->v_ptr + vec->v_len == r->r_base + RBUF_SIZE )
-			rbuf_free(r);
-		if ( s->s_contig == r )
-			s->s_contig = NULL;
-
 		if ( bytes < vec->v_len ) {
 			vec->v_len -= bytes;
 			vec->v_ptr += bytes;
 			break;
 		}
+
+		s->s_begin = r->r_seq;
+		if ( vec->v_ptr + vec->v_len == r->r_base + RBUF_SIZE )
+			rbuf_free(r);
+		if ( s->s_contig == r )
+			s->s_contig = NULL;
 
 		bytes -= vec->v_len;
 	}
@@ -509,7 +546,7 @@ static struct ro_vec *advance_reasm_begin(struct tcp_sbuf *s,
 
 int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t seq)
 {
-	struct _stream stream;
+	struct tcp_stream stream;
 	unsigned int chan;
 	size_t sz, sz2, numv;
 	struct ro_vec *vec, *vbuf;
@@ -527,29 +564,32 @@ int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t seq)
 	if ( !tcp_after(seq, s->s_reasm_begin) )
 		return 1;
 	if ( unlikely(tcp_after(seq, s->s_contig_seq)) ) {
-		mesg(M_CRIT, "missing segment in tcp stream %u-%u",
+		dmesg(M_CRIT, "missing segment in tcp stream %u-%u",
 			s->s_contig_seq, seq);
 		return 1;
 	}
 
 	sz = tcp_diff(s->s_reasm_begin, seq);
 
-	numv = num_vectors(s, seq);
+	numv = num_vectors(s, sz);
 	vbuf = vec = calloc(numv, sizeof(*vec));
 	if ( NULL == vec )
 		return 1;
 
-	dmesg(M_DEBUG, "tcp_reasm(%s): alloc %u vectors", str, numv);
+	dmesg(M_DEBUG, "tcp_reasm(%s): alloc %u bytes in %u vectors",
+			str, sz, numv);
 
-	sz2 = fill_vectors(s, seq, vec, numv);
+	sz2 = fill_vectors(s, sz, vec, numv);
+	dmesg(M_DEBUG, " %u bytes filled", sz2);
 	assert(sz == sz2);
 
-	stream.s_reasm = NULL;
-	stream.s_flow = ss->flow;
+	stream.stream.s_reasm = do_reasm;
+	stream.stream.s_flow = ss->flow;
+	stream.sbuf = s;
 
 	while(sz) {
 		ssize_t ret;
-		ret = ss->proto->sp_push(&stream, chan, vec, numv, sz);
+		ret = ss->proto->sp_push(&stream.stream, chan, vec, numv, sz);
 		dmesg(M_DEBUG, " sp_push: %i/%u bytes taken", ret, sz);
 		if ( ret < 0 ) {
 			dmesg(M_CRIT, "tcp_reasm(%s): desynchronised", str);
@@ -561,6 +601,9 @@ int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t seq)
 		assert((size_t)ret <= sz);
 		sz -= (size_t)ret;
 		vec = advance_reasm_begin(s, vec, &numv, ret);
+		
+		num_push++;
+		push_bytes += sz;
 	}
 
 	if ( list_empty(&s->s_bufs) ) {
@@ -597,10 +640,10 @@ void _tcp_reasm_dtor(void)
 {
 	unsigned int avg;
 
-	avg = reasm_bytes / ((num_reasm) ? num_reasm : 1);
+	avg = push_bytes / ((num_push) ? num_push : 1);
 
-	mesg(M_INFO, "tcp_reasm: reasm=%u avg_bytes=%u max_gaps=%u",
-		num_reasm, avg, max_gaps);
+	mesg(M_INFO, "tcp_reasm: reasm=%u push=%u avg_bytes=%u max_gaps=%u",
+		num_reasm, num_push, avg, max_gaps);
 
 	//objcache_fini(rbuf_cache);
 	//objcache_fini(data_cache);

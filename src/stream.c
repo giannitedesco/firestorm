@@ -79,8 +79,6 @@ void sproto_register(struct _sproto *sp, proto_ns_t ns, proto_id_t id)
 		return;
 	}
 
-	mesg(M_DEBUG, "stream: ns[%s].proto[%u] = %s",
-		ns_arr[ns].ns_label, id, sp->sp_label);
 	ns_arr[ns].ns_reg[ns_arr[ns].ns_num_reg].nse_id = id;
 	ns_arr[ns].ns_reg[ns_arr[ns].ns_num_reg].nse_sproto = sp;
 	ns_arr[ns].ns_num_reg++;
