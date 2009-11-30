@@ -101,6 +101,9 @@ const char *decoder_label(decoder_t l);
 void decode(pkt_t p, decoder_t d) _nonull(1, 2);
 int decode_pkt_realloc(pkt_t p, unsigned int min_layers) _nonull(1);
 
+/* Stream decode */
+void stream_init(void);
+
 /* --- Pipelines: the capture / decode / analyze mainloop */
 pipeline_t pipeline_new(void) _malloc;
 void pipeline_free(pipeline_t p);
