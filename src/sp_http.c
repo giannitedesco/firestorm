@@ -362,7 +362,6 @@ static int check_req(struct ro_vec *vec, size_t vb, size_t b,
 	return 1;
 }
 
-static ssize_t parse_ret;
 static ssize_t parse_req(struct http_flow *f, struct http_fside *fs,
 		struct ro_vec *vec, size_t numv, size_t bytes)
 {
@@ -377,13 +376,11 @@ static ssize_t parse_req(struct http_flow *f, struct http_fside *fs,
 				vb = b + i;
 				continue;
 			}
-			parse_ret = b + i + 1;
 			return b + i + 1;
 		}
 		b += vec[v].v_len;
 	}
 
-	parse_ret = 0;
 	return 0;
 }
 
@@ -412,7 +409,6 @@ static ssize_t push_req(struct _stream *s, struct http_flow *f,
 
 	/* Apparently a new feature in GCC... */
 	ret = parse_req(f, fs, vec, numv, bytes);
-	ret = parse_ret;
 	if ( ret <= 0 )
 		return ret;
 
@@ -523,7 +519,6 @@ static ssize_t push_resp(struct _stream *s, struct http_flow *f,
 
 	/* Apparently a new feature in GCC... */
 	ret = parse_req(f, fs, vec, numv, bytes);
-	ret = parse_ret;
 	if ( ret <= 0 )
 		return ret;
 
@@ -557,8 +552,8 @@ static ssize_t push_resp(struct _stream *s, struct http_flow *f,
 				r.content.v_ptr = buf2 + hsz;
 				if ( do_free ) {
 					free((void *)buf);
-					do_free = 1;
 				}
+				do_free = 1;
 				buf = buf2;
 			}
 		}else{
