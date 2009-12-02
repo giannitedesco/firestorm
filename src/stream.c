@@ -123,3 +123,31 @@ void stream_init(void)
 			nsentry_cmp);
 	}
 }
+
+ssize_t stream_push_line(struct ro_vec *vec, size_t numv, size_t bytes,
+				size_t *bufsz)
+{
+	size_t v, i, b;
+
+	for(b = v = 0; v < numv; b += vec[v].v_len, v++) {
+		for(i = 0; i < vec[v].v_len; i++) {
+			if ( vec[v].v_ptr[i] != '\n' )
+				continue;
+			*bufsz = b + i;
+			if ( 0 != i ) {
+				if ( vec[v].v_ptr[i - 1] == '\r' )
+					*bufsz = b + i - 1;
+			}
+			if ( 0 != v ) {
+				if ( '\r' == 
+					vec[v - 1].v_ptr[vec[v - 1].v_len - 1] )
+					*bufsz = b + i - 1;
+
+			}
+			return b + i + 1;
+		}
+	}
+
+	return 0;
+}
+

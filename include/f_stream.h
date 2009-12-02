@@ -47,4 +47,6 @@ void sproto_add(struct _sproto *sp);
 void sproto_register(struct _sproto *sp, proto_ns_t ns, proto_id_t id);
 _constfn const struct _sproto *sproto_find(proto_ns_t ns, proto_id_t id);
 
+ssize_t stream_push_line(struct ro_vec *vec, size_t numv, size_t bytes,
+				size_t *bufsz);
 #endif /* _FIRESTORM_STREAM_HEADER_INCLUDED_ */

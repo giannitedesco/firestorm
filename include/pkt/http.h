@@ -22,7 +22,7 @@
 
 struct http_request {
 	uint8_t proto_vers;
-	uint8_t _res0;
+	uint8_t _pad0;
 	uint16_t port;
 	struct ro_vec uri;
 	struct ro_vec method;
@@ -35,14 +35,16 @@ struct http_request {
 
 struct http_response {
 	uint8_t proto_vers;
-	uint8_t _res0;
+	uint8_t _pad0;
 	uint16_t code;
 	struct ro_vec server;
 	struct ro_vec content;
 };
 
 struct http_fside {
-	uint16_t state;
+	uint8_t state;
+	uint8_t _pad0;
+	uint16_t _pad1;
 	size_t content_len;
 };
 
