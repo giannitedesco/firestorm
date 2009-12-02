@@ -37,7 +37,7 @@
 #define M_POISON(ptr, len) do { } while(0);
 #endif
 
-struct _obj_cache {
+struct _objcache {
 	/** Size of objects to allocate */
 	size_t o_sz;
 	/** Number of objects which can be packed in to one chunk */
@@ -50,6 +50,10 @@ struct _obj_cache {
 	struct chunk_hdr *o_cur;
 	/** List of chunks which have a free list */
 	struct list_head o_partials;
+	/** List of full chunks */
+	struct list_head o_full;
+	/** Mempool to allocate from */
+	struct _mempool *o_pool;
 	/** Every objcache is in the main memchunk list */
 	struct list_head o_list;
 	/** Text label for this objcache */
@@ -58,7 +62,7 @@ struct _obj_cache {
 
 /* Full chunks: nowhere, c_next = NULL */
 /* Partial chunks: c_next is non-NULL and c_free_list is the free obj list */
-/* Free chunks: in m_free list, c_free_list is chunk pointer, c_next is valid */
+/* Free chunks: in p_free list, c_free_list is chunk pointer, c_next is valid */
 struct chunk_hdr {
 	union {
 		struct {
@@ -66,7 +70,7 @@ struct chunk_hdr {
 			uint8_t *ptr;
 		}c_m;
 		struct {
-			struct _obj_cache *cache;
+			struct _objcache *cache;
 			uint8_t *free_list;
 			unsigned int inuse;
 			struct list_head list;
@@ -74,14 +78,21 @@ struct chunk_hdr {
 	};
 };
 
+struct _mempool {
+	struct chunk_hdr *p_free;
+	size_t p_numfree;
+	struct list_head p_caches;
+	struct list_head p_list;
+};
+
 struct _memchunk {
+	struct _mempool m_gpool;
 	struct chunk_hdr *m_hdr;
-	struct chunk_hdr *m_free;
-	size_t m_inuse;
 	size_t m_size;
 	uint8_t *m_chunks;
-	struct list_head m_caches;
-	struct _obj_cache m_self_cache;
+	struct _objcache m_self_cache;
+	struct _objcache m_pool_cache;
+	struct list_head m_pools;
 };
 
 static struct _memchunk mc;
@@ -149,7 +160,7 @@ static struct chunk_hdr *ptr2hdr(struct _memchunk *m, void *ptr)
 	return &m->m_hdr[ptr2idx(m, ptr)];
 }
 
-static void do_cache_init(struct _memchunk *m, struct _obj_cache *o,
+static void do_cache_init(struct _mempool *p, struct _objcache *o,
 				const char *label, size_t obj_sz)
 {
 	o->o_sz = obj_sz;
@@ -157,7 +168,9 @@ static void do_cache_init(struct _memchunk *m, struct _obj_cache *o,
 	o->o_ptr = o->o_ptr_end = NULL;
 	o->o_cur = NULL;
 	INIT_LIST_HEAD(&o->o_partials);
-	list_add_tail(&o->o_list, &m->m_caches);
+	INIT_LIST_HEAD(&o->o_full);
+	list_add_tail(&o->o_list, &p->p_caches);
+	o->o_pool = p;
 	o->o_label = label;
 
 	mesg(M_INFO, "objcache: new: %s (%u byte)", o->o_label, o->o_sz);
@@ -195,8 +208,6 @@ int memchunk_init(size_t numchunks)
 	M_POISON(m->m_hdr, msz);
 	m->m_chunks += msz;
 
-	INIT_LIST_HEAD(&m->m_caches);
-
 	/* Put all chunks in the free list, lowest address first */
 	for(i = 0; i < numchunks; i++) {
 		m->m_hdr[i].c_m.ptr = idx2ptr(m, i);
@@ -205,10 +216,16 @@ int memchunk_init(size_t numchunks)
 		else
 			m->m_hdr[i].c_m.next = &m->m_hdr[i + 1];
 	}
-	m->m_free = m->m_hdr;
 
-	do_cache_init(m, &m->m_self_cache, "_objcache",
-			sizeof(struct _obj_cache));
+	INIT_LIST_HEAD(&m->m_pools);
+	INIT_LIST_HEAD(&m->m_gpool.p_caches);
+	m->m_gpool.p_free = m->m_hdr;
+	m->m_gpool.p_numfree = numchunks;
+
+	do_cache_init(&m->m_gpool, &m->m_self_cache, "_objcache",
+			sizeof(struct _objcache));
+	do_cache_init(&m->m_gpool, &m->m_pool_cache, "_mempool",
+			sizeof(struct _mempool));
 	return 1;
 
 out_free:
@@ -221,77 +238,88 @@ void memchunk_fini(void)
 {
 	struct _memchunk *m = &mc;
 	chunk_free(m->m_hdr, m->m_size);
-	mesg(M_INFO, "memchunk: %uK released: "
+	mesg(M_INFO, "memchunk: %uK released", m->m_size >> 10);
+
+#if 0
 		"%u.%.2u%% was still in use in %u chunks",
-		m->m_size >> 10,
-		(m->m_inuse * 100) / (m->m_size >> MEMCHUNK_SHIFT),
-		((m->m_inuse * 10000) / (m->m_size >> MEMCHUNK_SHIFT)) % 100,
-		m->m_inuse);
+		(m->m_gpool.p_inuse * 100) / (m->m_size >> MEMCHUNK_SHIFT),
+		((m->m_gpool.p_inuse * 10000) / (m->m_size >> MEMCHUNK_SHIFT)) % 100,
+		m->m_gpool.p_inuse);
+#endif
 }
 
-void *memchunk_alloc(memchunk_t m)
+static struct chunk_hdr *memchunk_get(mempool_t p)
 {
 	struct chunk_hdr *hdr;
 
-	if ( m->m_free == NULL )
+	if ( p->p_free == NULL )
 		return NULL;
 
-	hdr = m->m_free;
-	m->m_free = hdr->c_m.next;
-	m->m_inuse++;
-
-	M_POISON(hdr->c_m.ptr, MEMCHUNK_SIZE);
-	return hdr->c_m.ptr;
-}
-
-void memchunk_free(memchunk_t m, void *chunk)
-{
-	struct chunk_hdr *hdr;
-
-	if ( chunk == NULL )
-		return;
-
-	hdr = ptr2hdr(m, chunk);
-	assert(chunk == hdr->c_m.ptr);
-	M_POISON(hdr, sizeof(*hdr));
-	hdr->c_m.ptr = chunk;
-	hdr->c_m.next = m->m_free;
-	m->m_free = hdr;
-	m->m_inuse--;
-}
-
-static struct chunk_hdr *memchunk_get(memchunk_t m)
-{
-	struct chunk_hdr *hdr;
-
-	if ( m->m_free == NULL )
-		return NULL;
-
-	hdr = m->m_free;
-	m->m_free = hdr->c_m.next;
-	m->m_inuse++;
+	assert(p->p_numfree);
+	hdr = p->p_free;
+	p->p_free = hdr->c_m.next;
+	p->p_numfree--;
 
 	return hdr;
 }
 
-static void memchunk_put(memchunk_t m, struct chunk_hdr *hdr)
+static void memchunk_put(mempool_t p, struct chunk_hdr *hdr)
 {
 #if MEMCHUNK_DEBUG_FREE
 	struct chunk_hdr *tmp;
 
-	for(tmp = m->m_free; tmp; tmp = tmp->c_m.next)
+	for(tmp = p->p_free; tmp; tmp = tmp->c_m.next)
 		assert(tmp != hdr);
 #endif
 	M_POISON(hdr, sizeof(*hdr));
-	hdr->c_m.ptr = hdr2ptr(m, hdr);
-	hdr->c_m.next = m->m_free;
-	m->m_free = hdr;
-	m->m_inuse--;
+	hdr->c_m.ptr = hdr2ptr(&mc, hdr);
+	hdr->c_m.next = p->p_free;
+	p->p_free = hdr;
+	p->p_numfree++;
 }
 
-obj_cache_t objcache_init(const char *label, size_t obj_sz)
+mempool_t mempool_new(size_t numchunks)
 {
-	struct _obj_cache *o;
+	struct _mempool *p;
+	size_t n = numchunks;
+
+	if ( 0 == numchunks )
+		return NULL;
+
+	if ( mc.m_gpool.p_numfree < numchunks )
+		return NULL;
+
+	p = objcache_alloc(&mc.m_pool_cache);
+	if ( NULL == p )
+		return NULL;
+
+	INIT_LIST_HEAD(&p->p_caches);
+	list_add_tail(&p->p_list, &mc.m_pools);
+	p->p_numfree = numchunks;
+	p->p_free = NULL;
+	for(n = 0; n < numchunks; n++) {
+		struct chunk_hdr *tmp;
+
+		tmp = memchunk_get(&mc.m_gpool);
+		tmp->c_m.next = p->p_free;
+		p->p_free = tmp;
+	}
+
+	return p;
+}
+
+/* TODO */
+void mempool_free(mempool_t m)
+{
+	/* list_for_each_entry_safe(... p->p_caches) { objcache_fini() }*/
+	/* list_del(&p->p_caches) */
+	/* return chunks to global pool */
+	/* objcache_free(m) */
+}
+
+objcache_t objcache_init(mempool_t pool, const char *label, size_t obj_sz)
+{
+	struct _objcache *o;
 
 	assert(obj_sz < MEMCHUNK_SIZE);
 
@@ -305,42 +333,48 @@ obj_cache_t objcache_init(const char *label, size_t obj_sz)
 	if ( o == NULL )
 		return NULL;
 
-	do_cache_init(&mc, o, label, obj_sz);
+	if ( NULL == pool )
+		pool = &mc.m_gpool;
+	do_cache_init(pool, o, label, obj_sz);
 	return o;
 }
 
-void objcache_fini(obj_cache_t o)
+void objcache_fini(objcache_t o)
 {
-	assert(o == NULL);
+	/* TODO: Free full pages */
+	/* TODO: Free partial pages */
 }
 
-static void *alloc_from_partial(struct _obj_cache *o, struct chunk_hdr *c)
+static void *alloc_from_partial(struct _objcache *o, struct chunk_hdr *c)
 {
 	void *ret;
 	ret = c->c_o.free_list;
 	c->c_o.free_list = *(uint8_t **)ret;
-	if ( NULL == c->c_o.free_list )
+	if ( NULL == c->c_o.free_list ) {
 		list_del(&c->c_o.list);
+		/* TODO: FULL */
+	}
 	c->c_o.inuse++;
 	O_POISON(ret, o->o_sz);
 	return ret;
 }
 
-static void *alloc_fast(struct _obj_cache *o)
+static void *alloc_fast(struct _objcache *o)
 {
 	void *ret;
 	ret = o->o_ptr;
 	o->o_ptr += o->o_sz;
 	o->o_cur->c_o.inuse++;
+	/* TODO: Check for FULL condition */
 	O_POISON(ret, o->o_sz);
 	return ret;
 }
 
-static void *alloc_slow(struct _obj_cache *o)
+static void *alloc_slow(struct _objcache *o)
 {
 	struct chunk_hdr *c;
 
-	c = memchunk_get(&mc);
+	c = memchunk_get(o->o_pool);
 	if ( NULL == c )
 		return NULL;
 
@@ -356,14 +390,14 @@ static void *alloc_slow(struct _obj_cache *o)
 	return alloc_fast(o);
 }
 
-static struct chunk_hdr *first_partial(struct _obj_cache *o)
+static struct chunk_hdr *first_partial(struct _objcache *o)
 {
 	if ( list_empty(&o->o_partials) )
 		return NULL;
 	return list_entry(o->o_partials.next, struct chunk_hdr, c_o.list);
 }
 
-static void *do_alloc(struct _obj_cache *o)
+static void *do_alloc(struct _objcache *o)
 {
 	struct chunk_hdr *c;
 
@@ -379,12 +413,12 @@ static void *do_alloc(struct _obj_cache *o)
 	return alloc_slow(o);
 }
 
-void *objcache_alloc(obj_cache_t o)
+void *objcache_alloc(objcache_t o)
 {
 	return do_alloc(o);
 }
 
-void *objcache_alloc0(obj_cache_t o)
+void *objcache_alloc0(objcache_t o)
 {
 	void *ret;
 	
@@ -395,7 +429,7 @@ void *objcache_alloc0(obj_cache_t o)
 	return ret;
 }
 
-static void do_cache_free(struct _obj_cache *o, struct chunk_hdr *c, void *obj)
+static void do_cache_free(struct _objcache *o, struct chunk_hdr *c, void *obj)
 {
 #if OBJCACHE_DEBUG_FREE
 	uint8_t **tmp;
@@ -427,7 +461,9 @@ static void do_cache_free(struct _obj_cache *o, struct chunk_hdr *c, void *obj)
 			o->o_ptr = o->o_ptr_end = NULL;
 			o->o_cur = NULL;
 		}
-		memchunk_put(&mc, c);
+		memchunk_put(o->o_pool, c);
+		//mesg(M_DEBUG, "put chunk from %s to pool %p",
+		//	o->o_label, o->o_pool);
 	}
 }
 
@@ -438,7 +474,7 @@ void objcache_free(void *obj)
 	do_cache_free(c->c_o.cache, c, obj);
 }
 
-void objcache_free2(obj_cache_t o, void *obj)
+void objcache_free2(objcache_t o, void *obj)
 {
 	struct chunk_hdr *c;
 	c = ptr2hdr(&mc, obj);

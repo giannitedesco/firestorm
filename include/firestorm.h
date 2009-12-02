@@ -35,7 +35,8 @@ struct ro_vec {
 };
 
 typedef struct _memchunk *memchunk_t;
-typedef struct _obj_cache *obj_cache_t;
+typedef struct _mempool *mempool_t;
+typedef struct _objcache *objcache_t;
 
 typedef struct _pkt *pkt_t;
 typedef struct _frame *frame_t;
@@ -81,12 +82,15 @@ void pkt_free(pkt_t pkt);
 int memchunk_init(size_t numchunks);
 void memchunk_fini(void);
 
-obj_cache_t objcache_init(const char *l, size_t obj_sz) _malloc;
-void objcache_fini(obj_cache_t o);
-void *objcache_alloc(obj_cache_t o) _malloc;
-void *objcache_alloc0(obj_cache_t o) _malloc;
+mempool_t mempool_new(size_t numchunks);
+void mempool_free(mempool_t m);
+
+objcache_t objcache_init(mempool_t p, const char *l, size_t obj_sz) _malloc;
+void objcache_fini(objcache_t o);
+void *objcache_alloc(objcache_t o) _malloc;
+void *objcache_alloc0(objcache_t o) _malloc;
 void objcache_free(void *obj);
-void objcache_free2(obj_cache_t o, void *obj);
+void objcache_free2(objcache_t o, void *obj);
 
 /* --- Data-source plugins */
 source_t capture_tcpdump_open(const char *fn);

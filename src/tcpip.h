@@ -64,7 +64,7 @@ struct tcp_gap {
 };
 
 /* Reassembly buffer */
-#define TCP_REASM_MAX_GAPS	12
+#define TCP_REASM_MAX_GAPS	8
 struct tcp_sbuf {
 	/** begin seq for buffer purposes */
 	uint32_t		s_begin;
@@ -122,8 +122,9 @@ struct tcp_state {
 #define TCP_SESSION_C	10
 
 struct tcp_session {
-	/* Timeout and LRU list */
-	struct list_head list;
+	/* Timeout list */
+	struct list_head tmo;
+	uint32_t expire;
 
 	/* Hash table collision chaining */
 	struct tcp_session **hash_pprev, *hash_next;
@@ -133,17 +134,17 @@ struct tcp_session {
 	uint16_t c_port, s_port;
 
 	uint8_t state;
-	uint8_t _pad0;
+	uint8_t reasm;
 	uint16_t _pad1;
 
 	/* TCP state: host byte order */
 	struct tcp_state c_wnd;
 	struct tcp_state *s_wnd;
 
-	uint32_t expire;
-
 	const struct _sproto *proto;
 	void *flow;
+
+	struct list_head lru;
 };
 
 struct tcp_stream {
@@ -160,14 +161,14 @@ int _tcpflow_ctor(void);
 void _tcpflow_dtor(void);
 void _tcpflow_track(pkt_t pkt, dcb_t dcb_ptr);
 
-int _tcp_reasm_ctor(void);
+int _tcp_reasm_ctor(mempool_t pool);
 void _tcp_reasm_dtor(void);
 void _tcp_reasm_init(struct tcp_sbuf *s, uint32_t isn);
-void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq, uint32_t len,
-			const uint8_t *buf);
+int _tcp_reasm_inject(struct tcp_session *ss, struct tcp_sbuf *s,
+			uint32_t seq, uint32_t len, const uint8_t *buf);
 int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t ack);
 void _tcp_reasm_free(struct tcp_sbuf *s);
 
-void *_tcp_alloc(struct tcp_session *s, obj_cache_t o);
+void *_tcp_alloc(struct tcp_session *s, objcache_t o, int reasm);
 
 #endif /* _TCPIP_HEADER_INCLUDED_ */
