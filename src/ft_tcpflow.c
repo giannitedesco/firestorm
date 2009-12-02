@@ -958,7 +958,7 @@ int _tcpflow_ctor(void)
 {
 	size_t flowsz;
 
-	tcp_pool = mempool_new(4096);
+	tcp_pool = mempool_new("tcpflow", 1024);
 
 	session_cache = objcache_init(tcp_pool, "tcp_session",
 					sizeof(struct tcp_session));

@@ -37,64 +37,6 @@
 #define M_POISON(ptr, len) do { } while(0);
 #endif
 
-struct _objcache {
-	/** Size of objects to allocate */
-	size_t o_sz;
-	/** Number of objects which can be packed in to one chunk */
-	unsigned int o_num;
-	/** Pointer to next object to allocate */
-	uint8_t *o_ptr;
-	/** Pointer to byte after last object in current chunk */
-	uint8_t *o_ptr_end;
-	/** Freshest chunk (we never allocated to o_ptr_end yet) */
-	struct chunk_hdr *o_cur;
-	/** List of chunks which have a free list */
-	struct list_head o_partials;
-	/** List of full chunks */
-	struct list_head o_full;
-	/** Mempool to allocate from */
-	struct _mempool *o_pool;
-	/** Every objcache is in the main memchunk list */
-	struct list_head o_list;
-	/** Text label for this objcache */
-	const char *o_label;
-};
-
-/* Full chunks: nowhere, c_next = NULL */
-/* Partial chunks: c_next is non-NULL and c_free_list is the free obj list */
-/* Free chunks: in p_free list, c_free_list is chunk pointer, c_next is valid */
-struct chunk_hdr {
-	union {
-		struct {
-			struct chunk_hdr *next;
-			uint8_t *ptr;
-		}c_m;
-		struct {
-			struct _objcache *cache;
-			uint8_t *free_list;
-			unsigned int inuse;
-			struct list_head list;
-		}c_o;
-	};
-};
-
-struct _mempool {
-	struct chunk_hdr *p_free;
-	size_t p_numfree;
-	struct list_head p_caches;
-	struct list_head p_list;
-};
-
-struct _memchunk {
-	struct _mempool m_gpool;
-	struct chunk_hdr *m_hdr;
-	size_t m_size;
-	uint8_t *m_chunks;
-	struct _objcache m_self_cache;
-	struct _objcache m_pool_cache;
-	struct list_head m_pools;
-};
-
 static struct _memchunk mc;
 
 #if USE_MMAP
@@ -173,7 +115,8 @@ static void do_cache_init(struct _mempool *p, struct _objcache *o,
 	o->o_pool = p;
 	o->o_label = label;
 
-	mesg(M_INFO, "objcache: new: %s (%u byte)", o->o_label, o->o_sz);
+	mesg(M_INFO, "objcache: new: %s/%s (%u byte)",
+		p->p_label, o->o_label, o->o_sz);
 }
 
 int memchunk_init(size_t numchunks)
@@ -221,6 +164,8 @@ int memchunk_init(size_t numchunks)
 	INIT_LIST_HEAD(&m->m_gpool.p_caches);
 	m->m_gpool.p_free = m->m_hdr;
 	m->m_gpool.p_numfree = numchunks;
+	m->m_gpool.p_reserve = numchunks;
+	m->m_gpool.p_label = "_global";
 
 	do_cache_init(&m->m_gpool, &m->m_self_cache, "_objcache",
 			sizeof(struct _objcache));
@@ -252,7 +197,10 @@ static struct chunk_hdr *memchunk_get(mempool_t p)
 {
 	struct chunk_hdr *hdr;
 
-	if ( p->p_free == NULL )
+	if ( NULL == p->p_free )
+		p = &mc.m_gpool;
+
+	if ( NULL == p->p_free )
 		return NULL;
 
 	assert(p->p_numfree);
@@ -271,6 +219,8 @@ static void memchunk_put(mempool_t p, struct chunk_hdr *hdr)
 	for(tmp = p->p_free; tmp; tmp = tmp->c_m.next)
 		assert(tmp != hdr);
 #endif
+	if ( p->p_numfree >= p->p_reserve )
+		p = &mc.m_gpool;
 	M_POISON(hdr, sizeof(*hdr));
 	hdr->c_m.ptr = hdr2ptr(&mc, hdr);
 	hdr->c_m.next = p->p_free;
@@ -278,7 +228,7 @@ static void memchunk_put(mempool_t p, struct chunk_hdr *hdr)
 	p->p_numfree++;
 }
 
-mempool_t mempool_new(size_t numchunks)
+mempool_t mempool_new(const char *label, size_t numchunks)
 {
 	struct _mempool *p;
 	size_t n = numchunks;
@@ -296,7 +246,9 @@ mempool_t mempool_new(size_t numchunks)
 	INIT_LIST_HEAD(&p->p_caches);
 	list_add_tail(&p->p_list, &mc.m_pools);
 	p->p_numfree = numchunks;
+	p->p_reserve = numchunks;
 	p->p_free = NULL;
+	p->p_label = label;
 	for(n = 0; n < numchunks; n++) {
 		struct chunk_hdr *tmp;
 

@@ -616,7 +616,7 @@ int _ipdefrag_ctor(void)
 			"you will be vulnerable to evasion!");
 	}
 
-	ipf_pool = mempool_new(1024);
+	ipf_pool = mempool_new("ipdefrag", 2);
 	ipq_cache = objcache_init(ipf_pool, "ipq", sizeof(struct ipq));
 	frag_cache = objcache_init(ipf_pool, "ipfrag", sizeof(struct ipfrag));
 	if ( ipq_cache == NULL || frag_cache == NULL )

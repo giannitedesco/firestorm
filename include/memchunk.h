@@ -17,7 +17,64 @@
 #define OBJCACHE_POISON 1
 #define OBJCACHE_POISON_PATTERN 0xa5
 
-void *memchunk_alloc(memchunk_t m) _malloc;
-void memchunk_free(memchunk_t m, void *chunk);
+struct _objcache {
+	/** Size of objects to allocate */
+	size_t o_sz;
+	/** Number of objects which can be packed in to one chunk */
+	unsigned int o_num;
+	/** Pointer to next object to allocate */
+	uint8_t *o_ptr;
+	/** Pointer to byte after last object in current chunk */
+	uint8_t *o_ptr_end;
+	/** Freshest chunk (we never allocated to o_ptr_end yet) */
+	struct chunk_hdr *o_cur;
+	/** List of chunks which have a free list */
+	struct list_head o_partials;
+	/** List of full chunks */
+	struct list_head o_full;
+	/** Mempool to allocate from */
+	struct _mempool *o_pool;
+	/** Every objcache is in the main memchunk list */
+	struct list_head o_list;
+	/** Text label for this objcache */
+	const char *o_label;
+};
+
+/* Full chunks: nowhere, c_next = NULL */
+/* Partial chunks: c_next is non-NULL and c_free_list is the free obj list */
+/* Free chunks: in p_free list, c_free_list is chunk pointer, c_next is valid */
+struct chunk_hdr {
+	union {
+		struct {
+			struct chunk_hdr *next;
+			uint8_t *ptr;
+		}c_m;
+		struct {
+			struct _objcache *cache;
+			uint8_t *free_list;
+			unsigned int inuse;
+			struct list_head list;
+		}c_o;
+	};
+};
+
+struct _mempool {
+	struct chunk_hdr *p_free;
+	size_t p_numfree;
+	size_t p_reserve;
+	struct list_head p_caches;
+	struct list_head p_list;
+	const char *p_label;
+};
+
+struct _memchunk {
+	struct _mempool m_gpool;
+	struct chunk_hdr *m_hdr;
+	size_t m_size;
+	uint8_t *m_chunks;
+	struct _objcache m_self_cache;
+	struct _objcache m_pool_cache;
+	struct list_head m_pools;
+};
 
 #endif /* _FIRESTORM_MEMCHUNK_HEADER_INCLUDED_ */

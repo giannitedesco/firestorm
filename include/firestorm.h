@@ -82,7 +82,7 @@ void pkt_free(pkt_t pkt);
 int memchunk_init(size_t numchunks);
 void memchunk_fini(void);
 
-mempool_t mempool_new(size_t numchunks);
+mempool_t mempool_new(const char *label, size_t numchunks);
 void mempool_free(mempool_t m);
 
 objcache_t objcache_init(mempool_t p, const char *l, size_t obj_sz) _malloc;
