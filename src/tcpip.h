@@ -148,6 +148,7 @@ struct tcp_session {
 
 struct tcp_stream {
 	struct _stream stream;
+	struct tcp_session *s;
 	struct tcp_sbuf *sbuf;
 };
 

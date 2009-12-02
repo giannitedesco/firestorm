@@ -585,6 +585,7 @@ int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t seq)
 
 	stream.stream.s_reasm = do_reasm;
 	stream.stream.s_flow = ss->flow;
+	stream.s = ss;
 	stream.sbuf = s;
 
 	while(sz) {
@@ -601,9 +602,9 @@ int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t seq)
 		assert((size_t)ret <= sz);
 		sz -= (size_t)ret;
 		vec = advance_reasm_begin(s, vec, &numv, ret);
-		
+
 		num_push++;
-		push_bytes += sz;
+		push_bytes += ret;
 	}
 
 	if ( list_empty(&s->s_bufs) ) {
