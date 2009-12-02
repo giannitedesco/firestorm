@@ -442,8 +442,8 @@ static ssize_t push_req(struct _stream *s, struct http_flow *f,
 				r.content.v_ptr = buf2 + hsz;
 				if ( do_free ) {
 					free((void *)buf);
-					do_free = 1;
 				}
+				do_free = 1;
 				buf = buf2;
 			}
 		}else{
