@@ -607,7 +607,7 @@ int _ipdefrag_ctor(void)
 		return 0;
 	}
 
-	mesg(M_INFO, "ipdefrag: minttl=%u timeout=%llus",
+	mesg(M_INFO, "ipdefrag: minttl=%u timeout=%lus",
 		minttl, timeout / TIMESTAMP_HZ);
 
 	if ( timeout < (10 * TIMESTAMP_HZ) ||
