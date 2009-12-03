@@ -11,9 +11,7 @@
  *  - buffer data: blocks of raw data, some fixed power of 2 size
  *
  * TODO:
- *  o objcache_fini() is unimplemented
  *  o Analysis printout with fragmentation stats
- *  o May need a obj->oom() callback to free-up timed out objects!
 */
 
 #include <firestorm.h>
@@ -260,13 +258,24 @@ mempool_t mempool_new(const char *label, size_t numchunks)
 	return p;
 }
 
-/* TODO */
-void mempool_free(mempool_t m)
+void mempool_free(mempool_t p)
 {
-	/* list_for_each_entry_safe(... p->p_caches) { objcache_fini() }*/
-	/* list_del(&p->p_caches) */
-	/* return chunks to global pool */
-	/* objcache_free(m) */
+	struct _objcache *o, *tmp;
+	struct chunk_hdr *c, *nxt;
+
+	mesg(M_INFO, "mempool: free: %s", p->p_label);
+	list_for_each_entry_safe(o, tmp, &p->p_caches, o_list) {
+		objcache_fini(o);
+	}
+
+	assert(p->p_numfree == p->p_reserve);
+	for(c = p->p_free; c; c = nxt) {
+		nxt = c->c_m.next;
+		memchunk_put(&mc.m_gpool, c);
+	}
+
+	list_del(&p->p_list);
+	objcache_free2(&mc.m_pool_cache, p);
 }
 
 objcache_t objcache_init(mempool_t pool, const char *label, size_t obj_sz)
@@ -293,8 +302,41 @@ objcache_t objcache_init(mempool_t pool, const char *label, size_t obj_sz)
 
 void objcache_fini(objcache_t o)
 {
-	/* TODO: Free full pages */
-	/* TODO: Free partial pages */
+	struct chunk_hdr *c, *tmp;
+	size_t total = 0, obj = 0;
+
+	list_for_each_entry_safe(c, tmp, &o->o_full, c_o.list) {
+		total++;
+		obj += c->c_o.inuse;
+		assert(c->c_o.inuse == o->o_num);
+		list_del(&c->c_o.list);
+		memchunk_put(o->o_pool, c);
+	}
+
+	list_for_each_entry_safe(c, tmp, &o->o_partials, c_o.list) {
+		if ( o->o_cur == c )
+			continue;
+		total++;
+		obj += c->c_o.inuse;
+		assert(c->c_o.inuse < o->o_num);
+		list_del(&c->c_o.list);
+		memchunk_put(o->o_pool, c);
+	}
+
+	if ( o->o_cur ) {
+		total++;
+		obj += o->o_cur->c_o.inuse;
+		list_del(&o->o_cur->c_o.list);
+		memchunk_put(o->o_pool, o->o_cur);
+	}
+
+	obj *= o->o_sz;
+	total <<= MEMCHUNK_SHIFT;
+
+	mesg(M_INFO, "objcache: free: %s: %uK total, %uK inuse",
+		o->o_label, total >> 10, obj >> 10);
+	objcache_free2(&mc.m_self_cache, o);
+
 }
 
 static void *alloc_from_partial(struct _objcache *o, struct chunk_hdr *c)
@@ -302,11 +344,9 @@ static void *alloc_from_partial(struct _objcache *o, struct chunk_hdr *c)
 	void *ret;
 	ret = c->c_o.free_list;
 	c->c_o.free_list = *(uint8_t **)ret;
-	if ( NULL == c->c_o.free_list ) {
-		list_del(&c->c_o.list);
-		/* TODO: FULL */
-	}
 	c->c_o.inuse++;
+	if ( NULL == c->c_o.free_list && c != o->o_cur )
+		list_move(&c->c_o.list, &o->o_full);
 	O_POISON(ret, o->o_sz);
 	return ret;
 }
@@ -317,7 +357,11 @@ static void *alloc_fast(struct _objcache *o)
 	ret = o->o_ptr;
 	o->o_ptr += o->o_sz;
 	o->o_cur->c_o.inuse++;
-	/* TODO: Check for FULL condition */
+	if ( unlikely(o->o_cur->c_o.inuse == o->o_num &&
+		NULL == o->o_cur->c_o.free_list) ) {
+		list_move(&o->o_cur->c_o.list, &o->o_full);
+		o->o_cur = NULL;
+	}
 	O_POISON(ret, o->o_sz);
 	return ret;
 }
@@ -395,9 +439,8 @@ static void do_cache_free(struct _objcache *o, struct chunk_hdr *c, void *obj)
 
 	/* First add to partials if this is first free from chunk */
 	if ( NULL == c->c_o.free_list ) {
-		assert(list_empty(&c->c_o.list));
 		assert(c == o->o_cur || c->c_o.inuse == o->o_num);
-		list_add(&c->c_o.list, &o->o_partials);
+		list_move(&c->c_o.list, &o->o_partials);
 	}
 
 	O_POISON(obj, o->o_sz);

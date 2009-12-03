@@ -670,10 +670,6 @@ void _tcp_reasm_dtor(void)
 
 	mesg(M_INFO, "tcp_reasm: reasm=%u push=%u avg_bytes=%u max_gaps=%u",
 		num_reasm, num_push, avg, max_gaps);
-
-	//objcache_fini(rbuf_cache);
-	//objcache_fini(data_cache);
-	//objcache_fini(gap_cache);
 }
 
 #if 0

@@ -948,10 +948,8 @@ void _tcpflow_dtor(void)
 		max_active, num_active);
 	mesg(M_INFO,"tcpstream: %u segments processed, %u state errors",
 		num_segments, state_errs);
-//	objcache_fini(session_cache);
-//	objcache_fini(server_cache);
-//	objcache_fini(sstate_cache);
 	_tcp_reasm_dtor();
+	mempool_free(tcp_pool);
 }
 
 int _tcpflow_ctor(void)

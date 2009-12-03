@@ -597,7 +597,7 @@ void _ipdefrag_dtor(void)
 		"%u reasm errors, %u timeouts, %u oom",
 		reassembled, err_reasm, err_timeout, err_mem);
 
-	/* FIXME: memory leak */
+	mempool_free(ipf_pool);
 }
 
 int _ipdefrag_ctor(void)
