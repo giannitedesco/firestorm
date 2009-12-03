@@ -12,6 +12,14 @@
 #include <limits.h>
 #include <ctype.h>
 
+#if 0
+#define dmesg mesg
+#define dhex_dump hex_dump
+#else
+#define dmesg(x...) do { } while(0);
+#define dhex_dump(x...) do { } while(0);
+#endif
+
 /* Accepted HTTP versions, must correspond with the  */
 static struct {
 	int maj, min;
@@ -400,15 +408,13 @@ static ssize_t parse_req(struct http_flow *f, struct http_fside *fs,
 
 static void msg_http_req(struct http_request *r)
 {
-#if 0
-	mesg(M_DEBUG, "%.*s %.*s (host: %.*s:%u)",
+	dmesg(M_DEBUG, "%.*s %.*s (host: %.*s:%u)",
 			r->method.v_len, r->method.v_ptr,
 			r->uri.v_len, r->uri.v_ptr,
 			r->host.v_len, r->host.v_ptr,
 			r->port);
 	if ( r->content.v_ptr )
-		hex_dump(r->content.v_ptr, r->content.v_len, 16);
-#endif
+		dhex_dump(r->content.v_ptr, r->content.v_len, 16);
 }
 
 static ssize_t push_req(struct _stream *s, struct http_flow *f,
@@ -513,14 +519,12 @@ static size_t http_response(struct http_response *r,
 
 static void msg_http_resp(struct http_response *r)
 {
-#if 0
-	mesg(M_DEBUG, "HTTP/%3u %.*s %u bytes %.*s", r->code,
+	dmesg(M_DEBUG, "HTTP/%3u %.*s %u bytes %.*s", r->code,
 			r->server.v_len, r->server.v_ptr,
 			r->content.v_len,
 			r->content_type.v_len, r->content_type.v_ptr);
 	if ( r->content.v_ptr )
-		hex_dump(r->content.v_ptr, r->content.v_len, 16);
-#endif
+		dhex_dump(r->content.v_ptr, r->content.v_len, 16);
 }
 
 static ssize_t push_resp(struct _stream *s, struct http_flow *f,
@@ -670,6 +674,7 @@ static void __attribute__((constructor)) http_ctor(void)
 {
 	sproto_add(&sp_http);
 	sproto_register(&sp_http, SNS_TCP, sys_be16(80));
+	sproto_register(&sp_http, SNS_TCP, sys_be16(81));
 	sproto_register(&sp_http, SNS_TCP, sys_be16(3128));
 	sproto_register(&sp_http, SNS_TCP, sys_be16(8080));
 }

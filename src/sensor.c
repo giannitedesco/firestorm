@@ -13,7 +13,7 @@ int main(int argc, char **argv)
 	pipeline_t p;
 
 	mesg(M_INFO,"Firestorm NIDS v0.6.0");
-	mesg(M_INFO,"Copyright (c) 2002-2008 Gianni Tedesco");
+	mesg(M_INFO,"Copyright (c) 2002-2009 Gianni Tedesco");
 	mesg(M_INFO,"This program is free software; released under "
 		"the GNU GPL v3 (see: COPYING)");
 
