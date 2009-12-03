@@ -619,7 +619,8 @@ int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t seq)
 		ret = ss->proto->sp_push(&stream.stream, chan, vec, numv, sz);
 		dmesg(M_DEBUG, " sp_push: %i/%u bytes taken", ret, sz);
 		if ( ret < 0 ) {
-			dmesg(M_CRIT, "tcp_reasm(%s): desynchronised", str);
+			mesg(M_CRIT, "tcp_reasm(%s): %s: desynchronised",
+				str, ss->proto->sp_label);
 			return 0;
 		}
 		if ( ret == 0)
@@ -709,7 +710,7 @@ void _tcp_reasm_print(struct tcp_sbuf *s)
 			nxt = s->s_end;
 		else
 			nxt = s->s_gap[i + 1]->g_begin;
-		dmesg(M_DEBUG, " - %u byte gap", gap_len(n));
+		mesg(M_DEBUG, " - %u byte gap", gap_len(n));
 
 		for(; r; r = rbuf_next(s, r)) {
 			uint8_t *begin, *end;
