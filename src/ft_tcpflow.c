@@ -396,7 +396,7 @@ static void tcp_free(struct tcp_session *s)
 
 	if ( s->s_wnd ) {
 		if ( s->reasm ) {
-			_tcp_stream_push(s, &s->s_wnd->reasm,
+			reassemble_point(s, s->s_wnd,
 						s->s_wnd->reasm.s_contig_seq);
 			_tcp_reasm_free(&s->s_wnd->reasm);
 		}
@@ -404,13 +404,9 @@ static void tcp_free(struct tcp_session *s)
 	}
 
 	if ( s->reasm ) {
-		_tcp_stream_push(s, &s->c_wnd.reasm,
-					s->c_wnd.reasm.s_contig_seq);
+		reassemble_point(s, &s->c_wnd, s->c_wnd.reasm.s_contig_seq);
 		_tcp_reasm_free(&s->c_wnd.reasm);
-		if ( s->flow ) {
-			s->proto->sp_flow_fini(s->flow);
-			objcache_free2(flow_cache, s->flow);
-		}
+		detach_protocol(s);
 	}
 
 	objcache_free2(session_cache, s);
