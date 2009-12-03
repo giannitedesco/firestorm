@@ -47,14 +47,14 @@ static int parse_response(struct smtp_response *r, struct ro_vec *v)
 	return 1;
 }
 
-static void do_response(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
+static int do_response(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
 {
 	struct smtp_response r;
 
 	switch(f->state) {
 	case SMTP_STATE_CMD:
 	case SMTP_STATE_DATA:
-		return;
+		return 0;
 	default:
 		break;
 	}
@@ -74,6 +74,8 @@ static void do_response(struct _stream *s, struct smtp_flow *f, struct ro_vec *v
 		else
 			f->state = SMTP_STATE_CMD;
 	}
+
+	return 1;
 }
 
 struct smtp_cmd {
@@ -151,7 +153,7 @@ static int parse_request(struct _stream *s, struct ro_vec *v)
 	return 1;
 }
 
-static void do_request(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
+static int do_request(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
 {
 	switch(f->state) {
 	case SMTP_STATE_CMD:
@@ -167,8 +169,10 @@ static void do_request(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
 			f->state = SMTP_STATE_RESP;
 		break;
 	default:
-		return;
+		return 0;
 	}
+
+	return 1;
 }
 
 static int smtp_line(struct _stream *s, struct smtp_flow *f,
@@ -183,11 +187,9 @@ static int smtp_line(struct _stream *s, struct smtp_flow *f,
 
 	switch(chan) {
 	case TCP_CHAN_TO_CLIENT:
-		do_response(s, f, &vec);
-		break;
+		return do_response(s, f, &vec);
 	case TCP_CHAN_TO_SERVER:
-		do_request(s, f, &vec);
-		break;
+		return do_request(s, f, &vec);
 	}
 
 	return 1;
