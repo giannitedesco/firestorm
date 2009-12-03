@@ -479,6 +479,7 @@ static size_t http_response(struct http_response *r,
 		{"msg", htype_string, {.vec = NULL}},
 		{"Content-Length", htype_int, {.val = &clen}},
 		{"Content-Encoding", htype_string, {.vec = &enc}},
+		{"Content-Type", htype_string, {.vec = &r->content_type}},
 		{"Server", htype_string, {.vec = &r->server}},
 		{NULL,}
 	};
@@ -500,8 +501,10 @@ static size_t http_response(struct http_response *r,
 static void msg_http_resp(struct http_response *r)
 {
 #if 0
-	mesg(M_DEBUG, "HTTP/%3u %.*s", r->code,
-			r->server.v_len, r->server.v_ptr);
+	mesg(M_DEBUG, "HTTP/%3u %.*s %u bytes %.*s", r->code,
+			r->server.v_len, r->server.v_ptr,
+			r->content.v_len,
+			r->content_type.v_len, r->content_type.v_ptr);
 	if ( r->content.v_ptr )
 		hex_dump(r->content.v_ptr, r->content.v_len, 16);
 #endif
@@ -585,15 +588,14 @@ static ssize_t http_push(struct _stream *s, unsigned int chan,
 
 	f = s->s_flow;
 
-	switch (chan) {
-	case TCP_CHAN_TO_SERVER:
-		fs = &f->client;
-		break;
-	case TCP_CHAN_TO_CLIENT:
+	if ( f->seq & 0x1 ) {
+		if ( chan != TCP_CHAN_TO_CLIENT )
+			return 0;
 		fs = &f->server;
-		break;
-	default:
-		return bytes;
+	}else{
+		if ( chan != TCP_CHAN_TO_SERVER )
+			return 0;
+		fs = &f->client;
 	}
 
 	switch(fs->state) {
@@ -624,6 +626,8 @@ static ssize_t http_push(struct _stream *s, unsigned int chan,
 		assert(0);
 	}
 
+	if ( fs->state == HTTP_STATE_HEADER )
+		f->seq++;
 	return ret;
 }
 
@@ -632,6 +636,7 @@ static int flow_init(void *fptr)
 	struct http_flow *f = fptr;
 	f->client.state = HTTP_STATE_HEADER;
 	f->server.state = HTTP_STATE_HEADER;
+	f->seq = 0;
 	return 1;
 }
 

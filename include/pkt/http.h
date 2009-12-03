@@ -18,7 +18,7 @@
 #define HTTP_VER_MAX		4
 
 #define HTTP_MAX_POST_DATA	1024
-#define HTTP_MAX_RESP_DATA	2048
+#define HTTP_MAX_RESP_DATA	1024
 
 struct http_request {
 	uint8_t proto_vers;
@@ -38,6 +38,7 @@ struct http_response {
 	uint8_t _pad0;
 	uint16_t code;
 	struct ro_vec server;
+	struct ro_vec content_type;
 	struct ro_vec content;
 };
 
@@ -51,6 +52,7 @@ struct http_fside {
 struct http_flow {
 	struct http_fside client;
 	struct http_fside server;
+	unsigned int seq;
 };
 
 #endif /* _PKT_HTTP_HEADER_INCLUDED_ */
