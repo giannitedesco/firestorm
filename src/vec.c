@@ -30,34 +30,21 @@ size_t vtouint(struct ro_vec *v, unsigned int *u)
 /* Case-insensitive comparison of two vectors */
 int vcasecmp(const struct ro_vec *v1, const struct ro_vec *v2)
 {
-	const uint8_t *end1, *end2;
-	const uint8_t *p1, *p2;
+	size_t idx;
 
-	end1 = v1->v_ptr + v1->v_len;
-	end2 = v2->v_ptr + v2->v_len;
+	if ( v1->v_len < v2->v_len )
+		return -1;
+	if ( v1->v_len > v2->v_len )
+		return 1;
 
-	p1 = v1->v_ptr;
-	p2 = v2->v_ptr;
-
-	for(;;) {
-		if ( p1 == end1 && p2 == end2 )
-			return 0;
-
-		if ( p1 == end1 )
-			return -1;
-
-		if ( p2 == end2 )
-			return 1;
-
-		if ( toupper(*p1) < toupper(*p2) )
-			return -1;
-
-		if ( toupper(*p1) > toupper(*p2) )
-			return 1;
-
-		p1++; p2++;
+	for(idx = 0; idx < v1->v_len; idx++) {
+		int ret;
+		ret = tolower(v1->v_ptr[idx]) - tolower(v2->v_ptr[idx]);
+		if ( ret )
+			return ret;
 	}
-	
+
+	return 0;
 }
 
 /* Case-sensitive comparison of two vectors */

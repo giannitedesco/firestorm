@@ -117,20 +117,35 @@ static void htype_code(struct http_dcb *h, struct ro_vec *v)
 }
 
 /* Check if this header is one we want to store */
-static inline void dispatch_hdr(struct http_dcb *d,
+static inline void dispatch_hdr(struct http_dcb *dcb,
+				size_t num_dcb,
 				struct ro_vec *k,
 				struct ro_vec *v)
 {
-	for(; d->label; d++) {
-		if ( vstrcmp(k, d->label) )
-			continue;
-		d->fn(d, v);
+	unsigned int n;
+	struct http_dcb *d;
+
+	for(n = num_dcb, d = dcb; n; ) {
+		unsigned int i;
+		int ret;
+
+		i = (n / 2);
+		ret = vstrcmp(k, d[i].label);
+		if ( ret < 0 ) {
+			n = i;
+		}else if ( ret > 0 ) {
+			d = d + (i + 1);
+			n = n - (i + 1);
+		}else{
+			d[i].fn(&d[i], v);
+			break;
+		}
 	}
 }
 
 /* Actually parse an HTTP request */
-static size_t http_decode_buf(struct http_dcb *d, const uint8_t *p,
-				const uint8_t *end)
+static size_t http_decode_buf(struct http_dcb *d, size_t num_dcb,
+				const uint8_t *p, const uint8_t *end)
 {
 	const uint8_t *cur;
 	struct ro_vec hv[3]; /* method, url, proto */
@@ -194,7 +209,7 @@ static size_t http_decode_buf(struct http_dcb *d, const uint8_t *p,
 				if ( v.v_len && *(cur-1)=='\r' ) {
 					v.v_len--;
 				}
-				dispatch_hdr(d+3, &k, &v);
+				dispatch_hdr(d + 3, num_dcb - 3, &k, &v);
 				k.v_ptr = (void *)cur + 1;
 				k.v_len = 0;
 				state = 2;
@@ -234,13 +249,12 @@ static size_t http_request(struct http_request *r,
 		{"Content-Length", htype_int, {.val = &clen}},
 		{"Content-Encoding", htype_string, {.vec = &enc}},
 		{"Proxy-Connection", htype_present, {.val = &prox}},
-		{NULL,}
 	};
 
 	memset(r, 0, sizeof(*r));
 
 	/* Do the decode */
-	hlen = http_decode_buf(dcb, ptr, end);
+	hlen = http_decode_buf(dcb, sizeof(dcb)/sizeof(*dcb), ptr, end);
 	if ( !hlen )
 		return 0;
 
@@ -477,16 +491,15 @@ static size_t http_response(struct http_response *r,
 		{"protocol", htype_string, {.vec = &pv}},
 		{"code", htype_code, {.u16 = &r->code}},
 		{"msg", htype_string, {.vec = NULL}},
+		{"Server", htype_string, {.vec = &r->server}},
+		{"Content-Type", htype_string, {.vec = &r->content_type}},
 		{"Content-Length", htype_int, {.val = &clen}},
 		{"Content-Encoding", htype_string, {.vec = &enc}},
-		{"Content-Type", htype_string, {.vec = &r->content_type}},
-		{"Server", htype_string, {.vec = &r->server}},
-		{NULL,}
 	};
 
 	memset(r, 0, sizeof(*r));
 
-	hlen = http_decode_buf(dcb, ptr, end);
+	hlen = http_decode_buf(dcb, sizeof(dcb)/sizeof(*dcb), ptr, end);
 	if ( !hlen )
 		return 0;
 	
