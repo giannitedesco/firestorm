@@ -14,8 +14,10 @@
 
 #if 0
 #define dmesg mesg
+#define dhex_dump hex_dump
 #else
 #define dmesg(x...) do { } while(0);
+#define dhex_dump(x...) do { } while(0);
 #endif
 
 static int parse_response(struct smtp_response *r, struct ro_vec *v)
@@ -35,7 +37,7 @@ static int parse_response(struct smtp_response *r, struct ro_vec *v)
 		ptr++;
 	}
 
-	while(isspace(*ptr))
+	while(ptr < end && isspace(*ptr))
 		ptr++;
 
 	r->code = code;
@@ -45,7 +47,7 @@ static int parse_response(struct smtp_response *r, struct ro_vec *v)
 	return 1;
 }
 
-static void do_response(struct smtp_flow *f, struct ro_vec *v)
+static void do_response(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
 {
 	struct smtp_response r;
 
@@ -74,15 +76,90 @@ static void do_response(struct smtp_flow *f, struct ro_vec *v)
 	}
 }
 
-static void parse_request(struct smtp_request *r, struct ro_vec *v)
+struct smtp_cmd {
+	struct ro_vec cmd;
+	void(*fn)(struct _stream *s, struct smtp_request *r);
+};
+
+static const struct smtp_cmd cmds[] = {
+	{ .cmd = {.v_ptr = (uint8_t *)"AUTH", .v_len = 4}, .fn = NULL },
+	{ .cmd = {.v_ptr = (uint8_t *)"DATA", .v_len = 4}, .fn = NULL },
+	{ .cmd = {.v_ptr = (uint8_t *)"EHLO", .v_len = 4}, .fn = NULL },
+	{ .cmd = {.v_ptr = (uint8_t *)"EXPN", .v_len = 4}, .fn = NULL },
+	{ .cmd = {.v_ptr = (uint8_t *)"HELO", .v_len = 4}, .fn = NULL },
+	{ .cmd = {.v_ptr = (uint8_t *)"HELP", .v_len = 4}, .fn = NULL },
+	{ .cmd = {.v_ptr = (uint8_t *)"MAIL", .v_len = 4}, .fn = NULL },
+	{ .cmd = {.v_ptr = (uint8_t *)"NOOP", .v_len = 4}, .fn = NULL },
+	{ .cmd = {.v_ptr = (uint8_t *)"QUIT", .v_len = 4}, .fn = NULL },
+	{ .cmd = {.v_ptr = (uint8_t *)"RCPT", .v_len = 4}, .fn = NULL },
+	{ .cmd = {.v_ptr = (uint8_t *)"RSET", .v_len = 4}, .fn = NULL },
+	{ .cmd = {.v_ptr = (uint8_t *)"VRFY", .v_len = 4}, .fn = NULL },
+	{ .cmd = {.v_ptr = (uint8_t *)"DEBUG", .v_len = 5}, .fn = NULL },
+};
+
+static void dispatch_req(struct _stream *s, struct smtp_request *r)
 {
+	const struct smtp_cmd *c;
+	unsigned int n;
+
+	for(n = sizeof(cmds)/sizeof(*cmds), c = cmds; n; ) {
+		unsigned int i;
+		int ret;
+
+		i = (n / 2);
+		ret = vcasecmp(&r->cmd, &c[i].cmd);
+		if ( ret < 0 ) {
+			n = i;
+		}else if ( ret > 0 ) {
+			c = c + (i + 1);
+			n = n - (i + 1);
+		}else{
+			if ( c[i].fn )
+				c[i].fn(s, r);
+			break;
+		}
+	}
+
+	dmesg(M_DEBUG, ">>> %.*s %.*s",
+		r->cmd.v_len, r->cmd.v_ptr,
+		r->str.v_len, r->str.v_ptr);
 }
 
-static void do_request(struct smtp_flow *f, struct ro_vec *v)
+static int parse_request(struct _stream *s, struct ro_vec *v)
+{
+	struct smtp_request r;
+	const uint8_t *ptr, *end;
+
+	if ( v->v_len < 4 )
+		return 0;
+
+	r.cmd.v_ptr = v->v_ptr;
+	r.cmd.v_len = 0;
+
+	for(ptr = v->v_ptr, end = v->v_ptr + v->v_len; ptr < end; ptr++) {
+		if ( isspace(*ptr) )
+			break;
+		r.cmd.v_len++;
+	}
+	for(; ptr < end && isspace(*ptr); ptr++)
+		/* nothing */;
+
+	r.str.v_len = end - ptr;
+	r.str.v_ptr = (r.str.v_len) ? ptr : NULL;
+
+	dispatch_req(s, &r);
+	return 1;
+}
+
+static void do_request(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
 {
 	switch(f->state) {
 	case SMTP_STATE_CMD:
-		dmesg(M_DEBUG, ">>> %.*s", v->v_len, v->v_ptr);
+		if ( !parse_request(s, v) ) {
+			mesg(M_ERR, "smtp: parse error: %.*s",
+				v->v_len, v->v_ptr);
+			return;
+		}
 		f->state = SMTP_STATE_RESP;
 		break;
 	case SMTP_STATE_DATA:
@@ -94,8 +171,8 @@ static void do_request(struct smtp_flow *f, struct ro_vec *v)
 	}
 }
 
-static int smtp_line(struct smtp_flow *f, unsigned int chan,
-			const uint8_t *ptr, size_t len)
+static int smtp_line(struct _stream *s, struct smtp_flow *f,
+			unsigned int chan, const uint8_t *ptr, size_t len)
 {
 	struct ro_vec vec;
 
@@ -106,10 +183,10 @@ static int smtp_line(struct smtp_flow *f, unsigned int chan,
 
 	switch(chan) {
 	case TCP_CHAN_TO_CLIENT:
-		do_response(f, &vec);
+		do_response(s, f, &vec);
 		break;
 	case TCP_CHAN_TO_SERVER:
-		do_request(f, &vec);
+		do_request(s, f, &vec);
 		break;
 	}
 
@@ -140,7 +217,7 @@ static ssize_t smtp_push(struct _stream *s, unsigned int chan,
 		do_free = 0;
 	}
 
-	if ( !smtp_line(f, chan, buf, sz) )
+	if ( !smtp_line(s, f, chan, buf, sz) )
 		ret = 0;
 
 	if ( do_free )

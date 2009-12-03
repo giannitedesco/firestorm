@@ -24,6 +24,8 @@ struct smtp_response {
 };
 
 struct smtp_request {
+	struct ro_vec cmd;
+	struct ro_vec str;
 };
 
 #endif /* _PKT_SMTP_HEADER_INCLUDED_ */
