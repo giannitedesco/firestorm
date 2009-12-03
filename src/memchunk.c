@@ -263,7 +263,7 @@ void mempool_free(mempool_t p)
 	struct _objcache *o, *tmp;
 	struct chunk_hdr *c, *nxt;
 
-	mesg(M_INFO, "mempool: free: %s", p->p_label);
+	//mesg(M_INFO, "mempool: free: %s", p->p_label);
 	list_for_each_entry_safe(o, tmp, &p->p_caches, o_list) {
 		objcache_fini(o);
 	}
@@ -333,8 +333,8 @@ void objcache_fini(objcache_t o)
 	obj *= o->o_sz;
 	total <<= MEMCHUNK_SHIFT;
 
-	mesg(M_INFO, "objcache: free: %s: %uK total, %uK inuse",
-		o->o_label, total >> 10, obj >> 10);
+	//mesg(M_INFO, "objcache: free: %s: %uK total, %uK inuse",
+	//	o->o_label, total >> 10, obj >> 10);
 	objcache_free2(&mc.m_self_cache, o);
 
 }

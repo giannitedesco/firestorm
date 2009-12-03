@@ -393,11 +393,24 @@ static void tcp_free(struct tcp_session *s)
 	tcp_hash_unlink(s);
 	list_del(&s->tmo);
 	list_del(&s->lru);
-	_tcp_reasm_free(&s->c_wnd.reasm);
 
 	if ( s->s_wnd ) {
-		_tcp_reasm_free(&s->s_wnd->reasm);
+		if ( s->reasm ) {
+			_tcp_stream_push(s, &s->s_wnd->reasm,
+						s->s_wnd->reasm.s_contig_seq);
+			_tcp_reasm_free(&s->s_wnd->reasm);
+		}
 		objcache_free2(sstate_cache, s->s_wnd);
+	}
+
+	if ( s->reasm ) {
+		_tcp_stream_push(s, &s->c_wnd.reasm,
+					s->c_wnd.reasm.s_contig_seq);
+		_tcp_reasm_free(&s->c_wnd.reasm);
+		if ( s->flow ) {
+			s->proto->sp_flow_fini(s->flow);
+			objcache_free2(flow_cache, s->flow);
+		}
 	}
 
 	objcache_free2(session_cache, s);
@@ -941,6 +954,11 @@ void _tcpflow_track(pkt_t pkt, dcb_t dcb_ptr)
 
 void _tcpflow_dtor(void)
 {
+	struct tcp_session *s, *tmp;
+
+	list_for_each_entry_safe(s, tmp, &lru, lru)
+		tcp_free(s);
+
 	mesg(M_INFO,"tcpstream: errors: %u csum, %u ttl, %u oom, %u timeout",
 		num_csum_errs, num_ttl_errs,
 		num_oom, num_timeouts);

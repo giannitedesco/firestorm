@@ -168,6 +168,7 @@ int _tcp_reasm_inject(struct tcp_session *ss, struct tcp_sbuf *s,
 			uint32_t seq, uint32_t len, const uint8_t *buf);
 int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t ack);
 void _tcp_reasm_free(struct tcp_sbuf *s);
+void _tcp_reasm_print(struct tcp_sbuf *s);
 
 void *_tcp_alloc(struct tcp_session *s, objcache_t o, int reasm);
 

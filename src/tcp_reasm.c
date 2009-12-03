@@ -73,6 +73,7 @@ static struct tcp_rbuf *rbuf_alloc(struct tcp_session *ss,
 static void rbuf_free(struct tcp_sbuf *s, struct tcp_rbuf *r)
 {
 	list_del(&r->r_list);
+	objcache_free2(data_cache, r->r_base);
 	objcache_free2(rbuf_cache, r);
 	s->s_num_rbuf--;
 }
@@ -672,35 +673,31 @@ void _tcp_reasm_dtor(void)
 		num_reasm, num_push, avg, max_gaps);
 }
 
-#if 0
-static void print_gap(uint32_t len)
-{
-	dmesg(M_DEBUG, "\033[31m");
-	while (len--)
-		dmesg(M_DEBUG, "#");
-	dmesg(M_DEBUG, "\033[0m");
-}
-static void stream_print(struct tcp_sbuf *s)
+void _tcp_reasm_print(struct tcp_sbuf *s)
 {
 	struct tcp_rbuf *r;
 	struct tcp_gap *n;
 	unsigned int i;
 
-	dmesg(M_DEBUG, "Stream begins at %u\n", s->s_begin);
+	mesg(M_DEBUG, "Stream begins at %u", s->s_begin);
+	mesg(M_DEBUG, "Reassembly begins at %u", s->s_reasm_begin);
+	mesg(M_DEBUG, "%u bytes allocated in %u rbufs",
+		tcp_diff(s->s_begin, s->s_end), s->s_num_rbuf);
 	if ( s->s_contig ) {
-		dmesg(M_DEBUG, " contig = %u - %u\n",
+		mesg(M_DEBUG, " contig = %u - %u",
 			s->s_contig->r_seq,
 			s->s_contig_seq);
 	}
 
-	dmesg(M_DEBUG, " data: '");
 	list_for_each_entry(r, &s->s_bufs, r_list) {
 		if ( tcp_before(s->s_contig_seq, r->r_seq + RBUF_SIZE) ) {
-			dmesg(M_DEBUG, "%.*s",
-				seq_ofs(s, s->s_contig_seq), r->r_base);
+			mesg(M_DEBUG, " - %u bytes data",
+				seq_ofs(s, s->s_contig_seq));
+			//hex_dump(r->r_base, seq_ofs(s, s->s_contig_seq), 16);
 			break;
 		}
-		dmesg(M_DEBUG, "%.*s", RBUF_SIZE, r->r_base);
+		mesg(M_DEBUG, " - Full %u byte rbuf", RBUF_SIZE);
+		//hex_dump(r->r_base, RBUF_SIZE, 16);
 	}
 
 	for(i = 0; i < s->s_num_gaps; ++i) {
@@ -712,7 +709,7 @@ static void stream_print(struct tcp_sbuf *s)
 			nxt = s->s_end;
 		else
 			nxt = s->s_gap[i + 1]->g_begin;
-		print_gap(gap_len(n));
+		dmesg(M_DEBUG, " - %u byte gap", gap_len(n));
 
 		for(; r; r = rbuf_next(s, r)) {
 			uint8_t *begin, *end;
@@ -720,7 +717,7 @@ static void stream_print(struct tcp_sbuf *s)
 			begin = r->r_base;
 			end = r->r_base + RBUF_SIZE;
 			buf_end = r->r_seq + RBUF_SIZE;
-			//dmesg(M_DEBUG, "\033[33m%u:%u:%u:%u\033[0m",
+			//mesg(M_DEBUG, "\033[33m%u:%u:%u:%u\033[0m",
 			//	r->r_seq, n->g_begin, n->g_end, nxt);
 
 			if ( !tcp_after(buf_end, n->g_end) )
@@ -735,15 +732,15 @@ static void stream_print(struct tcp_sbuf *s)
 
 			assert(end >= begin);
 			assert((end - begin) <= RBUF_SIZE);
-			dmesg(M_DEBUG, "\033[32m%.*s\033[0m", end - begin, begin);
+			mesg(M_DEBUG, " - %u bytes discontig", end - begin);
+			//hex_dump(begin, end - begin, 16);
 			if ( !tcp_before(buf_end, nxt) )
 				break;
 		}
 	}
-
-	dmesg(M_DEBUG, "'\n\n");
 }
 
+#if 0
 #define PKT_OFS 0xfffffff0
 static int stream_check(struct tcp_sbuf *s, const char *buf, size_t sz)
 {
