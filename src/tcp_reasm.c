@@ -172,6 +172,14 @@ static struct tcp_rbuf *find_buf_rev(struct tcp_session *ss, struct tcp_sbuf *s,
 		}
 	}
 
+	if ( NULL == r ) {
+		new = rbuf_alloc(ss, s, seq);
+		if ( NULL == new )
+			return NULL;
+		list_add_tail(&new->r_list, &s->s_bufs);
+		r = new;
+	}
+
 	return r;
 }
 
@@ -240,8 +248,10 @@ static int append_gap(struct tcp_session *ss, struct tcp_sbuf *s,
 			struct tcp_rbuf *r, uint32_t seq, uint32_t seq_end)
 {
 	dmesg(M_DEBUG, "Appending gap %u-%u\n", s->s_end, seq);
-	if (s->s_num_gaps >= TCP_REASM_MAX_GAPS)
+	if (s->s_num_gaps >= TCP_REASM_MAX_GAPS) {
+		mesg(M_CRIT, "tcp_reasm: MAX_GAPS exceeded");
 		return 0;
+	}
 	s->s_gap[s->s_num_gaps] = gap_new(ss, s->s_end, seq);
 	if ( ++s->s_num_gaps > max_gaps )
 		max_gaps = s->s_num_gaps;
@@ -254,8 +264,10 @@ static int split_gap(struct tcp_session *ss, struct tcp_sbuf *s,
 {
 	int n, j;
 
-	if (s->s_num_gaps >= TCP_REASM_MAX_GAPS)
+	if (s->s_num_gaps >= TCP_REASM_MAX_GAPS) {
+		mesg(M_CRIT, "tcp_reasm: MAX_GAPS exceeded");
 		return 0;
+	}
 
 	dmesg(M_DEBUG, "Split gap\n");
 	for(n = i + 1, j = s->s_num_gaps; j > n; --j) {

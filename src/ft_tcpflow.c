@@ -163,6 +163,9 @@ static void attach_protocol(struct tcp_session *s)
 {
 	void *flow = NULL;
 
+	if ( !reassemble )
+		return;
+
 	s->proto = sproto_find(SNS_TCP, s->s_port);
 	if ( NULL == s->proto )
 		goto fuckit;
@@ -170,7 +173,7 @@ static void attach_protocol(struct tcp_session *s)
 	if ( flow_cache )
 		flow = _tcp_alloc(s, flow_cache, 0);
 
-	if ( s->proto->sp_flow_sz && !s->proto->sp_flow_init(flow) )
+	if ( flow && !s->proto->sp_flow_init(flow) )
 		goto fuckit;
 
 	s->flow = flow;
@@ -514,7 +517,6 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 	s->s_port = cur->tcph->dport;
 
 	s->state = TCP_SESSION_S1;
-	s->reasm = 1;
 
 	/* stats */
 	num_active++;
@@ -532,6 +534,7 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 	INIT_LIST_HEAD(&s->lru);
 	set_lru(cur, s);
 
+	s->reasm = 1;
 	s->proto = NULL;
 	s->flow = NULL;
 
