@@ -254,6 +254,7 @@ static size_t http_request(struct http_request *r,
 		{"uri", htype_string, {.vec = &r->uri}},
 		{"protocol", htype_string, {.vec = &pv}},
 		{"Host", htype_string , {.vec = &r->host}},
+		{"User-Agent", htype_string , {.vec = &r->agent}},
 		{"Content-Length", htype_int, {.val = &clen}},
 		{"Content-Encoding", htype_string, {.vec = &enc}},
 		{"Proxy-Connection", htype_present, {.val = &prox}},
@@ -413,6 +414,8 @@ static void msg_http_req(struct http_request *r)
 			r->uri.v_len, r->uri.v_ptr,
 			r->host.v_len, r->host.v_ptr,
 			r->port);
+	if ( r->agent.v_len )
+		dmesg(M_DEBUG, " - %.*s", r->agent.v_len, r->agent.v_ptr);
 	if ( r->content.v_ptr )
 		dhex_dump(r->content.v_ptr, r->content.v_len, 16);
 }

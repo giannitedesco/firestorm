@@ -30,6 +30,7 @@ struct http_request {
 	struct ro_vec uri_path;
 	struct ro_vec uri_query;
 	struct ro_vec content;
+	struct ro_vec agent;
 	void *free;
 };
 
