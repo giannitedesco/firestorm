@@ -53,6 +53,8 @@ firestorm_SOURCES = \
 	sp_pop3.c \
 	sp_ftp.c \
 	\
+	sp_smb.c \
+	\
 	s_pipeline.c \
 	s_mesg.c \
 	sensor.c

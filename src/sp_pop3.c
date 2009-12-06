@@ -205,6 +205,7 @@ static int pop3_line(struct _stream *s, struct pop3_flow *f,
 
 	return 1;
 }
+
 static ssize_t pop3_push(struct _stream *s, unsigned int chan,
 		struct ro_vec *vec, size_t numv, size_t bytes)
 {
@@ -238,14 +239,14 @@ static ssize_t pop3_push(struct _stream *s, unsigned int chan,
 	return ret;
 }
 
-static int flow_init(void *fptr)
+static int flow_init(struct _stream *s)
 {
-	struct pop3_flow *f = fptr;
+	struct pop3_flow *f = s->s_flow;
 	f->state = POP3_STATE_INIT;
 	return 1;
 }
 
-static void flow_fini(void *fptr)
+static void flow_fini(struct _stream *s)
 {
 }
 

@@ -144,8 +144,14 @@ static void detach_protocol(struct tcp_session *s)
 	if ( NULL == s->proto )
 		return;
 	if ( s->flow ) {
-		s->proto->sp_flow_fini(s->flow);
+		struct tcp_stream ss;
+		ss.stream.s_reasm = NULL;
+		ss.stream.s_flow = s->flow;
+		ss.s = s;
+		ss.sbuf = NULL;
+		s->proto->sp_flow_fini(&ss.stream);
 		objcache_free2(flow_cache, s->flow);
+		s->flow = NULL;
 	}
 	s->proto = s->flow = NULL;
 }
@@ -162,6 +168,7 @@ static void abort_reasm(struct tcp_session *s)
 static void attach_protocol(struct tcp_session *s)
 {
 	void *flow = NULL;
+	struct tcp_stream ss;
 
 	if ( !reassemble )
 		return;
@@ -173,7 +180,12 @@ static void attach_protocol(struct tcp_session *s)
 	if ( flow_cache )
 		flow = _tcp_alloc(s, flow_cache, 0);
 
-	if ( flow && !s->proto->sp_flow_init(flow) )
+	ss.stream.s_reasm = NULL;
+	ss.stream.s_flow = flow;
+	ss.s = s;
+	ss.sbuf = NULL;
+
+	if ( flow && !s->proto->sp_flow_init(&ss.stream) )
 		goto fuckit;
 
 	s->flow = flow;

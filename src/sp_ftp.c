@@ -11,16 +11,44 @@
 #include <limits.h>
 #include <ctype.h>
 
+#define FTP_STATE_INIT 		0
+#define FTP_STATE_CMD 		1
+#define FTP_STATE_RESP 		2
+#define FTP_STATE_MAX 		3
 struct ftp_flow {
 	uint8_t state;
 };
+
+static int ftp_line(struct _stream *s, struct ftp_flow *f,
+			unsigned int chan, const uint8_t *ptr, size_t len)
+{
+	struct ro_vec vec;
+
+	assert(f->state < FTP_STATE_MAX);
+
+	vec.v_ptr = ptr;
+	vec.v_len = len;
+
+	switch(chan) {
+	case TCP_CHAN_TO_CLIENT:
+		break;
+	case TCP_CHAN_TO_SERVER:
+		break;
+	default:
+		break;
+	}
+
+	return 1;
+}
 
 static ssize_t ftp_push(struct _stream *s, unsigned int chan,
 		struct ro_vec *vec, size_t numv, size_t bytes)
 {
 	struct ftp_flow *f;
+	const uint8_t *buf;
 	ssize_t ret;
 	size_t sz;
+	int do_free;
 
 	f = s->s_flow;
 
@@ -29,20 +57,31 @@ static ssize_t ftp_push(struct _stream *s, unsigned int chan,
 		return ret;
 	
 	if ( sz > vec[0].v_len ) {
+		buf = malloc(sz);
+		s->s_reasm(s, (uint8_t *)buf, sz);
+		do_free = 1;
 	}else{
+		buf = vec[0].v_ptr;
+		do_free = 0;
 	}
+
+	if ( !ftp_line(s, f, chan, buf, sz) )
+		ret = 0;
+
+	if ( do_free )
+		free((void *)buf);
 
 	return ret;
 }
 
-static int flow_init(void *fptr)
+static int flow_init(struct _stream *s)
 {
-	struct ftp_flow *f = fptr;
-	f->state = 0;
+	struct ftp_flow *f = s->s_flow;
+	f->state = FTP_STATE_INIT;
 	return 1;
 }
 
-static void flow_fini(void *fptr)
+static void flow_fini(struct _stream *s)
 {
 }
 

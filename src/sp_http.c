@@ -280,12 +280,6 @@ static size_t http_request(struct http_request *r,
 		}
 	}
 
-	if ( !vstrcmp(&r->method, "POST") ) {
-		/** TODO: decode post data... */
-	}else if ( !vstrcmp(&r->method, "CONNECT") ) {
-		/* TODO: Implement protocol stacking here */
-	}
-
 	/* Strip out Request-URI to just abs_path, Filling in host
 	 * information if there was no host header
 	 */
@@ -651,16 +645,16 @@ static ssize_t http_push(struct _stream *s, unsigned int chan,
 	return ret;
 }
 
-static int flow_init(void *fptr)
+static int flow_init(struct _stream *s)
 {
-	struct http_flow *f = fptr;
+	struct http_flow *f = s->s_flow;
 	f->client.state = HTTP_STATE_HEADER;
 	f->server.state = HTTP_STATE_HEADER;
 	f->seq = 0;
 	return 1;
 }
 
-static void flow_fini(void *fptr)
+static void flow_fini(struct _stream *s)
 {
 }
 

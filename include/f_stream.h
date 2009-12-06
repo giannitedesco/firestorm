@@ -22,8 +22,8 @@ struct _stream {
 struct _sproto {
 	ssize_t (*sp_push)(struct _stream *s, unsigned int chan,
 				struct ro_vec *vec, size_t numv, size_t bytes);
-	int (*sp_flow_init)(void *flow);
-	void (*sp_flow_fini)(void *flow);
+	int (*sp_flow_init)(struct _stream *s);
+	void (*sp_flow_fini)(struct _stream *s);
 	size_t sp_flow_sz;
 	struct _sproto *sp_next;
 	unsigned int sp_idx;

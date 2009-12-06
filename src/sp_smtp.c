@@ -61,7 +61,7 @@ static int do_response(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
 
 	if ( !parse_response(&r, v) ) {
 		mesg(M_ERR, "smtp: parse error: %.*s", v->v_len, v->v_ptr);
-		return;
+		return 1;
 	}
 
 	dmesg(M_DEBUG, "<<< %3u%c%.*s", r.code,
@@ -160,7 +160,7 @@ static int do_request(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
 		if ( !parse_request(s, v) ) {
 			mesg(M_ERR, "smtp: parse error: %.*s",
 				v->v_len, v->v_ptr);
-			return;
+			return 1;
 		}
 		f->state = SMTP_STATE_RESP;
 		break;
@@ -228,14 +228,14 @@ static ssize_t smtp_push(struct _stream *s, unsigned int chan,
 	return ret;
 }
 
-static int flow_init(void *fptr)
+static int flow_init(struct _stream *s)
 {
-	struct smtp_flow *f = fptr;
+	struct smtp_flow *f = s->s_flow;
 	f->state = SMTP_STATE_INIT;
 	return 1;
 }
 
-static void flow_fini(void *fptr)
+static void flow_fini(struct _stream *s)
 {
 }
 
