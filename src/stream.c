@@ -12,9 +12,8 @@
 
 static struct _stream_ns ns_arr[SNS_MAX] = {
 	[SNS_TCP]	{.ns_label = "TCP"},
-	[SNS_HTTP]	{.ns_label = "TCP"},
-	[SNS_SMTP]	{.ns_label = "SMTP"},
-	[SNS_POP3]	{.ns_label = "POP3"},
+	[SNS_HTTP]	{.ns_label = "HTTP"},
+	[SNS_RFC822]	{.ns_label = "RFC822"},
 };
 
 static struct _sproto *sprotos;

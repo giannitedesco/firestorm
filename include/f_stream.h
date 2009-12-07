@@ -9,8 +9,7 @@
 enum {
 	SNS_TCP,
 	SNS_HTTP,
-	SNS_SMTP,
-	SNS_POP3,
+	SNS_RFC822,
 	SNS_MAX,
 };
 
