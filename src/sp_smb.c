@@ -135,31 +135,124 @@ static const struct smb_cmd *find_cmd(uint8_t cmd)
 	return NULL;
 }
 
-static int state_update(struct smb_flow *f,
-				const struct smb_pkt *smb,
-				unsigned int chan)
+static int is_oplock_break(const struct smb_pkt *smb,
+			const uint8_t *buf, size_t len)
 {
-	assert(f->state < SMB_STATE_MAX);
-	switch(f->state) {
-	case SMB_STATE_INIT:
-	case SMB_STATE_REQ:
-		if ( chan == TCP_CHAN_TO_CLIENT )
-			return 0;
-		if ( (smb->smb_flags & SMB_FLAGS_RESPONSE) )
-			mesg(M_WARN, "smb: wierd direction field from server");
-		f->state = SMB_STATE_RESP;
-		return 1;
-	case SMB_STATE_RESP:
-		if ( chan == TCP_CHAN_TO_SERVER )
-			return 0;
-		if ( 0 == (smb->smb_flags & SMB_FLAGS_RESPONSE) )
-			mesg(M_WARN, "smb: wierd direction field from client");
-		f->state = SMB_STATE_REQ;
-		return 1;
-	default:
+	const struct smb_locking_req *lck = (const struct smb_locking_req *)buf;
+	if ( smb->smb_cmd != 0x24 )
+		return 0;
+	if ( smb->smb_flags & SMB_FLAGS_RESPONSE )
+		return 0;
+	if ( len < sizeof(*lck) )
+		return 0;
+	return (0 != (lck->lock_type & SMB_LOCK_TYPE_BREAK));
+}
+
+static void cancel_transaction(struct smb_flow *f, const struct smb_pkt *smb)
+{
+	uint8_t i;
+
+	for(i = 0; i <= f->cur_trans; i++) {
+		struct smb_trans trans;
+		uint8_t j;
+		if ( f->trans[i].pid != smb->smb_pid )
+			continue;
+		if ( f->trans[i].mid != smb->smb_mid )
+			continue;
+		dbg(f, "smb: 0x%.2x transaction cancelled\n", f->trans[i].cmd);
+		trans = f->trans[i];
+		for(j = i + 1; j <= f->cur_trans; j++)
+			f->trans[j - 1] = f->trans[j];
+		f->trans[f->cur_trans] = trans;
+		return;
+	}
+	dbg(f, "smb: unknown transaction cancelled\n");
+}
+
+static int unexpected_response(struct smb_flow *f, const struct smb_pkt *smb)
+{
+	uint8_t i;
+
+	for(i = 0; i <= f->cur_trans; i++) {
+		struct smb_trans trans;
+		uint8_t j;
+		if ( f->trans[i].cmd != smb->smb_cmd )
+			continue;
+		if ( f->trans[i].pid != smb->smb_pid )
+			continue;
+		if ( f->trans[i].mid != smb->smb_mid )
+			continue;
+		dbg(f, "smb: nested transaction completed\n");
+		trans = f->trans[i];
+		for(j = i + 1; j <= f->cur_trans; j++)
+			f->trans[j - 1] = f->trans[j];
+		f->cur_trans--;
 		return 1;
 	}
 
+	f->cur_trans++;
+	assert(f->cur_trans < SMB_NUM_TRANS);
+	f->trans[f->cur_trans].flags = 0;
+	dbg(f, "smb: nested transaction (level %u)\n", f->cur_trans + 1);
+	return 0;
+}
+
+static int state_update(struct smb_flow *f, unsigned int chan,
+			const struct smb_pkt *smb,
+			const uint8_t *buf, size_t len)
+{
+	struct smb_trans *tx;
+
+	tx = &f->trans[f->cur_trans];
+
+	switch( tx->flags & (SMB_TRANS_REQ|SMB_TRANS_OPLOCK_BREAK) ) {
+	case SMB_TRANS_REQ|SMB_TRANS_OPLOCK_BREAK:
+		dbg(f, "smb: completed transaction through oplock break\n");
+	case SMB_TRANS_REQ:
+		if ( chan == TCP_CHAN_TO_SERVER )
+			return 0;
+		if ( is_oplock_break(smb, buf, len) ) {
+			f->cur_trans++;
+			tx = &f->trans[f->cur_trans];
+			tx->flags = SMB_TRANS_OPLOCK_BREAK;
+			dbg(f, "smb: oplock break initiated\n");
+			return 1;
+		}
+		if ( 0 == (smb->smb_flags & SMB_FLAGS_RESPONSE) )
+			return 0;
+		if ( tx->cmd != smb->smb_cmd ||
+				tx->pid != smb->smb_pid ||
+				tx->mid != smb->smb_mid ) {
+			return unexpected_response(f, smb);
+		}
+		tx->flags &= ~SMB_TRANS_REQ;
+		return 1;
+	case SMB_TRANS_OPLOCK_BREAK:
+		if ( chan == TCP_CHAN_TO_SERVER &&
+				is_oplock_break(smb, buf, len) ) {
+			dbg(f, "smb: oplock break resolved\n");
+			f->cur_trans--;
+			return 1;
+		}
+		dbg(f, "smb: nested transaction in oplock break\n");
+		/* fall through */
+	case 0:
+		if ( chan == TCP_CHAN_TO_CLIENT )
+			return 0;
+		if ( (smb->smb_flags & SMB_FLAGS_RESPONSE) )
+			return 0;
+		if ( smb->smb_cmd == 0xa4 ) {
+			cancel_transaction(f, smb);
+			return 1;
+		}
+		tx->cmd = smb->smb_cmd;
+		tx->pid = smb->smb_pid;
+		tx->mid = smb->smb_mid;
+		tx->flags |= SMB_TRANS_REQ;
+		return 1;
+	}
+
+	return 0;
 }
 
 static int smb_pkt(struct _stream *ss, struct smb_flow *f, unsigned int chan,
@@ -179,7 +272,7 @@ static int smb_pkt(struct _stream *ss, struct smb_flow *f, unsigned int chan,
 	buf += sizeof(*smb);
 	len -= sizeof(*smb);
 
-	if ( !state_update(f, smb, chan) )
+	if ( !state_update(f, chan, smb, buf, len) )
 		return 0;
 
 	cmd = find_cmd(smb->smb_cmd);
@@ -196,6 +289,7 @@ static int smb_pkt(struct _stream *ss, struct smb_flow *f, unsigned int chan,
 		sys_be16(smb->smb_pid), sys_be16(smb->smb_mid));
 	dbg(f, " TID/UID: %.4x / %.4x\n",
 		sys_be16(smb->smb_tid), sys_be16(smb->smb_uid));
+
 	if ( (smb->smb_flags & SMB_FLAGS_RESPONSE) ) {
 		if ( cmd->resp )
 			cmd->resp(ss, smb, buf, len);
@@ -204,6 +298,7 @@ static int smb_pkt(struct _stream *ss, struct smb_flow *f, unsigned int chan,
 			cmd->req(ss, smb, buf, len);
 	}
 	//hex_dumpf(f->file, buf, len, 16);
+	dbg(f, "\n");
 
 	return 1;
 }
@@ -410,16 +505,16 @@ static int flow_init(struct _stream *ss)
 	char sip[16], cip[16];
 	char fn[32];
 
-	f->state = SMB_STATE_INIT;
-
 	snprintf(fn, sizeof(fn), "./smb/sess%u.txt", snum++);
 	f->file = fopen(fn, "w");
-
 	iptostr(sip, s->s->s_addr);
 	iptostr(cip, s->s->c_addr);
 	dbg(f, "%s:%u -> %s:%u\n",
 		sip, sys_be16(s->s->s_port),
 		cip, sys_be16(s->s->c_port));
+
+	f->cur_trans = 0;
+	f->trans[f->cur_trans].flags = 0;
 	return 1;
 }
 
