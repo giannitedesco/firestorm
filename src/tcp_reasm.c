@@ -20,6 +20,31 @@
 #define RBUF_MASK	(RBUF_SIZE - 1)
 #define RBUF_BASE	(~RBUF_MASK)
 
+/* Reassembly buffer */
+#define TCP_REASM_MAX_GAPS	8
+struct tcp_sbuf {
+	/** begin seq for buffer purposes */
+	uint32_t		s_begin;
+	/** Sequence of first byte not reassembled */
+	uint32_t		s_reasm_begin;
+	/** sequence number of last contig byte */
+	uint32_t 		s_contig_seq;
+	/** Sequence number of last byte */
+	uint32_t		s_end;
+	/** Buffer list */
+	struct list_head	s_bufs;
+	/** last contiguous buffer */
+	struct tcp_rbuf		*s_contig;
+	/** Number of allocated rbufs */
+	uint16_t		s_num_rbuf;
+	/** number of gaps in reassembly */
+	uint8_t			s_num_gaps;
+	uint8_t			_pad0;
+	/** array of gap descriptors */
+	struct tcp_gap		*s_gap[TCP_REASM_MAX_GAPS];
+};
+
+static objcache_t sbuf_cache;
 static objcache_t rbuf_cache;
 static objcache_t data_cache;
 static objcache_t gap_cache;
@@ -331,7 +356,7 @@ static int frob_gaps(struct tcp_session *ss, struct tcp_sbuf *s,
 }
 
 /* input packet data in to the reassembly system */
-int _tcp_reasm_inject(struct tcp_session *ss, struct tcp_sbuf *s,
+static int do_inject(struct tcp_session *ss, struct tcp_sbuf *s,
 			uint32_t seq, uint32_t len, const uint8_t *buf)
 {
 	uint32_t seq_end = seq + len;
@@ -435,10 +460,32 @@ int _tcp_reasm_inject(struct tcp_session *ss, struct tcp_sbuf *s,
 	return 1;
 }
 
-void _tcp_reasm_free(struct tcp_sbuf *s)
+int _tcp_reasm_inject(struct tcp_session *s, unsigned int chan,
+			uint32_t seq, uint32_t len, const uint8_t *buf)
+{
+	switch(chan) {
+	case TCP_CHAN_TO_SERVER:
+		return do_inject(s, s->c_wnd.reasm, seq, len, buf);
+	case TCP_CHAN_TO_CLIENT:
+		return do_inject(s, s->s_wnd->reasm, seq, len, buf);
+	default:
+		assert(0);
+		break;
+	}
+	return 0;
+}
+
+static void sbuf_free(struct tcp_sbuf *s, int abort)
 {
 	struct tcp_rbuf *r, *tr;
 	unsigned int i;
+
+	if ( NULL == s )
+		return;
+	
+	if ( !abort ) {
+		/* FIXME: push remaining data */
+	}
 
 	if ( s->s_bufs.prev ) {
 		list_for_each_entry_safe(r, tr, &s->s_bufs, r_list) {
@@ -449,17 +496,49 @@ void _tcp_reasm_free(struct tcp_sbuf *s)
 	for(i = 0; i < s->s_num_gaps; i++)
 		gap_free(s->s_gap[i]);
 
-	s->s_num_gaps = 0;
+	objcache_free2(sbuf_cache, s);
 }
 
-void _tcp_reasm_init(struct tcp_sbuf *s, uint32_t isn)
+static struct tcp_sbuf *sbuf_new(struct tcp_session *ss, uint32_t isn)
 {
-	memset(s, 0, sizeof(*s));
-	INIT_LIST_HEAD(&s->s_bufs);
-	s->s_begin = isn;
-	s->s_reasm_begin = isn;
-	s->s_end = isn;
-	s->s_contig_seq = isn;
+	struct tcp_sbuf *s;
+
+	s = _tcp_alloc(ss, sbuf_cache, 1);
+	if ( s ) {
+		s->s_begin = isn;
+		s->s_reasm_begin = isn;
+		s->s_end = isn;
+		INIT_LIST_HEAD(&s->s_bufs);
+		s->s_contig = NULL;
+		s->s_contig_seq = isn;
+		s->s_num_gaps = 0;
+		s->s_num_rbuf = 0;
+	}
+
+	return s;
+}
+
+void _tcp_reasm_free(struct tcp_session *s, int abort)
+{
+	sbuf_free(s->c_wnd.reasm, abort);
+	if ( s->s_wnd )
+		sbuf_free(s->s_wnd->reasm, abort);
+}
+
+int _tcp_reasm_init(struct tcp_session *s)
+{
+	s->c_wnd.reasm = sbuf_new(s, s->c_wnd.snd_nxt);
+	if ( NULL == s->c_wnd.reasm )
+		return 0;
+
+	s->s_wnd->reasm = sbuf_new(s, s->s_wnd->snd_nxt);
+	if ( NULL == s->s_wnd->reasm ) {
+		sbuf_free(s->c_wnd.reasm, 1);
+		s->c_wnd.reasm = NULL;
+		return 0;
+	}
+
+	return 1;
 }
 
 static size_t do_reasm(struct _stream *ss, uint8_t *buf, size_t sz)
@@ -582,37 +661,44 @@ static struct ro_vec *advance_reasm_begin(struct tcp_sbuf *s,
 
 }
 
-int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t seq)
+static ssize_t do_push(struct tcp_session *ss, unsigned int chan, uint32_t seq)
 {
 	struct tcp_stream stream;
-	unsigned int chan;
+	struct tcp_sbuf *s;
 	size_t sz, sz2, numv;
 	struct ro_vec *vec, *vbuf;
 	char *str;
+	ssize_t rret;
 
-	if ( s == &ss->c_wnd.reasm) {
-		chan = TCP_CHAN_TO_SERVER;
+	switch(chan) {
+	case TCP_CHAN_TO_SERVER:
 		str = "to_server";
-	}else{
-		chan = TCP_CHAN_TO_CLIENT;
+		s = ss->c_wnd.reasm;
+		break;
+	case TCP_CHAN_TO_CLIENT:
 		str = "to_client";
+		s = ss->s_wnd->reasm;
+		break;
+	default:
+		return 1;
 	}
 
 	assert(!tcp_before(s->s_reasm_begin, s->s_begin));
 	if ( !tcp_after(seq, s->s_reasm_begin) )
-		return 1;
+		return 0;
 	if ( unlikely(tcp_after(seq, s->s_contig_seq)) ) {
 		dmesg(M_CRIT, "missing segment in tcp stream %u-%u",
 			s->s_contig_seq, seq);
-		return 1;
+		seq = s->s_contig_seq;
 	}
 
 	sz = tcp_diff(s->s_reasm_begin, seq);
 
+	/* erm, how about s->s_contig->r_base - s->s_begin / RBUF_SIZE */
 	numv = num_vectors(s, sz);
 	vbuf = vec = calloc(numv, sizeof(*vec));
 	if ( NULL == vec )
-		return 1;
+		return 0;
 
 	dmesg(M_DEBUG, "tcp_reasm(%s): alloc %u bytes in %u vectors",
 			str, sz, numv);
@@ -626,14 +712,14 @@ int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t seq)
 	stream.s = ss;
 	stream.sbuf = s;
 
-	while(sz) {
+	for(rret = 0; sz; rret++) {
 		ssize_t ret;
 		ret = ss->proto->sp_push(&stream.stream, chan, vec, numv, sz);
 		dmesg(M_DEBUG, " sp_push: %i/%u bytes taken", ret, sz);
 		if ( ret < 0 ) {
 			mesg(M_CRIT, "tcp_reasm(%s): %s: desynchronised",
 				str, ss->proto->sp_label);
-			return 0;
+			return -1;
 		}
 		if ( ret == 0)
 			break;
@@ -656,11 +742,54 @@ int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t seq)
 	assert(!tcp_before(s->s_contig_seq, s->s_reasm_begin));
 
 	free(vbuf);
+	return rret;
+}
+
+static uint32_t spec_ack(struct tcp_state *wnd)
+{
+	if ( NULL == wnd->reasm->s_contig )
+		return wnd->reasm->s_reasm_begin;
+	if ( tcp_after(wnd->snd_una, wnd->reasm->s_contig_seq) )
+		return wnd->reasm->s_contig_seq;
+	return wnd->snd_una;
+}
+
+int _tcp_stream_push(struct tcp_session *ss, unsigned int chan, uint32_t ack)
+{
+	int tries;
+
+	struct {
+		struct tcp_state *s;
+		uint32_t seq;
+	}deets[] = {
+		[TCP_CHAN_TO_SERVER] = {&ss->c_wnd, 0},
+		[TCP_CHAN_TO_CLIENT] = {ss->s_wnd, 0},
+	};
+
+	chan = !!chan;
+	deets[chan].seq = ack;
+	deets[chan ^ 1].seq = spec_ack(deets[chan ^ 1].s);
+
+	for(tries = 0; tries < 2; chan = chan ^ 1) {
+		int ret;
+		
+		ret = do_push(ss, chan, deets[chan].seq);
+		if ( ret < -1 )
+			return 0;
+		if ( 0 == ret ) 
+			tries++;
+		else
+			tries = 0;
+	}
 	return 1;
 }
 
 int _tcp_reasm_ctor(mempool_t pool)
 {
+	sbuf_cache = objcache_init(pool, "tcp_sbuf", sizeof(struct tcp_sbuf));
+	if ( sbuf_cache == NULL )
+		return 0;
+
 	rbuf_cache = objcache_init(pool, "tcp_rbuf", sizeof(struct tcp_rbuf));
 	if ( rbuf_cache == NULL )
 		return 0;

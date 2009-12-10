@@ -2,8 +2,8 @@
 #define _PKT_TCP_HEADER_INCLUDED_
 
 /* Stream decoding */
-#define TCP_CHAN_TO_SERVER	0
-#define TCP_CHAN_TO_CLIENT	1
+#define TCP_CHAN_TO_CLIENT	0
+#define TCP_CHAN_TO_SERVER	1
 
 /* MISC */
 #define TCP_MSS			512

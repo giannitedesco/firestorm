@@ -63,29 +63,6 @@ struct tcp_gap {
 	uint32_t 		g_end;
 };
 
-/* Reassembly buffer */
-#define TCP_REASM_MAX_GAPS	8
-struct tcp_sbuf {
-	/** begin seq for buffer purposes */
-	uint32_t		s_begin;
-	/** Sequence of first byte not reassembled */
-	uint32_t		s_reasm_begin;
-	/** Sequence number of last byte */
-	uint32_t		s_end;
-	/** Buffer list */
-	struct list_head	s_bufs;
-	/** last contiguous buffer */
-	struct tcp_rbuf		*s_contig;
-	/** sequence number of last contig byte */
-	uint32_t 		s_contig_seq;
-	uint16_t		_pad0;
-	uint8_t			s_num_rbuf;
-	/** number of gaps in reassembly */
-	uint8_t			s_num_gaps;
-	/** array of gap descriptors */
-	struct tcp_gap		*s_gap[TCP_REASM_MAX_GAPS];
-};
-
 /* A simplex tcp stream */
 struct tcp_state {
 #define TF_SACK_OK	(1<<0)
@@ -105,7 +82,7 @@ struct tcp_state {
 	uint32_t	ts_recent; /* a recent timestamp */
 	uint32_t	ts_recent_stamp; /* local time on it */
 
-	struct tcp_sbuf reasm;
+	struct tcp_sbuf *reasm;
 };
 
 /* A duplex tcp session */
@@ -163,11 +140,11 @@ void _tcpflow_track(pkt_t pkt, dcb_t dcb_ptr);
 
 int _tcp_reasm_ctor(mempool_t pool);
 void _tcp_reasm_dtor(void);
-void _tcp_reasm_init(struct tcp_sbuf *s, uint32_t isn);
-int _tcp_reasm_inject(struct tcp_session *ss, struct tcp_sbuf *s,
+int _tcp_reasm_init(struct tcp_session *s);
+int _tcp_reasm_inject(struct tcp_session *s, unsigned int chan,
 			uint32_t seq, uint32_t len, const uint8_t *buf);
-int _tcp_stream_push(struct tcp_session *ss, struct tcp_sbuf *s, uint32_t ack);
-void _tcp_reasm_free(struct tcp_sbuf *s);
+int _tcp_stream_push(struct tcp_session *s, unsigned int chan, uint32_t ack);
+void _tcp_reasm_free(struct tcp_session *s, int abort);
 void _tcp_reasm_print(struct tcp_sbuf *s);
 
 void *_tcp_alloc(struct tcp_session *s, objcache_t o, int reasm);

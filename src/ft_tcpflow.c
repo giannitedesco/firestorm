@@ -158,9 +158,7 @@ static void detach_protocol(struct tcp_session *s)
 
 static void abort_reasm(struct tcp_session *s)
 {
-	_tcp_reasm_free(&s->c_wnd.reasm);
-	if ( s->s_wnd )
-		_tcp_reasm_free(&s->s_wnd->reasm);
+	_tcp_reasm_free(s, 1);
 	detach_protocol(s);
 	s->reasm = 0;
 }
@@ -196,27 +194,25 @@ fuckit:
 }
 
 static void reassemble_point(struct tcp_session *s,
-				struct tcp_state *wnd,
+				unsigned int chan,
 				uint32_t ack)
 {
 	if ( !reassemble )
 		return;
 	if ( !s->proto )
 		return;
-	if ( !_tcp_stream_push(s, &wnd->reasm, ack) )
+	if ( !_tcp_stream_push(s, chan, ack) )
 		abort_reasm(s);
 }
 
-static void reasm_data(struct tcp_session *s,
-			struct tcp_sbuf *sbuf,
-			uint32_t seq, uint32_t len,
-			const uint8_t *buf)
+static void reasm_data(struct tcpseg *cur, struct tcp_session *s)
 {
 	if ( !reassemble )
 		return;
 	if ( !s->reasm )
 		return;
-	if ( !_tcp_reasm_inject(s, sbuf, seq, len, buf) )
+	if ( !_tcp_reasm_inject(s, cur->to_server, cur->seq,
+				cur->len, cur->payload) )
 		abort_reasm(s);
 }
 
@@ -269,14 +265,14 @@ static struct tcp_session *tcp_collide(struct tcp_session *s,
 			s->c_addr == iph->daddr &&
 			s->s_port == tcph->sport &&
 			s->c_port == tcph->dport ) {
-			*to_server = 0;
+			*to_server = TCP_CHAN_TO_CLIENT;
 			return s;
 		}
 		if (	s->c_addr == iph->saddr &&
 			s->s_addr == iph->daddr &&
 			s->c_port == tcph->sport &&
 			s->s_port == tcph->dport ) {
-			*to_server = 1;
+			*to_server = TCP_CHAN_TO_SERVER;
 			return s;
 		}
 	}
@@ -409,20 +405,13 @@ static void tcp_free(struct tcp_session *s)
 	list_del(&s->tmo);
 	list_del(&s->lru);
 
-	if ( s->s_wnd ) {
-		if ( s->reasm ) {
-			reassemble_point(s, s->s_wnd,
-						s->s_wnd->reasm.s_contig_seq);
-			_tcp_reasm_free(&s->s_wnd->reasm);
-		}
-		objcache_free2(sstate_cache, s->s_wnd);
-	}
-
 	if ( s->reasm ) {
-		reassemble_point(s, &s->c_wnd, s->c_wnd.reasm.s_contig_seq);
-		_tcp_reasm_free(&s->c_wnd.reasm);
+		_tcp_reasm_free(s, 0);
 		detach_protocol(s);
 	}
+
+	if ( s->s_wnd )
+		objcache_free2(sstate_cache, s->s_wnd);
 
 	objcache_free2(session_cache, s);
 	num_active--;
@@ -546,7 +535,6 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 	INIT_LIST_HEAD(&s->lru);
 	set_lru(cur, s);
 
-	s->reasm = 1;
 	s->proto = NULL;
 	s->flow = NULL;
 
@@ -630,10 +618,8 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 			s->c_wnd.snd_wnd = cur->win;
 			s->c_wnd.snd_wl1 = cur->seq;
 			s->c_wnd.snd_wl2 = cur->ack;
-			_tcp_reasm_init(&s->c_wnd.reasm,
-					s->c_wnd.snd_nxt);
-			_tcp_reasm_init(&s->s_wnd->reasm,
-					s->s_wnd->snd_nxt);
+			if ( _tcp_reasm_init(s) )
+				s->reasm = 1;
 			s->state = TCP_SESSION_S3;
 		}else{
 			dmesg(M_DEBUG, "bad ACK on 3whs");
@@ -653,13 +639,12 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 
 		switch(s->state) {
 		case TCP_SESSION_E:
-			reassemble_point(s, cur->rcv, cur->ack);
-
+			reassemble_point(s, !cur->to_server, cur->ack);
 			break;
 		case TCP_SESSION_CF1:
 			if ( !cur->to_server ) {
 				dmesg(M_DEBUG, "fin+ack for client");
-				reassemble_point(s, cur->rcv,
+				reassemble_point(s, !cur->to_server,
 							cur->ack - 1);
 				s->state = TCP_SESSION_CF2;
 			}
@@ -667,7 +652,7 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 		case TCP_SESSION_SF1:
 			if ( cur->to_server ) {
 				dmesg(M_DEBUG, "fin+ack for server");
-				reassemble_point(s, cur->rcv,
+				reassemble_point(s, !cur->to_server,
 							cur->ack - 1);
 				s->state = TCP_SESSION_SF2;
 			}
@@ -675,7 +660,7 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 		case TCP_SESSION_CF3:
 			if ( cur->to_server ) {
 				dmesg(M_DEBUG, "fin+ack for server");
-				reassemble_point(s, cur->rcv,
+				reassemble_point(s, !cur->to_server,
 							cur->ack - 1);
 				s->state = TCP_SESSION_C;
 			}
@@ -683,7 +668,7 @@ static int ack_processing(struct tcpseg *cur, struct tcp_session *s)
 		case TCP_SESSION_SF3:
 			if ( !cur->to_server ) {
 				dmesg(M_DEBUG, "fin+ack for client");
-				reassemble_point(s, cur->rcv,
+				reassemble_point(s, !cur->to_server,
 							cur->ack - 1);
 				s->state = TCP_SESSION_C;
 			}
@@ -829,8 +814,7 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 		dmesg(M_DEBUG, "%u bytes data %.8x - %.8x",
 			cur->len, cur->seq, cur->seq_end);
 		//dhex_dump(cur->payload, cur->len, 16);
-		reasm_data(s, &cur->snd->reasm,
-				cur->seq, cur->len, cur->payload);
+		reasm_data(cur, s);
 	}
 
 	/* eighth, check the FIN bit */
