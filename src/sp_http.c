@@ -593,7 +593,7 @@ end:
 	return ret;
 }
 
-static ssize_t http_push(struct _stream *s, unsigned int chan,
+static ssize_t http_push(struct _stream *s, schan_t chan,
 		struct ro_vec *vec, size_t numv, size_t bytes)
 {
 	struct http_flow *f;
@@ -659,19 +659,25 @@ static void flow_fini(struct _stream *s)
 }
 
 
-struct _sproto sp_http = {
+static struct _sproto sp_http = {
 	.sp_label = "http",
-	.sp_push = http_push,
-	.sp_flow_sz = sizeof(struct http_flow),
 	.sp_flow_init = flow_init,
 	.sp_flow_fini = flow_fini,
+	.sp_flow_sz = sizeof(struct http_flow),
+};
+
+static struct _sdecode sd_http = {
+	.sd_label = "http",
+	.sd_push = http_push,
+	.sd_max_msg = 8192,
 };
 
 static void __attribute__((constructor)) http_ctor(void)
 {
 	sproto_add(&sp_http);
-	sproto_register(&sp_http, SNS_TCP, sys_be16(80));
-	sproto_register(&sp_http, SNS_TCP, sys_be16(81));
-	sproto_register(&sp_http, SNS_TCP, sys_be16(3128));
-	sproto_register(&sp_http, SNS_TCP, sys_be16(8080));
+	sdecode_add(&sp_http, &sd_http);
+	sdecode_register(&sd_http, SNS_TCP, sys_be16(80));
+	sdecode_register(&sd_http, SNS_TCP, sys_be16(81));
+	sdecode_register(&sd_http, SNS_TCP, sys_be16(3128));
+	sdecode_register(&sd_http, SNS_TCP, sys_be16(8080));
 }

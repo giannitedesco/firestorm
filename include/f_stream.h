@@ -18,20 +18,28 @@ struct _stream {
 	void *s_flow;
 };
 
-struct _sproto {
-	ssize_t (*sp_push)(struct _stream *s, unsigned int chan,
+struct _sdecode {
+	ssize_t (*sd_push)(struct _stream *s, schan_t chan,
 				struct ro_vec *vec, size_t numv, size_t bytes);
+	size_t sd_max_msg;
+	struct _sproto *sd_proto;
+	struct _sdecode *sd_next;
+	const char *sd_label;
+};
+
+struct _sproto {
 	int (*sp_flow_init)(struct _stream *s);
 	void (*sp_flow_fini)(struct _stream *s);
 	size_t sp_flow_sz;
 	struct _sproto *sp_next;
+	struct _sdecode *sp_decoders;
 	unsigned int sp_idx;
 	const char *sp_label;
 };
 
 struct _sns_entry {
 	proto_id_t nse_id;
-	struct _sproto *nse_sproto;
+	struct _sdecode *nse_sdecode;
 };
 
 struct _stream_ns {
@@ -43,8 +51,10 @@ struct _stream_ns {
 size_t stream_max_flow_size(proto_ns_t ns);
 unsigned int stream_num_sproto(void);
 void sproto_add(struct _sproto *sp);
-void sproto_register(struct _sproto *sp, proto_ns_t ns, proto_id_t id);
-_constfn const struct _sproto *sproto_find(proto_ns_t ns, proto_id_t id);
+
+void sdecode_add(struct _sproto *sp, struct _sdecode *sd);
+void sdecode_register(struct _sdecode *sd, proto_ns_t ns, proto_id_t id);
+_constfn const struct _sdecode *sdecode_find(proto_ns_t ns, proto_id_t id);
 
 ssize_t stream_push_line(struct ro_vec *vec, size_t numv, size_t bytes,
 				size_t *bufsz);

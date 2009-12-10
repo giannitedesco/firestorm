@@ -149,7 +149,7 @@ static void detach_protocol(struct tcp_session *s)
 		ss.stream.s_flow = s->flow;
 		ss.s = s;
 		ss.sbuf = NULL;
-		s->proto->sp_flow_fini(&ss.stream);
+		s->proto->sd_proto->sp_flow_fini(&ss.stream);
 		objcache_free2(flow_cache, s->flow);
 		s->flow = NULL;
 	}
@@ -171,7 +171,7 @@ static void attach_protocol(struct tcp_session *s)
 	if ( !reassemble )
 		return;
 
-	s->proto = sproto_find(SNS_TCP, s->s_port);
+	s->proto = sdecode_find(SNS_TCP, s->s_port);
 	if ( NULL == s->proto )
 		goto fuckit;
 
@@ -183,7 +183,7 @@ static void attach_protocol(struct tcp_session *s)
 	ss.s = s;
 	ss.sbuf = NULL;
 
-	if ( flow && !s->proto->sp_flow_init(&ss.stream) )
+	if ( flow && !s->proto->sd_proto->sp_flow_init(&ss.stream) )
 		goto fuckit;
 
 	s->flow = flow;

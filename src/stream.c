@@ -41,8 +41,8 @@ size_t stream_max_flow_size(proto_ns_t ns)
 	unsigned int i;
 	size_t max;
 	for(i = 0, max = 0; i < ns_arr[ns].ns_num_reg; i++)
-		if ( ns_arr[ns].ns_reg[i].nse_sproto->sp_flow_sz > max )
-			max = ns_arr[ns].ns_reg[i].nse_sproto->sp_flow_sz;
+		if ( ns_arr[ns].ns_reg[i].nse_sdecode->sd_proto->sp_flow_sz > max )
+			max = ns_arr[ns].ns_reg[i].nse_sdecode->sd_proto->sp_flow_sz;
 	return max;
 }
 
@@ -54,12 +54,22 @@ unsigned int stream_num_sproto(void)
 void sproto_add(struct _sproto *sp)
 {
 	assert(NULL != sp->sp_label);
+	assert(NULL == sp->sp_next);
 	sp->sp_next = sprotos;
 	sprotos = sp;
 	sp->sp_idx = num_sproto++;
 }
 
-void sproto_register(struct _sproto *sp, proto_ns_t ns, proto_id_t id)
+void sdecode_add(struct _sproto *sp, struct _sdecode *sd)
+{
+	assert(NULL != sd->sd_label);
+	assert(NULL == sd->sd_next);
+	sd->sd_next = sp->sp_decoders;
+	sp->sp_decoders = sd;
+	sd->sd_proto = sp;
+}
+
+void sdecode_register(struct _sdecode *sd, proto_ns_t ns, proto_id_t id)
 {
 	unsigned int i;
 	assert(ns < SNS_MAX);
@@ -67,8 +77,8 @@ void sproto_register(struct _sproto *sp, proto_ns_t ns, proto_id_t id)
 	for(i = id; i < ns_arr[ns].ns_num_reg; i++) {
 		if ( ns_arr[ns].ns_reg[i].nse_id == id ) {
 			mesg(M_WARN, "stream : %s: %s / 0x%x registered by %s",
-				sp->sp_label, ns_arr[ns].ns_label, id,
-				ns_arr[ns].ns_reg[i].nse_sproto->sp_label);
+				sd->sd_label, ns_arr[ns].ns_label, id,
+				ns_arr[ns].ns_reg[i].nse_sdecode->sd_label);
 			return;
 		}
 	}
@@ -79,11 +89,11 @@ void sproto_register(struct _sproto *sp, proto_ns_t ns, proto_id_t id)
 	}
 
 	ns_arr[ns].ns_reg[ns_arr[ns].ns_num_reg].nse_id = id;
-	ns_arr[ns].ns_reg[ns_arr[ns].ns_num_reg].nse_sproto = sp;
+	ns_arr[ns].ns_reg[ns_arr[ns].ns_num_reg].nse_sdecode = sd;
 	ns_arr[ns].ns_num_reg++;
 }
 
-const struct _sproto *sproto_find(proto_ns_t ns, proto_id_t id)
+const struct _sdecode *sdecode_find(proto_ns_t ns, proto_id_t id)
 {
 	struct _sns_entry *p = ns_arr[ns].ns_reg;
 	unsigned int n;
@@ -98,7 +108,7 @@ const struct _sproto *sproto_find(proto_ns_t ns, proto_id_t id)
 			p = p + (i + 1);
 			n = n - (i + 1);
 		}else{
-			return p[i].nse_sproto;
+			return p[i].nse_sdecode;
 		}
 	}
 

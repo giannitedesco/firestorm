@@ -118,7 +118,7 @@ struct tcp_session {
 	struct tcp_state c_wnd;
 	struct tcp_state *s_wnd;
 
-	const struct _sproto *proto;
+	const struct _sdecode *proto;
 	void *flow;
 
 	struct list_head lru;
@@ -148,5 +148,9 @@ void _tcp_reasm_free(struct tcp_session *s, int abort);
 void _tcp_reasm_print(struct tcp_sbuf *s);
 
 void *_tcp_alloc(struct tcp_session *s, objcache_t o, int reasm);
+
+extern struct _decoder _ipv4_decoder;
+extern struct _flow_tracker _ipv4_ipdefrag;
+extern struct _flow_tracker _ipv4_tcpflow;
 
 #endif /* _TCPIP_HEADER_INCLUDED_ */

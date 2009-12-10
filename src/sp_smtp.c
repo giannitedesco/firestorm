@@ -176,7 +176,7 @@ static int do_request(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
 }
 
 static int smtp_line(struct _stream *s, struct smtp_flow *f,
-			unsigned int chan, const uint8_t *ptr, size_t len)
+			schan_t chan, const uint8_t *ptr, size_t len)
 {
 	struct ro_vec vec;
 
@@ -195,7 +195,7 @@ static int smtp_line(struct _stream *s, struct smtp_flow *f,
 	return 1;
 }
 
-static ssize_t smtp_push(struct _stream *s, unsigned int chan,
+static ssize_t smtp_push(struct _stream *s, schan_t chan,
 		struct ro_vec *vec, size_t numv, size_t bytes)
 {
 	struct smtp_flow *f;
@@ -239,17 +239,22 @@ static void flow_fini(struct _stream *s)
 {
 }
 
-
-struct _sproto sp_smtp = {
+static struct _sproto sp_smtp = {
 	.sp_label = "smtp",
-	.sp_push = smtp_push,
-	.sp_flow_sz = sizeof(struct smtp_flow),
 	.sp_flow_init = flow_init,
 	.sp_flow_fini = flow_fini,
+	.sp_flow_sz = sizeof(struct smtp_flow),
+};
+
+static struct _sdecode sd_smtp = {
+	.sd_label = "smtp",
+	.sd_push = smtp_push,
+	.sd_max_msg = 1024,
 };
 
 static void __attribute__((constructor)) smtp_ctor(void)
 {
 	sproto_add(&sp_smtp);
-	sproto_register(&sp_smtp, SNS_TCP, sys_be16(25));
+	sdecode_add(&sp_smtp, &sd_smtp);
+	sdecode_register(&sd_smtp, SNS_TCP, sys_be16(25));
 }

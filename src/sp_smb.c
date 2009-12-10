@@ -197,7 +197,7 @@ static int unexpected_response(struct smb_flow *f, const struct smb_pkt *smb)
 	return 0;
 }
 
-static int state_update(struct smb_flow *f, unsigned int chan,
+static int state_update(struct smb_flow *f, schan_t chan,
 			const struct smb_pkt *smb,
 			const uint8_t *buf, size_t len)
 {
@@ -255,7 +255,7 @@ static int state_update(struct smb_flow *f, unsigned int chan,
 	return 0;
 }
 
-static int smb_pkt(struct _stream *ss, struct smb_flow *f, unsigned int chan,
+static int smb_pkt(struct _stream *ss, struct smb_flow *f, schan_t chan,
 			const uint8_t *buf, size_t len)
 {
 	const struct smb_pkt *smb;
@@ -332,7 +332,7 @@ static ssize_t smb_get_len(struct ro_vec *vec, size_t numv, size_t bytes)
 	return 0;
 }
 
-static ssize_t smb_push(struct _stream *s, unsigned int chan,
+static ssize_t smb_push(struct _stream *s, schan_t chan,
 		struct ro_vec *vec, size_t numv, size_t bytes)
 {
 	struct smb_flow *f;
@@ -379,7 +379,7 @@ static void name_decode(const uint8_t *in, uint8_t *out, size_t nchar)
 	*out = '\0';
 }
 
-static int nbss_setup(struct _stream *s, struct smb_flow *f, unsigned int chan,
+static int nbss_setup(struct _stream *s, struct smb_flow *f, schan_t chan,
 			const uint8_t *buf, size_t len)
 {
 	uint8_t called[17], caller[17];
@@ -396,7 +396,7 @@ static int nbss_setup(struct _stream *s, struct smb_flow *f, unsigned int chan,
 	return 1;
 }
 
-static int nbss_pkt(struct _stream *s, struct smb_flow *f, unsigned int chan,
+static int nbss_pkt(struct _stream *s, struct smb_flow *f, schan_t chan,
 			const struct nbss_pkt *nb,
 			const uint8_t *buf, size_t len)
 {
@@ -461,7 +461,7 @@ static ssize_t nbt_get_len(struct ro_vec *vec, size_t numv, size_t bytes)
 	return 0;
 }
 
-static ssize_t nbt_push(struct _stream *s, unsigned int chan,
+static ssize_t nbt_push(struct _stream *s, schan_t chan,
 		struct ro_vec *vec, size_t numv, size_t bytes)
 {
 	const struct nbss_pkt *nb;
@@ -525,26 +525,30 @@ static void flow_fini(struct _stream *ss)
 	fclose(f->file);
 }
 
-struct _sproto sp_nbt = {
-	.sp_label = "nbt",
-	.sp_push = nbt_push,
+static struct _sproto sp_smb = {
+	.sp_label = "smb",
 	.sp_flow_sz = sizeof(struct smb_flow),
 	.sp_flow_init = flow_init,
 	.sp_flow_fini = flow_fini,
 };
 
-struct _sproto sp_smb = {
-	.sp_label = "smb",
-	.sp_push = smb_push,
-	.sp_flow_sz = sizeof(struct smb_flow),
-	.sp_flow_init = flow_init,
-	.sp_flow_fini = flow_fini,
+static struct _sdecode sd_nbt = {
+	.sd_label = "nbt",
+	.sd_push = nbt_push,
+	.sd_max_msg = (1 << 17),
+};
+
+static struct _sdecode sd_smb = {
+	.sd_label = "smb",
+	.sd_push = smb_push,
+	.sd_max_msg = (1 << 24),
 };
 
 static void __attribute__((constructor)) smb_ctor(void)
 {
-	sproto_add(&sp_nbt);
-	sproto_register(&sp_nbt, SNS_TCP, sys_be16(139));
 	sproto_add(&sp_smb);
-	sproto_register(&sp_smb, SNS_TCP, sys_be16(445));
+	sdecode_add(&sp_smb, &sd_smb);
+	sdecode_add(&sp_smb, &sd_nbt);
+	sdecode_register(&sd_nbt, SNS_TCP, sys_be16(139));
+	sdecode_register(&sd_smb, SNS_TCP, sys_be16(445));
 }

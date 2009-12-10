@@ -185,7 +185,7 @@ static int do_request(struct _stream *s, struct pop3_flow *f, struct ro_vec *v)
 }
 
 static int pop3_line(struct _stream *s, struct pop3_flow *f,
-			unsigned int chan, const uint8_t *ptr, size_t len)
+			schan_t chan, const uint8_t *ptr, size_t len)
 {
 	struct ro_vec vec;
 
@@ -206,7 +206,7 @@ static int pop3_line(struct _stream *s, struct pop3_flow *f,
 	return 1;
 }
 
-static ssize_t pop3_push(struct _stream *s, unsigned int chan,
+static ssize_t pop3_push(struct _stream *s, schan_t chan,
 		struct ro_vec *vec, size_t numv, size_t bytes)
 {
 	struct pop3_flow *f;
@@ -251,16 +251,22 @@ static void flow_fini(struct _stream *s)
 }
 
 
-struct _sproto sp_pop3 = {
+static struct _sproto sp_pop3 = {
 	.sp_label = "pop3",
-	.sp_push = pop3_push,
-	.sp_flow_sz = sizeof(struct pop3_flow),
 	.sp_flow_init = flow_init,
 	.sp_flow_fini = flow_fini,
+	.sp_flow_sz = sizeof(struct pop3_flow),
+};
+
+static struct _sdecode sd_pop3 = {
+	.sd_label = "pop3",
+	.sd_push = pop3_push,
+	.sd_max_msg = 1024,
 };
 
 static void __attribute__((constructor)) pop3_ctor(void)
 {
 	sproto_add(&sp_pop3);
-	sproto_register(&sp_pop3, SNS_TCP, sys_be16(110));
+	sdecode_add(&sp_pop3, &sd_pop3);
+	sdecode_register(&sd_pop3, SNS_TCP, sys_be16(110));
 }

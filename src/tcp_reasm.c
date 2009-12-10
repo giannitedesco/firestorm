@@ -443,12 +443,12 @@ static int do_inject(struct tcp_session *ss, struct tcp_sbuf *s,
 		memcpy(r->r_base + ofs, buf, clen);
 		lr = r;
 
+		if ( is_contig )
+			s->s_contig = r;
+
 		sseq += clen;
 		buf += clen;
 		len -= clen;
-
-		if ( is_contig )
-			s->s_contig = r;
 
 		assert(!tcp_after(sseq, seq_end));
 	}
@@ -577,10 +577,10 @@ static size_t do_reasm(struct _stream *ss, uint8_t *buf, size_t sz)
 }
 
 static size_t fill_vectors(struct tcp_sbuf *s, size_t bytes,
-			struct ro_vec *vec, size_t numv)
+			struct ro_vec *vec)
 {
 	struct tcp_rbuf *r;
-	size_t i = 0, ret = 0;
+	size_t i = 0;
 	size_t left = bytes;
 
 	list_for_each_entry(r, &s->s_bufs, r_list) {
@@ -596,38 +596,37 @@ static size_t fill_vectors(struct tcp_sbuf *s, size_t bytes,
 			sz = left;
 
 		dmesg(M_DEBUG, " vec[%u] is %u bytes", i, sz);
-		assert(i < numv);
 		vec[i].v_ptr = cp;
 		vec[i].v_len = sz;
 		i++;
 		left -= sz;
-		ret += sz;
 		if ( 0 == left )
 			break;
 	}
 
-	return ret;
+	return i;
 }
 
-static size_t num_vectors(struct tcp_sbuf *s, size_t bytes)
+static int assure_vbuf(struct tcp_sbuf *s, struct ro_vec **vec, size_t *numvec)
 {
 	struct tcp_rbuf *r;
-	size_t left = bytes;
-	size_t cnt = 0;
+	struct ro_vec *new;
+	size_t n;
 
-	list_for_each_entry(r, &s->s_bufs, r_list) {
-		size_t sz = RBUF_SIZE;
-		if ( tcp_before(r->r_seq, s->s_reasm_begin) )
-			sz -= tcp_diff(r->r_seq, s->s_reasm_begin);
-		if ( left < sz )
-			sz = left;
-		left -= sz;
-		cnt++;
-		if ( 0 == left )
-			break;
-	}
+	r = first_buffer(s);
+	n = tcp_diff(r->r_seq, s->s_contig->r_seq + RBUF_SIZE) / RBUF_SIZE;
+	dmesg(M_DEBUG, "assuring %u vectors", n);
 
-	return cnt;
+	if ( *numvec >= n )
+		return 1;
+	
+	new = realloc(*vec, sizeof(*new) * n);
+	if ( NULL == new )
+		return 0;
+	
+	*vec = new;
+	*numvec = n;
+	return 1;
 }
 
 static struct ro_vec *advance_reasm_begin(struct tcp_sbuf *s,
@@ -649,10 +648,11 @@ static struct ro_vec *advance_reasm_begin(struct tcp_sbuf *s,
 		}
 
 		s->s_begin = r->r_seq;
-		if ( vec->v_ptr + vec->v_len == r->r_base + RBUF_SIZE )
+		if ( vec->v_ptr + vec->v_len == r->r_base + RBUF_SIZE ) {
 			rbuf_free(s, r);
-		if ( s->s_contig == r )
-			s->s_contig = NULL;
+			if ( s->s_contig == r )
+				s->s_contig = NULL;
+		}
 
 		bytes -= vec->v_len;
 	}
@@ -663,12 +663,15 @@ static struct ro_vec *advance_reasm_begin(struct tcp_sbuf *s,
 
 static ssize_t do_push(struct tcp_session *ss, unsigned int chan, uint32_t seq)
 {
+	static struct ro_vec *vbuf;
+	static size_t vbuf_sz;
+
 	struct tcp_stream stream;
 	struct tcp_sbuf *s;
-	size_t sz, sz2, numv;
-	struct ro_vec *vec, *vbuf;
-	char *str;
+	size_t sz, numv;
+	struct ro_vec *vec;
 	ssize_t rret;
+	char *str;
 
 	switch(chan) {
 	case TCP_CHAN_TO_SERVER:
@@ -687,25 +690,22 @@ static ssize_t do_push(struct tcp_session *ss, unsigned int chan, uint32_t seq)
 	if ( !tcp_after(seq, s->s_reasm_begin) )
 		return 0;
 	if ( unlikely(tcp_after(seq, s->s_contig_seq)) ) {
-		dmesg(M_CRIT, "missing segment in tcp stream %u-%u",
-			s->s_contig_seq, seq);
+		mesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
+			ss->proto->sd_label, s->s_contig_seq,
+			seq, s->s_num_rbuf);
 		seq = s->s_contig_seq;
 	}
-
 	sz = tcp_diff(s->s_reasm_begin, seq);
-
-	/* erm, how about s->s_contig->r_base - s->s_begin / RBUF_SIZE */
-	numv = num_vectors(s, sz);
-	vbuf = vec = calloc(numv, sizeof(*vec));
-	if ( NULL == vec )
+	if ( 0 == sz )
 		return 0;
+	assert(s->s_contig);
 
+	if ( !assure_vbuf(s, &vbuf, &vbuf_sz) )
+		return -1;
+	vec = vbuf;
+	numv = fill_vectors(s, sz, vec);
 	dmesg(M_DEBUG, "tcp_reasm(%s): alloc %u bytes in %u vectors",
 			str, sz, numv);
-
-	sz2 = fill_vectors(s, sz, vec, numv);
-	dmesg(M_DEBUG, " %u bytes filled", sz2);
-	assert(sz == sz2);
 
 	stream.stream.s_reasm = do_reasm;
 	stream.stream.s_flow = ss->flow;
@@ -714,11 +714,11 @@ static ssize_t do_push(struct tcp_session *ss, unsigned int chan, uint32_t seq)
 
 	for(rret = 0; sz; rret++) {
 		ssize_t ret;
-		ret = ss->proto->sp_push(&stream.stream, chan, vec, numv, sz);
-		dmesg(M_DEBUG, " sp_push: %i/%u bytes taken", ret, sz);
+		ret = ss->proto->sd_push(&stream.stream, chan, vec, numv, sz);
+		dmesg(M_DEBUG, " sd_push: %i/%u bytes taken", ret, sz);
 		if ( ret < 0 ) {
 			mesg(M_CRIT, "tcp_reasm(%s): %s: desynchronised",
-				str, ss->proto->sp_label);
+				str, ss->proto->sd_label);
 			return -1;
 		}
 		if ( ret == 0)
@@ -741,7 +741,6 @@ static ssize_t do_push(struct tcp_session *ss, unsigned int chan, uint32_t seq)
 	assert(!tcp_before(s->s_contig_seq, s->s_begin));
 	assert(!tcp_before(s->s_contig_seq, s->s_reasm_begin));
 
-	free(vbuf);
 	return rret;
 }
 

@@ -45,10 +45,6 @@ struct icmp_dcb {
 typedef char ipstr_t[IPSTR_SZ];
 void iptostr(ipstr_t str, uint32_t ip);
 
-extern struct _decoder _ipv4_decoder;
-extern struct _flow_tracker _ipv4_ipdefrag;
-extern struct _flow_tracker _ipv4_tcpflow;
-
 uint16_t _ip_csum(const struct pkt_iphdr *iph);
 
 #endif /* _P_IPV4_HEADER_INCLUDED_ */

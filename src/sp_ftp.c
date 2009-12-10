@@ -20,7 +20,7 @@ struct ftp_flow {
 };
 
 static int ftp_line(struct _stream *s, struct ftp_flow *f,
-			unsigned int chan, const uint8_t *ptr, size_t len)
+			schan_t chan, const uint8_t *ptr, size_t len)
 {
 	struct ro_vec vec;
 
@@ -41,7 +41,7 @@ static int ftp_line(struct _stream *s, struct ftp_flow *f,
 	return 1;
 }
 
-static ssize_t ftp_push(struct _stream *s, unsigned int chan,
+static ssize_t ftp_push(struct _stream *s, schan_t chan,
 		struct ro_vec *vec, size_t numv, size_t bytes)
 {
 	struct ftp_flow *f;
@@ -86,16 +86,22 @@ static void flow_fini(struct _stream *s)
 }
 
 
-struct _sproto sp_ftp = {
+static struct _sproto sp_ftp = {
 	.sp_label = "ftp",
-	.sp_push = ftp_push,
-	.sp_flow_sz = sizeof(struct ftp_flow),
 	.sp_flow_init = flow_init,
 	.sp_flow_fini = flow_fini,
+	.sp_flow_sz = sizeof(struct ftp_flow),
+};
+
+static struct _sdecode sd_ftp = {
+	.sd_label = "ftp",
+	.sd_push = ftp_push,
+	.sd_max_msg = 1024,
 };
 
 static void __attribute__((constructor)) ftp_ctor(void)
 {
 	sproto_add(&sp_ftp);
-	sproto_register(&sp_ftp, SNS_TCP, sys_be16(21));
+	sdecode_add(&sp_ftp, &sd_ftp);
+	sdecode_register(&sd_ftp, SNS_TCP, sys_be16(21));
 }
