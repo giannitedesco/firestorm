@@ -16,7 +16,7 @@
 #include <limits.h>
 #include <ctype.h>
 
-#if 1
+#if 0
 #define dbg(flow, fmt, x...) \
 		do { \
 			struct smb_flow *__FLOW = flow; \
@@ -59,8 +59,12 @@ static void hex_dumpf(FILE *f, const uint8_t *tmp, size_t len, size_t llen)
 	}
 	fprintf(f, "\n");
 }
+#define dbg_fopen fopen
+#define dbg_fclose fclose
 #else
 #define dbg(x...) do { } while(0);
+#define dbg_fopen(f, p) NULL;
+#define dbg_fclose(f) do { } while(0);
 static void hex_dumpf(FILE *f, const uint8_t *tmp, size_t len, size_t llen) {}
 #endif
 
@@ -506,7 +510,7 @@ static int flow_init(struct _stream *ss)
 	char fn[32];
 
 	snprintf(fn, sizeof(fn), "./smb/sess%u.txt", snum++);
-	f->file = fopen(fn, "w");
+	f->file = dbg_fopen(fn, "w");
 	iptostr(sip, s->s->s_addr);
 	iptostr(cip, s->s->c_addr);
 	dbg(f, "%s:%u -> %s:%u\n",
@@ -522,7 +526,7 @@ static void flow_fini(struct _stream *ss)
 {
 	struct tcp_stream *s = (struct tcp_stream *)ss;
 	struct smb_flow *f = s->stream.s_flow;
-	fclose(f->file);
+	dbg_fclose(f->file);
 }
 
 static struct _sproto sp_smb = {
