@@ -25,7 +25,7 @@ struct _pipeline {
 	uint64_t p_num_pkt;
 };
 
-static void analyze_packet(struct _pipeline *p, struct _pkt *pkt)
+static void analyze_packet(struct _pkt *pkt)
 {
 	struct _dcb *cur;
 
@@ -34,6 +34,37 @@ static void analyze_packet(struct _pipeline *p, struct _pkt *pkt)
 		cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
 		dmesg(M_DEBUG, " o %s layer", cur->dcb_proto->p_label);
 	}
+}
+
+static void flowtrack_packet(struct _pkt *pkt)
+{
+	struct _dcb *cur;
+
+	for(cur = pkt->pkt_dcb; cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
+		if ( cur->dcb_proto->p_flowtrack ) {
+			dmesg(M_DEBUG, "FLOW TRACK: %s",
+				cur->dcb_proto->p_label);
+			cur->dcb_proto->p_flowtrack(pkt, cur);
+		}
+	}
+}
+
+static void do_pkt_inject(pkt_t pkt)
+{
+	dmesg(M_DEBUG, "pkt: len=%u/%u", pkt->pkt_caplen, pkt->pkt_len);
+	analyze_packet(pkt);
+	flowtrack_packet(pkt);
+	if ( pkt->pkt_nxthdr < pkt->pkt_end ) {
+		dhex_dump(pkt->pkt_nxthdr,
+			pkt->pkt_end - pkt->pkt_nxthdr, 16);
+	}else{
+		dmesg(M_DEBUG, ".\n");
+	}
+}
+
+void pkt_inject(pkt_t pkt)
+{
+	do_pkt_inject(pkt);
 }
 
 static int pd_init(struct _decoder *d, void *priv)
@@ -119,52 +150,22 @@ int pipeline_add_source(pipeline_t p, source_t s)
 	return 1;
 }
 
-static void flowtrack_packet(struct _pipeline *p, struct _pkt *pkt)
-{
-	struct _dcb *cur;
-
-	for(cur = pkt->pkt_dcb; cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
-		if ( cur->dcb_proto->p_flowtrack ) {
-			dmesg(M_DEBUG, "FLOW TRACK: %s",
-				cur->dcb_proto->p_label);
-			cur->dcb_proto->p_flowtrack(pkt, cur);
-		}
-	}
-}
-
 static unsigned int do_dequeue(struct _pipeline *p, struct _source *s,
 				struct iothread *io)
 {
-	frame_t f;
-	pkt_t pkt, tmp;
+	pkt_t pkt;
 
-	f = s->s_capdev->c_dequeue(s, io);
-	if ( f == NULL )
+	pkt = s->s_capdev->c_dequeue(s, io);
+	if ( NULL == pkt )
 		return 0;
 
-	f->f_priv = p;
 	p->p_num_pkt++;
 
-	dmesg(M_DEBUG, "Frame %llu, len = %u/%u",
-		p->p_num_pkt, f->f_raw->pkt_caplen, f->f_raw->pkt_len);
+	dmesg(M_DEBUG, "Frame %llu:",
+		p->p_num_pkt);
 
-	decode(f->f_raw, s->s_decoder);
-
-	flowtrack_packet(p, f->f_raw);
-	analyze_packet(p, f->f_raw);
-
-	list_for_each_entry_safe(pkt, tmp, &f->f_pkts, pkt_list) {
-		flowtrack_packet(p, pkt);
-		analyze_packet(p, pkt);
-		pkt_free(pkt);
-	}
-
-	if ( f->f_raw->pkt_nxthdr < f->f_raw->pkt_end ) {
-		dhex_dump(f->f_raw->pkt_nxthdr,
-			f->f_raw->pkt_end - f->f_raw->pkt_nxthdr, 16);
-	}else{
-		dmesg(M_DEBUG, ".\n");
-	}
+	decode(pkt, s->s_decoder);
+	do_pkt_inject(pkt);
 
 	return 1;
 }

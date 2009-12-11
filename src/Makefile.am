@@ -17,7 +17,6 @@ endif
 firestorm_SOURCES = \
 	memchunk.c \
 	timers.c \
-	mpool.c \
 	fdctl.c \
 	nbio.c \
 	$(SRC_EPOLL) \
@@ -28,7 +27,6 @@ firestorm_SOURCES = \
 	os.c \
 	\
 	capture.c \
-	packet.c \
 	decode.c \
 	stream.c \
 	\

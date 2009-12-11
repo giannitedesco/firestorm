@@ -15,7 +15,6 @@
 
 struct fpcap_priv {
 	struct _source	src;
-	struct _frame	frame;
 	struct _pkt	pkt;
 	pcap_t		*pcap_desc;
 };
@@ -78,7 +77,7 @@ static void lpf_callback(u_char *user, struct pcap_pkthdr *header, u_char *data)
 	p->pkt.pkt_end = data + header->caplen;
 }
 
-static struct _frame *live_dequeue(struct _source *s, struct iothread *io)
+static pkt_t live_dequeue(struct _source *s, struct iothread *io)
 {
 	struct fpcap_priv *p = (struct fpcap_priv *)s;
 	int ret;
@@ -97,10 +96,10 @@ static struct _frame *live_dequeue(struct _source *s, struct iothread *io)
 		return NULL;
 	}
 
-	return &p->frame;
+	return &p->pkt;
 }
 
-static struct _frame *file_dequeue(struct _source *s, struct iothread *io)
+static pkt_t file_dequeue(struct _source *s, struct iothread *io)
 {
 	struct fpcap_priv *p = (struct fpcap_priv *)s;
 	int ret;
@@ -116,7 +115,7 @@ static struct _frame *file_dequeue(struct _source *s, struct iothread *io)
 	if ( ret == 0 )
 		return NULL;
 
-	return &p->frame;
+	return &p->pkt;
 }
 
 static const struct _capdev c_live = {
@@ -141,9 +140,7 @@ source_t capture_pcap_open_offline(const char *fn)
 		return 0;
 
 	_source_new(&p->src, &c_offline, fn);
-	p->frame.f_source = &p->src;
-	p->frame.f_raw = &p->pkt;
-	p->pkt.pkt_owner = &p->frame;
+	p->pkt.pkt_source = &p->src;
 
 	ebuf[0] = '\0';
 	p->pcap_desc = pcap_open_offline(fn, ebuf);
@@ -174,10 +171,7 @@ source_t capture_pcap_open_live(const char *ifname, size_t mtu, int promisc)
 		return 0;
 
 	_source_new(&p->src, &c_live, ifname);
-	INIT_LIST_HEAD(&p->frame.f_pkts);
-	p->frame.f_source = &p->src;
-	p->frame.f_raw = &p->pkt;
-	p->pkt.pkt_owner = &p->frame;
+	p->pkt.pkt_source = &p->src;
 
 	ebuf[0] = '\0';
 	p->pcap_desc = pcap_open_live(ifname, mtu, promisc,

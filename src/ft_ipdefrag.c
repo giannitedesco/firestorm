@@ -168,21 +168,15 @@ static void alert_timedout(struct _pkt *p)
 	mesg(M_WARN, "ipdefrag: timeout");
 }
 
-static void frankenpkt_dtor(struct _pkt *pkt)
-{
-	decode_pkt_realloc(pkt, 0);
-	free((void *)pkt->pkt_base);
-}
-
 /* Reassemble a complete set of fragments */
-static struct _pkt *reassemble(struct ipq *qp,
+static void reassemble(struct ipq *qp,
 				struct _pkt *pkt)
 {
 	struct ipfrag *f;
 	struct pkt_iphdr *iph;
 	int len = 0;
 	uint8_t *buf, *ptr;
-	struct _pkt *ret = NULL;
+	struct _pkt new;
 
 	assert(qp->len <= 0xffff);
 
@@ -224,33 +218,30 @@ static struct _pkt *reassemble(struct ipq *qp,
 
 	dhex_dump(buf, qp->len, 16);
 
-	ret = pkt_new(pkt->pkt_owner);
-	if ( ret == NULL )
-		goto err_free_buf;
+	new.pkt_source = pkt->pkt_source;
+	new.pkt_ts = qp->time;
+	new.pkt_base = buf;
+	new.pkt_len = new.pkt_caplen = qp->len;
+	new.pkt_end = new.pkt_base + new.pkt_len;
 
-	ret->pkt_ts = qp->time;
-	ret->pkt_base = buf;
-	ret->pkt_len = ret->pkt_caplen = qp->len;
-	ret->pkt_end = ret->pkt_base + ret->pkt_len;
+	new.pkt_dcb = NULL;
 
-	if ( !decode_pkt_realloc(ret, DECODE_DEFAULT_MIN_LAYERS) )
-		goto err_free_pkt;
+	if ( !decode_pkt_realloc(&new, DECODE_DEFAULT_MIN_LAYERS) )
+		goto err_free;
 
-	ret->pkt_dtor = frankenpkt_dtor;
-
-	/* FIXME: needs a reassemblygram DCB, dont call decode()  */
-	decode(ret, &_ipv4_decoder);
 	reassembled++;
 
-	return ret;
+	decode(&new, &_ipv4_decoder);
+	pkt_inject(&new);
 
-err_free_pkt:
-	pkt_free(ret);
-err_free_buf:
+	decode_pkt_realloc(&new, 0);
+	free(buf);
+	return;
+
+err_free:
 	free(buf);
 err:
 	err_reasm++;
-	return ret;
 }
 
 static struct ipq *ip_frag_create(unsigned int hash,
@@ -572,7 +563,6 @@ void _ipdefrag_track(pkt_t pkt, dcb_t dcb_ptr)
 	struct ipfrag_dcb *dcb;
 	unsigned int hash;
 	struct ipq *q;
-	pkt_t new;
 
 	dcb = (struct ipfrag_dcb *)dcb_ptr;
 	iph = dcb->ip_iph;
@@ -586,7 +576,7 @@ void _ipdefrag_track(pkt_t pkt, dcb_t dcb_ptr)
 		return;
 
 	if ( queue_fragment(hash, q, pkt, iph) ) {
-		new = reassemble(q, pkt);
+		reassemble(q, pkt);
 		ipq_kill(q);
 	}
 }

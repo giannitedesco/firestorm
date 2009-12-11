@@ -76,10 +76,6 @@ int vcmp(const struct ro_vec *v1, const struct ro_vec *v2);
 int vstrcmp(const struct ro_vec *v1, const char *str);
 size_t vtouint(struct ro_vec *v, unsigned int *u);
 
-/* --- Packet routines */
-pkt_t pkt_new(struct _frame *owner) _malloc;
-void pkt_free(pkt_t pkt);
-
 /* -- Memchunk routines */
 int memchunk_init(size_t numchunks);
 void memchunk_fini(void);
@@ -120,5 +116,8 @@ pipeline_t pipeline_new(void) _malloc;
 void pipeline_free(pipeline_t p);
 int pipeline_add_source(pipeline_t p, source_t s);
 int pipeline_go(pipeline_t p);
+
+/* Callback events */
+void pkt_inject(pkt_t pkt);
 
 #endif /* _FIRESTORM_HEADER_INCLUDED_ */

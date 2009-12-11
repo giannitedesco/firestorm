@@ -690,7 +690,7 @@ static ssize_t do_push(struct tcp_session *ss, unsigned int chan, uint32_t seq)
 	if ( !tcp_after(seq, s->s_reasm_begin) )
 		return 0;
 	if ( unlikely(tcp_after(seq, s->s_contig_seq)) ) {
-		mesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
+		dmesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
 			ss->proto->sd_label, s->s_contig_seq,
 			seq, s->s_num_rbuf);
 		seq = s->s_contig_seq;

@@ -39,7 +39,7 @@ static void null_decode(struct _pkt *p)
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 
-	proto = source_h32(p->pkt_owner->f_source, *null);
+	proto = source_h32(p->pkt_source, *null);
 	decode_layer(p, &p_null);
 	decode_next(p, NS_UNIXPF, proto);
 }
