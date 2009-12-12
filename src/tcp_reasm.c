@@ -563,10 +563,12 @@ static const uint8_t *do_reasm(struct tcp_sbuf *s, size_t sz)
 		uint8_t *new;
 
 		new = realloc(buf, sz);
+		dmesg(M_INFO, "tcp_stream: realloc to %u bytes %p", sz, new);
 		if ( NULL == new )
 			return NULL;
 
 		buf = new;
+		buf_sz = sz;
 	}
 
 	ptr = buf;
