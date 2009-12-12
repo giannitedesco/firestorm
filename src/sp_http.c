@@ -526,8 +526,20 @@ end:
 	return ret;
 }
 
-static void http_content(struct _pkt *pkt, size_t bytes)
+static ssize_t http_content(struct _pkt *pkt, const uint8_t *ptr, size_t len)
 {
+	struct http_cont_dcb *dcb;
+
+	dcb = (struct http_cont_dcb *)decode_layer0(pkt, &p_http_cont);
+	if ( NULL == dcb )
+		return 0;
+
+	pkt->pkt_caplen = pkt->pkt_len = len;
+	pkt->pkt_base = ptr;
+	pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
+	pkt_inject(pkt);
+
+	return pkt->pkt_len;
 }
 
 static ssize_t http_push(struct _pkt *pkt, struct ro_vec *vec, size_t numv,
@@ -556,16 +568,16 @@ static ssize_t http_push(struct _pkt *pkt, struct ro_vec *vec, size_t numv,
 		ret = push_hdr(pkt, fs, vec, numv, bytes);
 		break;
 	case HTTP_STATE_CONTENT:
-		if ( bytes > fs->content_len ) {
-			ret = fs->content_len;
-			http_content(pkt, fs->content_len);
-			fs->content_len = 0;
-			fs->state = HTTP_STATE_HEADER;
+		if ( vec[0].v_len > fs->content_len ) {
+			ret = http_content(pkt, vec[0].v_ptr, fs->content_len);
 		}else{
-			http_content(pkt, bytes);
-			fs->content_len -= bytes;
-			ret = bytes;
+			ret = http_content(pkt, vec[0].v_ptr, vec[0].v_len);
 		}
+		if ( ret <= 0 )
+			break;
+		fs->content_len -= (size_t)ret;
+		if ( 0 == fs->content_len )
+			fs->state = HTTP_STATE_HEADER;
 		break;
 	case HTTP_STATE_CHUNKED:
 		ret = bytes;

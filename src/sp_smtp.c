@@ -22,7 +22,22 @@
 #define dhex_dump(x...) do { } while(0);
 #endif
 
-static int parse_response(struct smtp_response *r, struct ro_vec *v)
+static struct _proto p_smtp_req = {
+	.p_label = "smtp_request",
+	.p_dcb_sz = sizeof(struct smtp_request_dcb),
+};
+
+static struct _proto p_smtp_resp = {
+	.p_label = "smtp_response",
+	.p_dcb_sz = sizeof(struct smtp_response_dcb),
+};
+
+static struct _proto p_smtp_cont = {
+	.p_label = "smtp_cont",
+	.p_dcb_sz = sizeof(struct smtp_cont_dcb),
+};
+
+static int parse_response(struct smtp_response_dcb *r, struct ro_vec *v)
 {
 	const uint8_t *end = v->v_ptr + v->v_len;
 	const uint8_t *ptr = v->v_ptr;
@@ -51,12 +66,12 @@ static int parse_response(struct smtp_response *r, struct ro_vec *v)
 
 static int do_response(struct _pkt *pkt, struct ro_vec *v)
 {
-	const struct tcpstream_dcb *dcb;
+	const struct tcpstream_dcb *stream;
+	struct smtp_response_dcb *r;
 	struct smtp_flow *f;
-	struct smtp_response r;
 
-	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = dcb->s->flow;
+	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = stream->s->flow;
 
 	switch(f->state) {
 	case SMTP_STATE_CMD:
@@ -66,28 +81,37 @@ static int do_response(struct _pkt *pkt, struct ro_vec *v)
 		break;
 	}
 
-	if ( !parse_response(&r, v) ) {
+	r = (struct smtp_response_dcb *)decode_layer0(pkt, &p_smtp_resp);
+	if ( NULL == r )
+		return 0;
+
+	if ( !parse_response(r, v) ) {
 		mesg(M_ERR, "smtp: parse error: %.*s", v->v_len, v->v_ptr);
 		return 1;
 	}
 
-	dmesg(M_DEBUG, "<<< %3u%c%.*s", r.code,
-		(r.flags & SMTP_RESP_MULTI) ? '-' : ' ',
-		r.msg.v_len, r.msg.v_ptr);
-
-	if ( 0 == (r.flags & SMTP_RESP_MULTI) ) {
-		if ( r.code == 354 )
+	if ( 0 == (r->flags & SMTP_RESP_MULTI) ) {
+		if ( r->code == 354 )
 			f->state = SMTP_STATE_DATA;
 		else
 			f->state = SMTP_STATE_CMD;
 	}
+
+	dmesg(M_DEBUG, "<<< %3u%c%.*s", r.code,
+		(r->flags & SMTP_RESP_MULTI) ? '-' : ' ',
+		r->msg.v_len, r->msg.v_ptr);
+
+	pkt->pkt_caplen = pkt->pkt_len = v->v_len;
+	pkt->pkt_base = v->v_ptr;
+	pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
+	pkt_inject(pkt);
 
 	return 1;
 }
 
 struct smtp_cmd {
 	struct ro_vec cmd;
-	void(*fn)(struct _pkt *pkt, struct smtp_request *r);
+	int (*fn)(struct _pkt *pkt, struct smtp_request_dcb *r);
 };
 
 static const struct smtp_cmd cmds[] = {
@@ -106,11 +130,18 @@ static const struct smtp_cmd cmds[] = {
 	{ .cmd = {.v_ptr = (uint8_t *)"DEBUG", .v_len = 5}, .fn = NULL },
 };
 
-static void dispatch_req(struct _pkt *pkt, struct smtp_request *r)
+static int dispatch_req(struct _pkt *pkt, struct smtp_request_dcb *r,
+			 struct ro_vec *v)
 {
+	struct smtp_request_dcb *dcb;
 	const struct smtp_cmd *c;
 	unsigned int n;
 
+	dmesg(M_DEBUG, ">>> %.*s %.*s",
+		r->cmd.v_len, r->cmd.v_ptr,
+		r->str.v_len, r->str.v_ptr);
+
+	/* TODO: may want special dcb for parsing senders/recipients etc */
 	for(n = sizeof(cmds)/sizeof(*cmds), c = cmds; n; ) {
 		unsigned int i;
 		int ret;
@@ -124,25 +155,35 @@ static void dispatch_req(struct _pkt *pkt, struct smtp_request *r)
 			n = n - (i + 1);
 		}else{
 			if ( c[i].fn )
-				c[i].fn(pkt, r);
+				return c[i].fn(pkt, r);
 			break;
 		}
 	}
 
-	dmesg(M_DEBUG, ">>> %.*s %.*s",
-		r->cmd.v_len, r->cmd.v_ptr,
-		r->str.v_len, r->str.v_ptr);
+	/* generic cmd/string dcb */
+	dcb = (struct smtp_request_dcb *)decode_layer0(pkt, &p_smtp_req);
+	if ( NULL == dcb )
+		return 0;
+
+	dcb->cmd = r->cmd;
+	dcb->str = r->str;
+
+	pkt->pkt_caplen = pkt->pkt_len = v->v_len;
+	pkt->pkt_base = v->v_ptr;
+	pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
+	pkt_inject(pkt);
+	return 1;
 }
 
 static int parse_request(struct _pkt *pkt, struct ro_vec *v)
 {
-	const struct tcpstream_dcb *dcb;
+	const struct tcpstream_dcb *stream;
 	struct smtp_flow *f;
-	struct smtp_request r;
+	struct smtp_request_dcb r;
 	const uint8_t *ptr, *end;
 
-	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = dcb->s->flow;
+	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = stream->s->flow;
 
 	if ( v->v_len < 4 )
 		return 0;
@@ -161,17 +202,32 @@ static int parse_request(struct _pkt *pkt, struct ro_vec *v)
 	r.str.v_len = end - ptr;
 	r.str.v_ptr = (r.str.v_len) ? ptr : NULL;
 
-	dispatch_req(pkt, &r);
+	return dispatch_req(pkt, &r, v);
+}
+
+static int smtp_content(struct _pkt *pkt, struct ro_vec *v)
+{
+	struct smtp_cont_dcb *dcb;
+
+	dcb = (struct smtp_cont_dcb *)decode_layer0(pkt, &p_smtp_cont);
+	if ( NULL == dcb )
+		return 0;
+
+	pkt->pkt_caplen = pkt->pkt_len = v->v_len;
+	pkt->pkt_base = v->v_ptr;
+	pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
+	pkt_inject(pkt);
+
 	return 1;
 }
 
 static int do_request(struct _pkt *pkt, struct ro_vec *v)
 {
-	const struct tcpstream_dcb *dcb;
+	const struct tcpstream_dcb *stream;
 	struct smtp_flow *f;
 
-	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = dcb->s->flow;
+	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = stream->s->flow;
 
 	switch(f->state) {
 	case SMTP_STATE_CMD:
@@ -185,6 +241,8 @@ static int do_request(struct _pkt *pkt, struct ro_vec *v)
 	case SMTP_STATE_DATA:
 		if ( v->v_len == 1 && v->v_ptr[0] == '.' )
 			f->state = SMTP_STATE_RESP;
+		else if ( !smtp_content(pkt, v) )
+			return 0;
 		break;
 	default:
 		return 0;
@@ -195,19 +253,19 @@ static int do_request(struct _pkt *pkt, struct ro_vec *v)
 
 static int smtp_line(struct _pkt *pkt, const uint8_t *ptr, size_t len)
 {
-	const struct tcpstream_dcb *dcb;
+	const struct tcpstream_dcb *stream;
 	struct smtp_flow *f;
 	struct ro_vec vec;
 
-	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = dcb->s->flow;
+	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = stream->s->flow;
 
 	assert(f->state < SMTP_STATE_MAX);
 
 	vec.v_ptr = ptr;
 	vec.v_len = len;
 
-	switch(dcb->chan) {
+	switch(stream->chan) {
 	case TCP_CHAN_TO_CLIENT:
 		return do_response(pkt, &vec);
 	case TCP_CHAN_TO_SERVER:
@@ -220,21 +278,23 @@ static int smtp_line(struct _pkt *pkt, const uint8_t *ptr, size_t len)
 static ssize_t smtp_push(struct _pkt *pkt, struct ro_vec *vec, size_t numv,
 			 size_t bytes)
 {
-	const struct tcpstream_dcb *dcb;
+	const struct tcpstream_dcb *stream;
 	struct smtp_flow *f;
 	const uint8_t *buf;
 	ssize_t ret;
 	size_t sz;
 
-	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = dcb->s->flow;
+	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = stream->s->flow;
 
 	ret = stream_push_line(vec, numv, bytes, &sz);
 	if ( ret <= 0 )
 		return ret;
 	
 	if ( sz > vec[0].v_len ) {
-		buf = dcb->reasm(dcb->sbuf, sz);
+		buf = stream->reasm(stream->sbuf, sz);
+		if ( NULL == buf )
+			return 0;
 	}else{
 		buf = vec[0].v_ptr;
 	}
@@ -270,4 +330,8 @@ static void __attribute__((constructor)) smtp_ctor(void)
 {
 	sdecode_add(&sd_smtp);
 	sdecode_register(&sd_smtp, SNS_TCP, sys_be16(25));
+
+	proto_add(&_tcpstream_decoder, &p_smtp_req);
+	proto_add(&_tcpstream_decoder, &p_smtp_resp);
+	proto_add(&_tcpstream_decoder, &p_smtp_cont);
 }

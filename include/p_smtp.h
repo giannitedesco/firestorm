@@ -17,15 +17,21 @@ struct smtp_flow {
 
 
 #define SMTP_RESP_MULTI		(1<<0) /* multi-line response */
-struct smtp_response {
+struct smtp_response_dcb {
+	struct _dcb dcb;
 	uint16_t code;
 	uint16_t flags;
 	struct ro_vec msg;
 };
 
-struct smtp_request {
+struct smtp_request_dcb {
+	struct _dcb dcb;
 	struct ro_vec cmd;
 	struct ro_vec str;
+};
+
+struct smtp_cont_dcb {
+	struct _dcb dcb;
 };
 
 #endif /* _P_SMTP_HEADER_INCLUDED_ */

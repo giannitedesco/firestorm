@@ -16,7 +16,7 @@
 
 #include <ctype.h>
 
-#if 1
+#if 0
 #define dbg(flow, fmt, x...) \
 		do { \
 			struct smb_flow *__FLOW = flow; \

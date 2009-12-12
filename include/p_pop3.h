@@ -13,14 +13,20 @@ struct pop3_flow {
 };
 
 
-struct pop3_response {
+struct pop3_response_dcb {
+	struct _dcb dcb;
 	unsigned int ok;
 	struct ro_vec str;
 };
 
-struct pop3_request {
+struct pop3_request_dcb {
+	struct _dcb dcb;
 	struct ro_vec cmd;
 	struct ro_vec str;
+};
+
+struct pop3_cont_dcb {
+	struct _dcb dcb;
 };
 
 #endif /* _P_POP3_HEADER_INCLUDED_ */

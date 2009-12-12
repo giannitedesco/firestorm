@@ -49,7 +49,6 @@ struct http_response_dcb {
 
 struct http_cont_dcb {
 	struct _dcb dcb;
-	struct ro_vec vec;
 };
 
 struct http_fside {
