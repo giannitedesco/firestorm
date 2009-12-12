@@ -5,9 +5,11 @@
 */
 
 #include <firestorm.h>
-#include <pkt/tcp.h>
-#include <pkt/smtp.h>
+#include <f_packet.h>
+#include <f_decode.h>
 #include <f_stream.h>
+#include <p_tcp.h>
+#include <p_smtp.h>
 
 #include <limits.h>
 #include <ctype.h>
@@ -47,9 +49,14 @@ static int parse_response(struct smtp_response *r, struct ro_vec *v)
 	return 1;
 }
 
-static int do_response(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
+static int do_response(struct _pkt *pkt, struct ro_vec *v)
 {
+	const struct tcpstream_dcb *dcb;
+	struct smtp_flow *f;
 	struct smtp_response r;
+
+	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = dcb->s->flow;
 
 	switch(f->state) {
 	case SMTP_STATE_CMD:
@@ -80,7 +87,7 @@ static int do_response(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
 
 struct smtp_cmd {
 	struct ro_vec cmd;
-	void(*fn)(struct _stream *s, struct smtp_request *r);
+	void(*fn)(struct _pkt *pkt, struct smtp_request *r);
 };
 
 static const struct smtp_cmd cmds[] = {
@@ -99,7 +106,7 @@ static const struct smtp_cmd cmds[] = {
 	{ .cmd = {.v_ptr = (uint8_t *)"DEBUG", .v_len = 5}, .fn = NULL },
 };
 
-static void dispatch_req(struct _stream *s, struct smtp_request *r)
+static void dispatch_req(struct _pkt *pkt, struct smtp_request *r)
 {
 	const struct smtp_cmd *c;
 	unsigned int n;
@@ -117,7 +124,7 @@ static void dispatch_req(struct _stream *s, struct smtp_request *r)
 			n = n - (i + 1);
 		}else{
 			if ( c[i].fn )
-				c[i].fn(s, r);
+				c[i].fn(pkt, r);
 			break;
 		}
 	}
@@ -127,10 +134,15 @@ static void dispatch_req(struct _stream *s, struct smtp_request *r)
 		r->str.v_len, r->str.v_ptr);
 }
 
-static int parse_request(struct _stream *s, struct ro_vec *v)
+static int parse_request(struct _pkt *pkt, struct ro_vec *v)
 {
+	const struct tcpstream_dcb *dcb;
+	struct smtp_flow *f;
 	struct smtp_request r;
 	const uint8_t *ptr, *end;
+
+	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = dcb->s->flow;
 
 	if ( v->v_len < 4 )
 		return 0;
@@ -149,15 +161,21 @@ static int parse_request(struct _stream *s, struct ro_vec *v)
 	r.str.v_len = end - ptr;
 	r.str.v_ptr = (r.str.v_len) ? ptr : NULL;
 
-	dispatch_req(s, &r);
+	dispatch_req(pkt, &r);
 	return 1;
 }
 
-static int do_request(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
+static int do_request(struct _pkt *pkt, struct ro_vec *v)
 {
+	const struct tcpstream_dcb *dcb;
+	struct smtp_flow *f;
+
+	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = dcb->s->flow;
+
 	switch(f->state) {
 	case SMTP_STATE_CMD:
-		if ( !parse_request(s, v) ) {
+		if ( !parse_request(pkt, v) ) {
 			mesg(M_ERR, "smtp: parse error: %.*s",
 				v->v_len, v->v_ptr);
 			return 1;
@@ -175,86 +193,81 @@ static int do_request(struct _stream *s, struct smtp_flow *f, struct ro_vec *v)
 	return 1;
 }
 
-static int smtp_line(struct _stream *s, struct smtp_flow *f,
-			schan_t chan, const uint8_t *ptr, size_t len)
+static int smtp_line(struct _pkt *pkt, const uint8_t *ptr, size_t len)
 {
+	const struct tcpstream_dcb *dcb;
+	struct smtp_flow *f;
 	struct ro_vec vec;
+
+	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = dcb->s->flow;
 
 	assert(f->state < SMTP_STATE_MAX);
 
 	vec.v_ptr = ptr;
 	vec.v_len = len;
 
-	switch(chan) {
+	switch(dcb->chan) {
 	case TCP_CHAN_TO_CLIENT:
-		return do_response(s, f, &vec);
+		return do_response(pkt, &vec);
 	case TCP_CHAN_TO_SERVER:
-		return do_request(s, f, &vec);
+		return do_request(pkt, &vec);
 	}
 
 	return 1;
 }
 
-static ssize_t smtp_push(struct _stream *s, schan_t chan,
-		struct ro_vec *vec, size_t numv, size_t bytes)
+static ssize_t smtp_push(struct _pkt *pkt, struct ro_vec *vec, size_t numv,
+			 size_t bytes)
 {
+	const struct tcpstream_dcb *dcb;
 	struct smtp_flow *f;
 	const uint8_t *buf;
 	ssize_t ret;
 	size_t sz;
-	int do_free;
 
-	f = s->s_flow;
+	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = dcb->s->flow;
 
 	ret = stream_push_line(vec, numv, bytes, &sz);
 	if ( ret <= 0 )
 		return ret;
 	
 	if ( sz > vec[0].v_len ) {
-		buf = malloc(sz);
-		s->s_reasm(s, (uint8_t *)buf, sz);
-		do_free = 1;
+		buf = dcb->reasm(dcb->sbuf, sz);
 	}else{
 		buf = vec[0].v_ptr;
-		do_free = 0;
 	}
 
-	if ( !smtp_line(s, f, chan, buf, sz) )
+	if ( !smtp_line(pkt, buf, sz) )
 		ret = 0;
-
-	if ( do_free )
-		free((void *)buf);
 
 	return ret;
 }
 
-static int flow_init(struct _stream *s)
+static int flow_init(void *priv)
 {
-	struct smtp_flow *f = s->s_flow;
+	struct tcp_session *s = priv;
+	struct smtp_flow *f = s->flow;
 	f->state = SMTP_STATE_INIT;
 	return 1;
 }
 
-static void flow_fini(struct _stream *s)
+static void flow_fini(void *priv)
 {
 }
-
-static struct _sproto sp_smtp = {
-	.sp_label = "smtp",
-	.sp_flow_init = flow_init,
-	.sp_flow_fini = flow_fini,
-	.sp_flow_sz = sizeof(struct smtp_flow),
-};
 
 static struct _sdecode sd_smtp = {
 	.sd_label = "smtp",
 	.sd_push = smtp_push,
+	.sd_flow_init = flow_init,
+	.sd_flow_fini = flow_fini,
+	.sd_flow_sz = sizeof(struct smtp_flow),
 	.sd_max_msg = 1024,
 };
 
 static void __attribute__((constructor)) smtp_ctor(void)
 {
-	sproto_add(&sp_smtp);
-	sdecode_add(&sp_smtp, &sd_smtp);
+	sdecode_add(&sd_smtp);
 	sdecode_register(&sd_smtp, SNS_TCP, sys_be16(25));
 }

@@ -6,17 +6,17 @@
 
 #include <stdio.h>
 #include <firestorm.h>
+#include <f_packet.h>
 #include <f_decode.h>
 #include <f_stream.h>
 #include <p_ipv4.h>
-#include <pkt/tcp.h>
+#include <p_tcp.h>
 #include <pkt/smb.h>
-#include "tcpip.h"
+#include <p_smb.h>
 
-#include <limits.h>
 #include <ctype.h>
 
-#if 0
+#if 1
 #define dbg(flow, fmt, x...) \
 		do { \
 			struct smb_flow *__FLOW = flow; \
@@ -72,26 +72,27 @@ static void hex_dumpf(FILE *f, const uint8_t *tmp, size_t len, size_t llen) {}
 struct smb_cmd {
 	uint8_t id;
 	const char *label;
-	void (*req)(struct _stream *ss, const struct smb_pkt *smb,
+	void (*req)(struct _pkt *pkt, const struct smb_pkt *smb,
 			const uint8_t *buf, size_t len);
-	void (*resp)(struct _stream *ss, const struct smb_pkt *smb,
+	void (*resp)(struct _pkt *pkt, const struct smb_pkt *smb,
 			const uint8_t *buf, size_t len);
 };
 
-static void negproto_req(struct _stream *ss, const struct smb_pkt *smb,
+static void negproto_req(struct _pkt *pkt, const struct smb_pkt *smb,
 			const uint8_t *buf, size_t len)
 {
-	struct smb_flow *f = ss->s_flow;
+	const struct tcpstream_dcb *dcb;
+	struct smb_flow *f;
 	const uint8_t *end = buf + len;
 	size_t sz;
 
-	buf += 4;
+	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = dcb->s->flow;
 
-	while( buf < end ) {
+	for(buf += 4; buf < end; buf += sz + 1) {
 		buf += 1;
 		sz = strnlen((char *)buf, (end - buf));
 		dbg(f, " negproto: %.*s\n", sz, buf);
-		buf += sz + 1;
 	}
 }
 
@@ -259,24 +260,29 @@ static int state_update(struct smb_flow *f, schan_t chan,
 	return 0;
 }
 
-static int smb_pkt(struct _stream *ss, struct smb_flow *f, schan_t chan,
-			const uint8_t *buf, size_t len)
+static int smb_pkt(struct _pkt *pkt, const uint8_t *buf, size_t len)
 {
+	const struct tcpstream_dcb *dcb;
+	struct smb_flow *f;
 	const struct smb_pkt *smb;
 	const struct smb_cmd *cmd;
 
 	smb = (const struct smb_pkt *)buf;
+	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = dcb->s->flow;
 
 	if ( len < sizeof(*smb) ||
 		memcmp(smb->smb_magic, "\xffSMB", 4) ) {
-		mesg(M_ERR, "smb: bad packet");
+		mesg(M_ERR, "smb: malformed packet");
+		dbg(f, "malformed packet\n");
+		hex_dumpf(f->file, buf, len, 16);
 		return 1;
 	}
 
 	buf += sizeof(*smb);
 	len -= sizeof(*smb);
 
-	if ( !state_update(f, chan, smb, buf, len) )
+	if ( !state_update(f, dcb->chan, smb, buf, len) )
 		return 0;
 
 	cmd = find_cmd(smb->smb_cmd);
@@ -288,7 +294,7 @@ static int smb_pkt(struct _stream *ss, struct smb_flow *f, schan_t chan,
 	dbg(f, "smb_pkt: %s : %s\n", cmd->label,
 		(smb->smb_flags & SMB_FLAGS_RESPONSE) ? "Response" : "Request");
 	dbg(f, " TCP_CHAN_%s\n",
-		(chan == TCP_CHAN_TO_CLIENT) ? "TO_CLIENT" : "TO_SERVER");
+		(dcb->chan == TCP_CHAN_TO_CLIENT) ? "TO_CLIENT" : "TO_SERVER");
 	dbg(f, " PID/MID: %.4x / %.4x\n",
 		sys_be16(smb->smb_pid), sys_be16(smb->smb_mid));
 	dbg(f, " TID/UID: %.4x / %.4x\n",
@@ -296,10 +302,10 @@ static int smb_pkt(struct _stream *ss, struct smb_flow *f, schan_t chan,
 
 	if ( (smb->smb_flags & SMB_FLAGS_RESPONSE) ) {
 		if ( cmd->resp )
-			cmd->resp(ss, smb, buf, len);
+			cmd->resp(pkt, smb, buf, len);
 	}else{
 		if ( cmd->req )
-			cmd->req(ss, smb, buf, len);
+			cmd->req(pkt, smb, buf, len);
 	}
 	//hex_dumpf(f->file, buf, len, 16);
 	dbg(f, "\n");
@@ -336,16 +342,17 @@ static ssize_t smb_get_len(struct ro_vec *vec, size_t numv, size_t bytes)
 	return 0;
 }
 
-static ssize_t smb_push(struct _stream *s, schan_t chan,
-		struct ro_vec *vec, size_t numv, size_t bytes)
+static ssize_t smb_push(struct _pkt *pkt, struct ro_vec *vec, size_t numv,
+			size_t bytes)
 {
+	const struct tcpstream_dcb *dcb;
 	struct smb_flow *f;
 	const uint8_t *buf;
 	ssize_t ret;
 	size_t sz;
-	int do_free;
 
-	f = s->s_flow;
+	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = dcb->s->flow;
 
 	ret = smb_get_len(vec, numv, bytes);
 	if ( ret <= 0 )
@@ -353,19 +360,13 @@ static ssize_t smb_push(struct _stream *s, schan_t chan,
 	sz = (size_t)ret;
 	
 	if ( sz > vec[0].v_len ) {
-		buf = malloc(sz);
-		s->s_reasm(s, (uint8_t *)buf, sz);
-		do_free = 1;
+		buf = dcb->reasm(dcb->sbuf, sz);
 	}else{
 		buf = vec[0].v_ptr;
-		do_free = 0;
 	}
 
-	if ( !smb_pkt(s, f, chan, buf + 4, sz - 4) )
+	if ( !smb_pkt(pkt, buf + 4, sz - 4) )
 		ret = 0;
-
-	if ( do_free )
-		free((void *)buf);
 
 	return ret;
 }
@@ -383,12 +384,16 @@ static void name_decode(const uint8_t *in, uint8_t *out, size_t nchar)
 	*out = '\0';
 }
 
-static int nbss_setup(struct _stream *s, struct smb_flow *f, schan_t chan,
-			const uint8_t *buf, size_t len)
+static int nbss_setup(struct _pkt *pkt, const uint8_t *buf, size_t len)
 {
 	uint8_t called[17], caller[17];
+	const struct tcpstream_dcb *dcb;
+	struct smb_flow *f;
 
-	if ( len < 68 || chan != TCP_CHAN_TO_SERVER ) {
+	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = dcb->s->flow;
+
+	if ( len < 68 || dcb->chan != TCP_CHAN_TO_SERVER ) {
 		mesg(M_ERR, "nbss: setup: invalid packet");
 		return 1;
 	}
@@ -400,15 +405,21 @@ static int nbss_setup(struct _stream *s, struct smb_flow *f, schan_t chan,
 	return 1;
 }
 
-static int nbss_pkt(struct _stream *s, struct smb_flow *f, schan_t chan,
+static int nbss_pkt(struct _pkt *pkt,
 			const struct nbss_pkt *nb,
 			const uint8_t *buf, size_t len)
 {
+	const struct tcpstream_dcb *dcb;
+	struct smb_flow *f;
+
+	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = dcb->s->flow;
+
 	switch(nb->nb_type) {
 	case 0x00:
-		return smb_pkt(s, f, chan, buf, len);
+		return smb_pkt(pkt, buf, len);
 	case 0x81:
-		return nbss_setup(s, f, chan, buf, len);
+		return nbss_setup(pkt, buf, len);
 	case 0x82:
 		dbg(f, "nbss: session setup OK\n");
 		break;
@@ -465,17 +476,18 @@ static ssize_t nbt_get_len(struct ro_vec *vec, size_t numv, size_t bytes)
 	return 0;
 }
 
-static ssize_t nbt_push(struct _stream *s, schan_t chan,
-		struct ro_vec *vec, size_t numv, size_t bytes)
+static ssize_t nbt_push(struct _pkt *pkt, struct ro_vec *vec, size_t numv,
+			size_t bytes)
 {
+	const struct tcpstream_dcb *dcb;
 	const struct nbss_pkt *nb;
 	struct smb_flow *f;
 	const uint8_t *buf;
 	ssize_t ret;
 	size_t sz;
-	int do_free;
 
-	f = s->s_flow;
+	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = dcb->s->flow;
 
 	ret = nbt_get_len(vec, numv, bytes);
 	if ( ret <= 0 )
@@ -483,76 +495,68 @@ static ssize_t nbt_push(struct _stream *s, schan_t chan,
 	sz = (size_t)ret;
 	
 	if ( sz > vec[0].v_len ) {
-		buf = malloc(sz);
-		s->s_reasm(s, (uint8_t *)buf, sz);
-		do_free = 1;
+		buf = dcb->reasm(dcb->sbuf, sz);
 	}else{
 		buf = vec[0].v_ptr;
-		do_free = 0;
 	}
 
 	nb = (const struct nbss_pkt *)buf;
-	if ( !nbss_pkt(s, f, chan, nb, buf + sizeof(*nb), sz - sizeof(*nb)) )
+	if ( !nbss_pkt(pkt, nb, buf + sizeof(*nb), sz - sizeof(*nb)) )
 		ret = 0;
-
-	if ( do_free )
-		free((void *)buf);
 
 	return ret;
 }
 
 static unsigned int snum;
-static int flow_init(struct _stream *ss)
+static int flow_init(void *priv)
 {
-	struct tcp_stream *s = (struct tcp_stream *)ss;
-	struct smb_flow *f = s->stream.s_flow;
+	struct tcp_session *s = priv;
+	struct smb_flow *f = s->flow;
 	char sip[16], cip[16];
 	char fn[32];
 
 	snprintf(fn, sizeof(fn), "./smb/sess%u.txt", snum++);
 	f->file = dbg_fopen(fn, "w");
-	iptostr(sip, s->s->s_addr);
-	iptostr(cip, s->s->c_addr);
+	iptostr(sip, s->s_addr);
+	iptostr(cip, s->c_addr);
 	dbg(f, "%s:%u -> %s:%u\n",
-		sip, sys_be16(s->s->s_port),
-		cip, sys_be16(s->s->c_port));
+		sip, sys_be16(s->s_port),
+		cip, sys_be16(s->c_port));
 
 	f->cur_trans = 0;
 	f->trans[f->cur_trans].flags = 0;
 	return 1;
 }
 
-static void flow_fini(struct _stream *ss)
+static void flow_fini(void *priv)
 {
-	struct tcp_stream *s = (struct tcp_stream *)ss;
-	struct smb_flow *f = s->stream.s_flow;
+	struct tcp_session *s = priv;
+	struct smb_flow *f = s->flow;
 	dbg_fclose(f->file);
 }
-
-static struct _sproto sp_smb = {
-	.sp_label = "smb",
-	.sp_flow_sz = sizeof(struct smb_flow),
-	.sp_flow_init = flow_init,
-	.sp_flow_fini = flow_fini,
-};
 
 static struct _sdecode sd_nbt = {
 	.sd_label = "nbt",
 	.sd_push = nbt_push,
+	.sd_flow_sz = sizeof(struct smb_flow),
+	.sd_flow_init = flow_init,
+	.sd_flow_fini = flow_fini,
 	.sd_max_msg = (1 << 17),
 };
 
 static struct _sdecode sd_smb = {
 	.sd_label = "smb",
 	.sd_push = smb_push,
+	.sd_flow_sz = sizeof(struct smb_flow),
+	.sd_flow_init = flow_init,
+	.sd_flow_fini = flow_fini,
 	.sd_max_msg = (1 << 24),
 };
 
 static void __attribute__((constructor)) smb_ctor(void)
 {
-	sproto_add(&sp_smb);
-	sdecode_add(&sp_smb, &sd_smb);
-	sdecode_add(&sp_smb, &sd_nbt);
+	sdecode_add(&sd_nbt);
 	sdecode_register(&sd_nbt, SNS_TCP, sys_be16(139));
+	sdecode_add(&sd_smb);
 	sdecode_register(&sd_smb, SNS_TCP, sys_be16(445));
 }

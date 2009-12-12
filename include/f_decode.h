@@ -71,6 +71,8 @@ void proto_add(struct _decoder *d, struct _proto *p) _nonull(2);
 void decode_next(pkt_t pkt, proto_ns_t ns, proto_id_t id);
 size_t decode_dcb_len(struct _dcb *dcb);
 struct _dcb *decode_layer(pkt_t pkt, struct _proto *p);
-struct _dcb *decode_layer2(pkt_t pkt, struct _proto *p, size_t sz);
+struct _dcb *decode_layer0(pkt_t pkt, struct _proto *p);
+struct _dcb *decode_layerv(pkt_t pkt, struct _proto *p, size_t sz);
+struct _dcb *decode_layerv0(pkt_t pkt, struct _proto *p, size_t sz);
 
 #endif /* _FIRESTORM_DECODE_HEADER_INCLUDED_ */

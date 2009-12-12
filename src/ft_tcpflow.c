@@ -11,6 +11,8 @@
 #include <firestorm.h>
 #include <f_packet.h>
 #include <f_decode.h>
+#include <f_stream.h>
+#include <p_tcp.h>
 #include <pkt/ip.h>
 #include <pkt/tcp.h>
 #include <pkt/icmp.h>
@@ -144,12 +146,7 @@ static void detach_protocol(struct tcp_session *s)
 	if ( NULL == s->proto )
 		return;
 	if ( s->flow ) {
-		struct tcp_stream ss;
-		ss.stream.s_reasm = NULL;
-		ss.stream.s_flow = s->flow;
-		ss.s = s;
-		ss.sbuf = NULL;
-		s->proto->sd_proto->sp_flow_fini(&ss.stream);
+		s->proto->sd_flow_fini(s);
 		objcache_free2(flow_cache, s->flow);
 		s->flow = NULL;
 	}
@@ -165,9 +162,6 @@ static void abort_reasm(struct tcp_session *s)
 
 static void attach_protocol(struct tcp_session *s)
 {
-	void *flow = NULL;
-	struct tcp_stream ss;
-
 	if ( !reassemble )
 		return;
 
@@ -176,17 +170,11 @@ static void attach_protocol(struct tcp_session *s)
 		goto fuckit;
 
 	if ( flow_cache )
-		flow = _tcp_alloc(s, flow_cache, 0);
+		s->flow = _tcp_alloc(s, flow_cache, 0);
 
-	ss.stream.s_reasm = NULL;
-	ss.stream.s_flow = flow;
-	ss.s = s;
-	ss.sbuf = NULL;
-
-	if ( flow && !s->proto->sd_proto->sp_flow_init(&ss.stream) )
+	if ( s->flow && !s->proto->sd_flow_init(s) )
 		goto fuckit;
 
-	s->flow = flow;
 	return;
 
 fuckit:

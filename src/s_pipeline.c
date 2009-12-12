@@ -29,9 +29,10 @@ static void analyze_packet(struct _pkt *pkt)
 {
 	struct _dcb *cur;
 
-	dmesg(M_DEBUG, "analyze packet:");
 	for(cur = pkt->pkt_dcb;
 		cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
+		if ( NULL == cur->dcb_proto )
+			continue;
 		dmesg(M_DEBUG, " o %s layer", cur->dcb_proto->p_label);
 	}
 }
@@ -41,6 +42,8 @@ static void flowtrack_packet(struct _pkt *pkt)
 	struct _dcb *cur;
 
 	for(cur = pkt->pkt_dcb; cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
+		if ( NULL == cur->dcb_proto )
+			continue;
 		if ( cur->dcb_proto->p_flowtrack ) {
 			dmesg(M_DEBUG, "FLOW TRACK: %s",
 				cur->dcb_proto->p_label);

@@ -13,6 +13,7 @@
 #include <pkt/tcp.h>
 #include <pkt/udp.h>
 #include <p_ipv4.h>
+#include <p_tcp.h>
 
 #include "tcpip.h"
 
@@ -108,6 +109,10 @@ struct _decoder _ipv4_decoder = {
 	.d_flow_dtor = flow_track_dtor,
 };
 
+struct _decoder _tcpstream_decoder = {
+	.d_label = "tcpstream",
+};
+
 static void __attribute__((constructor)) _ctor(void)
 {
 	decoder_add(&_ipv4_decoder);
@@ -123,6 +128,8 @@ static void __attribute__((constructor)) _ctor(void)
 	proto_add(&_ipv4_decoder, &p_tcp);
 	proto_add(&_ipv4_decoder, &p_udp);
 	proto_add(&_ipv4_decoder, &p_esp);
+
+	decoder_add(&_tcpstream_decoder);
 }
 
 void iptostr(ipstr_t str, uint32_t ip)

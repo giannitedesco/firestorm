@@ -1,5 +1,5 @@
-#ifndef _PKT_SMTP_HEADER_INCLUDED_
-#define _PKT_SMTP_HEADER_INCLUDED_
+#ifndef _P_SMTP_HEADER_INCLUDED_
+#define _P_SMTP_HEADER_INCLUDED_
 
 #define SMTP_STATE_INIT		0
 #define SMTP_STATE_CMD		1
@@ -28,4 +28,4 @@ struct smtp_request {
 	struct ro_vec str;
 };
 
-#endif /* _PKT_SMTP_HEADER_INCLUDED_ */
+#endif /* _P_SMTP_HEADER_INCLUDED_ */

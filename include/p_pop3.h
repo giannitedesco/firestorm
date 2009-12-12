@@ -1,5 +1,5 @@
-#ifndef _PKT_POP3_HEADER_INCLUDED_
-#define _PKT_POP3_HEADER_INCLUDED_
+#ifndef _P_POP3_HEADER_INCLUDED_
+#define _P_POP3_HEADER_INCLUDED_
 
 #define POP3_STATE_INIT		0
 #define POP3_STATE_CMD		1
@@ -23,4 +23,4 @@ struct pop3_request {
 	struct ro_vec str;
 };
 
-#endif /* _PKT_POP3_HEADER_INCLUDED_ */
+#endif /* _P_POP3_HEADER_INCLUDED_ */

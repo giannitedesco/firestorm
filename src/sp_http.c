@@ -5,8 +5,10 @@
 */
 
 #include <firestorm.h>
-#include <pkt/tcp.h>
-#include <pkt/http.h>
+#include <f_packet.h>
+#include <f_decode.h>
+#include <p_tcp.h>
+#include <p_http.h>
 #include <f_stream.h>
 
 #include <limits.h>
@@ -30,10 +32,25 @@ static struct {
 	[HTTP_VER_1_1] {1, 1},
 };
 
+static struct _proto p_http_req = {
+	.p_label = "http_request",
+	.p_dcb_sz = sizeof(struct http_request_dcb),
+};
+
+static struct _proto p_http_resp = {
+	.p_label = "http_response",
+	.p_dcb_sz = sizeof(struct http_response_dcb),
+};
+
+static struct _proto p_http_cont = {
+	.p_label = "http_cont",
+	.p_dcb_sz = sizeof(struct http_cont_dcb),
+};
+
 /* HTTP Decode Control Block */
-struct http_dcb {
+struct http_hcb {
 	const char *label;
-	void (*fn)(struct http_dcb *, struct ro_vec *);
+	void (*fn)(struct http_hcb *, struct ro_vec *);
 	union {
 		struct ro_vec *vec;
 		uint16_t *u16;
@@ -84,7 +101,7 @@ static int http_proto_version(struct ro_vec *str)
 	return ret;
 }
 
-static void htype_string(struct http_dcb *h, struct ro_vec *v)
+static void htype_string(struct http_hcb *h, struct ro_vec *v)
 {
 	if ( !h->u.vec )
 		return;
@@ -93,12 +110,12 @@ static void htype_string(struct http_dcb *h, struct ro_vec *v)
 	h->u.vec->v_len = v->v_len;
 }
 
-static void htype_present(struct http_dcb *h, struct ro_vec *v)
+static void htype_present(struct http_hcb *h, struct ro_vec *v)
 {
 	*h->u.val = 1;
 }
 
-static void htype_int(struct http_dcb *h, struct ro_vec *v)
+static void htype_int(struct http_hcb *h, struct ro_vec *v)
 {
 	unsigned int val;
 	size_t len;
@@ -112,7 +129,7 @@ static void htype_int(struct http_dcb *h, struct ro_vec *v)
 }
 
 /* Same as int but ensure input is only 3 digits */
-static void htype_code(struct http_dcb *h, struct ro_vec *v)
+static void htype_code(struct http_hcb *h, struct ro_vec *v)
 {
 	unsigned int val;
 	size_t len;
@@ -125,13 +142,13 @@ static void htype_code(struct http_dcb *h, struct ro_vec *v)
 }
 
 /* Check if this header is one we want to store */
-static inline void dispatch_hdr(struct http_dcb *dcb,
+static inline void dispatch_hdr(struct http_hcb *dcb,
 				size_t num_dcb,
 				struct ro_vec *k,
 				struct ro_vec *v)
 {
 	unsigned int n;
-	struct http_dcb *d;
+	struct http_hcb *d;
 
 	for(n = num_dcb, d = dcb; n; ) {
 		unsigned int i;
@@ -152,7 +169,7 @@ static inline void dispatch_hdr(struct http_dcb *dcb,
 }
 
 /* Actually parse an HTTP request */
-static size_t http_decode_buf(struct http_dcb *d, size_t num_dcb,
+static size_t http_decode_buf(struct http_hcb *d, size_t num_dcb,
 				const uint8_t *p, const uint8_t *end)
 {
 	const uint8_t *cur;
@@ -239,31 +256,33 @@ static size_t http_decode_buf(struct http_dcb *d, size_t num_dcb,
 }
 
 /* Parse an HTTP request header and fill in the http response structure */
-static size_t http_request(struct http_request *r,
-				const uint8_t *ptr, size_t len)
+static size_t http_req(struct http_dcb *dcb, const uint8_t *ptr, size_t len)
 {
+	struct http_request_dcb *r = (struct http_request_dcb *)dcb;
 	const uint8_t *end = ptr + len;
 	int clen = -1;
 	size_t hlen;
-	struct ro_vec pv = {0,}, enc = {0,};
+	struct ro_vec pv = {0,};
 	int prox = 0;
 	size_t i;
 	int state, do_host;
-	struct http_dcb dcb[] = {
+	struct http_hcb hcb[] = {
 		{"method", htype_string, {.vec = &r->method}},
 		{"uri", htype_string, {.vec = &r->uri}},
 		{"protocol", htype_string, {.vec = &pv}},
 		{"Host", htype_string , {.vec = &r->host}},
-		{"User-Agent", htype_string , {.vec = &r->agent}},
+		{"Content-Type", htype_string,
+					{.vec = &r->http.content_type}},
 		{"Content-Length", htype_int, {.val = &clen}},
-		{"Content-Encoding", htype_string, {.vec = &enc}},
 		{"Proxy-Connection", htype_present, {.val = &prox}},
+		{"Content-Encoding", htype_string,
+					{.vec = &r->http.content_enc}},
+		{"Transfer-Encoding", htype_string,
+					{.vec = &r->http.transfer_enc}},
 	};
 
-	memset(r, 0, sizeof(*r));
-
 	/* Do the decode */
-	hlen = http_decode_buf(dcb, sizeof(dcb)/sizeof(*dcb), ptr, end);
+	hlen = http_decode_buf(hcb, sizeof(hcb)/sizeof(*hcb), ptr, end);
 	if ( !hlen )
 		return 0;
 
@@ -272,13 +291,8 @@ static size_t http_request(struct http_request *r,
 	r->proto_vers = http_proto_version(&pv);
 
 	/* Update flow state */
-	if ( clen > 0 ) {
-		r->content.v_len = clen;
-		if ( enc.v_len ) {
-			mesg(M_DEBUG, "request: %u bytes '%.*s' encoded",
-				clen, enc.v_len, (char *)enc.v_ptr);
-		}
-	}
+	if ( clen > 0 )
+		r->http.content.v_len = clen;
 
 	/* Strip out Request-URI to just abs_path, Filling in host
 	 * information if there was no host header
@@ -379,6 +393,37 @@ static int check_req(struct ro_vec *vec, size_t vb, size_t b,
 	return 1;
 }
 
+static size_t http_resp(struct http_dcb *dcb, const uint8_t *ptr, size_t len)
+{
+	struct http_response_dcb *r = (struct http_response_dcb *)dcb;
+	const uint8_t *end = ptr + len;
+	int clen = -1;
+	size_t hlen;
+	struct ro_vec pv = {0,};
+	struct http_hcb hcb[] = {
+		{"protocol", htype_string, {.vec = &pv}},
+		{"code", htype_code, {.u16 = &r->code}},
+		{"msg", htype_string, {.vec = NULL}},
+		{"Content-Type", htype_string, {.vec = &r->http.content_type}},
+		{"Content-Length", htype_int, {.val = &clen}},
+		{"Content-Encoding", htype_string,
+					{.vec = &r->http.content_enc}},
+		{"Transfer-Encoding", htype_string,
+					{.vec = &r->http.transfer_enc}},
+	};
+
+	hlen = http_decode_buf(hcb, sizeof(hcb)/sizeof(*hcb), ptr, end);
+	if ( !hlen )
+		return 0;
+	
+	if ( clen > 0 )
+		r->http.content.v_len = clen;
+
+	r->proto_vers = http_proto_version(&pv);
+
+	return hlen;
+}
+
 static ssize_t parse_req(struct http_flow *f, struct http_fside *fs,
 		struct ro_vec *vec, size_t numv, size_t bytes)
 {
@@ -401,140 +446,29 @@ static ssize_t parse_req(struct http_flow *f, struct http_fside *fs,
 	return 0;
 }
 
-static void msg_http_req(struct http_request *r)
-{
-	dmesg(M_DEBUG, "%.*s %.*s (host: %.*s:%u)",
-			r->method.v_len, r->method.v_ptr,
-			r->uri.v_len, r->uri.v_ptr,
-			r->host.v_len, r->host.v_ptr,
-			r->port);
-	if ( r->agent.v_len )
-		dmesg(M_DEBUG, " - %.*s", r->agent.v_len, r->agent.v_ptr);
-	if ( r->content.v_ptr )
-		dhex_dump(r->content.v_ptr, r->content.v_len, 16);
-}
-
-static ssize_t push_req(struct _stream *s, struct http_flow *f,
-			struct http_fside *fs,
+static ssize_t push_hdr(struct _pkt *pkt, struct http_fside *fs,
 			struct ro_vec *vec, size_t numv, size_t bytes)
 {
-	struct http_request r;
+	const struct tcpstream_dcb *s;
+	struct http_flow *f;
+	struct http_dcb *dcb;
 	const uint8_t *buf;
 	size_t len, hsz;
-	int do_free = 0;
 	ssize_t ret;
 
-	/* Apparently a new feature in GCC... */
-	ret = parse_req(f, fs, vec, numv, bytes);
-	if ( ret <= 0 )
-		return ret;
-
-	len = (size_t)ret;
-
-	if ( vec[0].v_len < len ) {
-		buf = malloc(len);
-		if ( NULL == buf )
-			return 0;
-		ret = s->s_reasm(s, (uint8_t *)buf, len);
-		do_free = 1;
-	}else{
-		buf = vec[0].v_ptr;
-	}
-
-	hsz = http_request(&r, buf, len);
-
-	if ( r.content.v_len && len == hsz ) {
-		if ( len + r.content.v_len <= bytes ) {
-			uint8_t *buf2;
-
-			len = hsz + r.content.v_len;
-			if ( vec[0].v_len < len ) {
-				buf2 = malloc(len);
-				if ( NULL == buf2 ) {
-					ret = 0;
-					goto end;
-				}
-				ret = s->s_reasm(s, buf2, len);
-				hsz = http_request(&r, buf2, len);
-				r.content.v_ptr = buf2 + hsz;
-				if ( do_free ) {
-					free((void *)buf);
-				}
-				do_free = 1;
-				buf = buf2;
-			}
-		}else{
-			if ( r.content.v_len > HTTP_MAX_RESP_DATA ) {
-				fs->state = HTTP_STATE_CONTENT;
-				fs->content_len = r.content.v_len;
-			}else{
-				ret = 0;
-			}
-		}
-	}
-
-	if ( ret > 0 )
-		msg_http_req(&r);
-
-end:
-	if ( do_free )
-		free((void *)buf);
-
-	return ret;
-}
-
-static size_t http_response(struct http_response *r,
-				const uint8_t *ptr, size_t len)
-{
-	const uint8_t *end = ptr + len;
-	int clen = -1;
-	size_t hlen;
-	struct ro_vec pv = {0,}, enc = {0,};
-	struct http_dcb dcb[] = {
-		{"protocol", htype_string, {.vec = &pv}},
-		{"code", htype_code, {.u16 = &r->code}},
-		{"msg", htype_string, {.vec = NULL}},
-		{"Server", htype_string, {.vec = &r->server}},
-		{"Content-Type", htype_string, {.vec = &r->content_type}},
-		{"Content-Length", htype_int, {.val = &clen}},
-		{"Content-Encoding", htype_string, {.vec = &enc}},
+	static const struct {
+		struct _proto *proto;
+		size_t (*parse)(struct http_dcb *d, const uint8_t *p, size_t l);
+	}parser[] = {
+		[TCP_CHAN_TO_SERVER] = { .proto = &p_http_req,
+					 .parse = http_req},
+		[TCP_CHAN_TO_CLIENT] = { .proto = &p_http_resp,
+					 .parse = http_resp},
 	};
 
-	memset(r, 0, sizeof(*r));
+	s = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = s->s->flow;
 
-	hlen = http_decode_buf(dcb, sizeof(dcb)/sizeof(*dcb), ptr, end);
-	if ( !hlen )
-		return 0;
-	
-	if ( clen > 0 )
-		r->content.v_len = clen;
-
-	r->proto_vers = http_proto_version(&pv);
-
-	return hlen;
-}
-
-static void msg_http_resp(struct http_response *r)
-{
-	dmesg(M_DEBUG, "HTTP/%3u %.*s %u bytes %.*s", r->code,
-			r->server.v_len, r->server.v_ptr,
-			r->content.v_len,
-			r->content_type.v_len, r->content_type.v_ptr);
-	if ( r->content.v_ptr )
-		dhex_dump(r->content.v_ptr, r->content.v_len, 16);
-}
-
-static ssize_t push_resp(struct _stream *s, struct http_flow *f,
-			struct http_fside *fs,
-			struct ro_vec *vec, size_t numv, size_t bytes)
-{
-	struct http_response r;
-	const uint8_t *buf;
-	size_t len, hsz;
-	int do_free = 0;
-	ssize_t ret;
-
-	/* Apparently a new feature in GCC... */
 	ret = parse_req(f, fs, vec, numv, bytes);
 	if ( ret <= 0 )
 		return ret;
@@ -542,89 +476,93 @@ static ssize_t push_resp(struct _stream *s, struct http_flow *f,
 	len = (size_t)ret;
 
 	if ( vec[0].v_len < len ) {
-		buf = malloc(len);
+		buf = s->reasm(s->sbuf, len);
 		if ( NULL == buf )
 			return 0;
-		ret = s->s_reasm(s, (uint8_t *)buf, len);
-		do_free = 1;
 	}else{
 		buf = vec[0].v_ptr;
 	}
 
-	hsz = http_response(&r, buf, len);
+	dcb = (struct http_dcb *)decode_layer0(pkt, parser[s->chan].proto);
+	if ( NULL == dcb )
+		return 0;
+	hsz = parser[s->chan].parse(dcb, buf, len);
 
-	if ( r.content.v_len && len == hsz ) {
-		if ( len + r.content.v_len <= bytes ) {
-			uint8_t *buf2;
+	if ( dcb->content.v_len && len == hsz ) {
+		if ( len + dcb->content.v_len <= bytes ) {
+			const uint8_t *buf2;
 
-			len = hsz + r.content.v_len;
+			len = hsz + dcb->content.v_len;
 			if ( vec[0].v_len < len ) {
-				buf2 = malloc(len);
+				buf2 = s->reasm(s->sbuf, len);
 				if ( NULL == buf2 ) {
 					ret = 0;
 					goto end;
 				}
-				ret = s->s_reasm(s, buf2, len);
-				hsz = http_response(&r, buf2, len);
-				r.content.v_ptr = buf2 + hsz;
-				if ( do_free ) {
-					free((void *)buf);
-				}
-				do_free = 1;
+				hsz = parser[s->chan].parse(dcb, buf2, len);
+				dcb->content.v_ptr = buf2 + hsz;
 				buf = buf2;
+			}else{
+				dcb->content.v_ptr = buf + hsz;
 			}
 		}else{
-			if ( r.content.v_len > HTTP_MAX_POST_DATA ) {
+			if ( dcb->content.v_len > HTTP_MAX_RESP_DATA ) {
 				fs->state = HTTP_STATE_CONTENT;
-				fs->content_len = r.content.v_len;
+				fs->content_len = dcb->content.v_len;
 			}else{
 				ret = 0;
 			}
 		}
 	}
 
-	if ( ret > 0 )
-		msg_http_resp(&r);
+	if ( ret > 0 ) {
+		pkt->pkt_caplen = pkt->pkt_len = len;
+		pkt->pkt_base = buf;
+		pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
+		pkt_inject(pkt);
+	}
 
 end:
-	if ( do_free )
-		free((void *)buf);
-
 	return ret;
 }
 
-static ssize_t http_push(struct _stream *s, schan_t chan,
-		struct ro_vec *vec, size_t numv, size_t bytes)
+static void http_content(struct _pkt *pkt, size_t bytes)
 {
+}
+
+static ssize_t http_push(struct _pkt *pkt, struct ro_vec *vec, size_t numv,
+				size_t bytes)
+{
+	const struct tcpstream_dcb *dcb;
 	struct http_flow *f;
 	struct http_fside *fs;
 	ssize_t ret;
 
-	f = s->s_flow;
+	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = dcb->s->flow;
 
 	if ( f->seq & 0x1 ) {
-		if ( chan != TCP_CHAN_TO_CLIENT )
+		if ( dcb->chan != TCP_CHAN_TO_CLIENT )
 			return 0;
 		fs = &f->server;
 	}else{
-		if ( chan != TCP_CHAN_TO_SERVER )
+		if ( dcb->chan != TCP_CHAN_TO_SERVER )
 			return 0;
 		fs = &f->client;
 	}
 
 	switch(fs->state) {
 	case HTTP_STATE_HEADER:
-		if ( fs == &f->client )
-			ret = push_req(s, f, fs, vec, numv, bytes);
-		else
-			ret = push_resp(s, f, fs, vec, numv, bytes);
+		ret = push_hdr(pkt, fs, vec, numv, bytes);
 		break;
 	case HTTP_STATE_CONTENT:
 		if ( bytes > fs->content_len ) {
 			ret = fs->content_len;
+			http_content(pkt, fs->content_len);
 			fs->content_len = 0;
 			fs->state = HTTP_STATE_HEADER;
 		}else{
+			http_content(pkt, bytes);
 			fs->content_len -= bytes;
 			ret = bytes;
 		}
@@ -645,39 +583,39 @@ static ssize_t http_push(struct _stream *s, schan_t chan,
 	return ret;
 }
 
-static int flow_init(struct _stream *s)
+static int flow_init(void *priv)
 {
-	struct http_flow *f = s->s_flow;
+	struct tcp_session *s = priv;
+	struct http_flow *f = s->flow;
 	f->client.state = HTTP_STATE_HEADER;
 	f->server.state = HTTP_STATE_HEADER;
 	f->seq = 0;
 	return 1;
 }
 
-static void flow_fini(struct _stream *s)
+static void flow_fini(void *priv)
 {
 }
 
 
-static struct _sproto sp_http = {
-	.sp_label = "http",
-	.sp_flow_init = flow_init,
-	.sp_flow_fini = flow_fini,
-	.sp_flow_sz = sizeof(struct http_flow),
-};
-
 static struct _sdecode sd_http = {
 	.sd_label = "http",
 	.sd_push = http_push,
+	.sd_flow_init = flow_init,
+	.sd_flow_fini = flow_fini,
+	.sd_flow_sz = sizeof(struct http_flow),
 	.sd_max_msg = 8192,
 };
 
 static void __attribute__((constructor)) http_ctor(void)
 {
-	sproto_add(&sp_http);
-	sdecode_add(&sp_http, &sd_http);
+	sdecode_add(&sd_http);
 	sdecode_register(&sd_http, SNS_TCP, sys_be16(80));
 	sdecode_register(&sd_http, SNS_TCP, sys_be16(81));
 	sdecode_register(&sd_http, SNS_TCP, sys_be16(3128));
 	sdecode_register(&sd_http, SNS_TCP, sys_be16(8080));
+
+	proto_add(&_tcpstream_decoder, &p_http_req);
+	proto_add(&_tcpstream_decoder, &p_http_resp);
+	proto_add(&_tcpstream_decoder, &p_http_cont);
 }

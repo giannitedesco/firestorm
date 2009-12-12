@@ -90,13 +90,38 @@ struct _dcb *decode_layer(pkt_t pkt, struct _proto *p)
 	return ret;
 }
 
-struct _dcb *decode_layer2(pkt_t pkt, struct _proto *p, size_t sz)
+struct _dcb *decode_layer0(pkt_t pkt, struct _proto *p)
 {
 	struct _dcb *ret;
-	assert(sz <= p->p_dcb_sz);
-	ret = dcb_alloc(pkt, sz);
-	if ( ret )
+	ret = dcb_alloc(pkt, p->p_dcb_sz);
+	if ( ret ) {
 		ret->dcb_proto = p;
+		memset(&ret[1], 0, p->p_dcb_sz - sizeof(*ret));
+	}
+	return ret;
+}
+
+struct _dcb *decode_layerv(pkt_t pkt, struct _proto *p, size_t sz)
+{
+	struct _dcb *ret;
+	assert(NULL == p || sz >= p->p_dcb_sz);
+	assert(sz >= sizeof(struct _dcb));
+	ret = dcb_alloc(pkt, sz);
+	if ( ret  )
+		ret->dcb_proto = p;
+	return ret;
+}
+
+struct _dcb *decode_layerv0(pkt_t pkt, struct _proto *p, size_t sz)
+{
+	struct _dcb *ret;
+	assert(NULL == p || sz >= p->p_dcb_sz);
+	assert(sz >= sizeof(struct _dcb));
+	ret = dcb_alloc(pkt, sz);
+	if ( ret  ) {
+		ret->dcb_proto = p;
+		memset(&ret[1], 0, sz - sizeof(*ret));
+	}
 	return ret;
 }
 

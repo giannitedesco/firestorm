@@ -16,8 +16,8 @@ static struct _stream_ns ns_arr[SNS_MAX] = {
 	[SNS_RFC822]	{.ns_label = "RFC822"},
 };
 
-static struct _sproto *sprotos;
-static unsigned int num_sproto;
+static struct _sdecode *sdecoders;
+static unsigned int num_sdecode;
 
 static int ns_assure(struct _stream_ns *ns)
 {
@@ -41,32 +41,23 @@ size_t stream_max_flow_size(proto_ns_t ns)
 	unsigned int i;
 	size_t max;
 	for(i = 0, max = 0; i < ns_arr[ns].ns_num_reg; i++)
-		if ( ns_arr[ns].ns_reg[i].nse_sdecode->sd_proto->sp_flow_sz > max )
-			max = ns_arr[ns].ns_reg[i].nse_sdecode->sd_proto->sp_flow_sz;
+		if ( ns_arr[ns].ns_reg[i].nse_sdecode->sd_flow_sz > max )
+			max = ns_arr[ns].ns_reg[i].nse_sdecode->sd_flow_sz;
 	return max;
 }
 
-unsigned int stream_num_sproto(void)
+unsigned int stream_num_sdecode(void)
 {
-	return num_sproto;
+	return num_sdecode;
 }
 
-void sproto_add(struct _sproto *sp)
-{
-	assert(NULL != sp->sp_label);
-	assert(NULL == sp->sp_next);
-	sp->sp_next = sprotos;
-	sprotos = sp;
-	sp->sp_idx = num_sproto++;
-}
-
-void sdecode_add(struct _sproto *sp, struct _sdecode *sd)
+void sdecode_add(struct _sdecode *sd)
 {
 	assert(NULL != sd->sd_label);
 	assert(NULL == sd->sd_next);
-	sd->sd_next = sp->sp_decoders;
-	sp->sp_decoders = sd;
-	sd->sd_proto = sp;
+	sd->sd_next = sdecoders;
+	sdecoders = sd;
+	num_sdecode++;
 }
 
 void sdecode_register(struct _sdecode *sd, proto_ns_t ns, proto_id_t id)
