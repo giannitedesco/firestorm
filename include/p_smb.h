@@ -1,5 +1,14 @@
-#ifndef _PKT_SMB_HEADER_INCLUDED_
-#define _PKT_SMB_HEADER_INCLUDED_
+#ifndef _P_SMB_HEADER_INCLUDED_
+#define _P_SMB_HEADER_INCLUDED_
+
+#define SMB_TRANS_REQ		(1<<0)
+#define SMB_TRANS_OPLOCK_BREAK	(1<<1)
+struct smb_trans {
+	uint8_t  flags;
+	uint8_t  cmd;
+	uint16_t pid;
+	uint16_t mid;
+};
 
 #define SMB_NUM_TRANS 8
 struct smb_flow {
@@ -8,4 +17,4 @@ struct smb_flow {
 	struct smb_trans trans[SMB_NUM_TRANS];
 };
 
-#endif /* _PKT_SMB_HEADER_INCLUDED_ */
+#endif /* _P_SMB_HEADER_INCLUDED_ */

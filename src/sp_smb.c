@@ -16,7 +16,7 @@
 
 #include <ctype.h>
 
-#if 0
+#if 1
 #define dbg(flow, fmt, x...) \
 		do { \
 			struct smb_flow *__FLOW = flow; \
@@ -97,23 +97,84 @@ static void negproto_req(struct _pkt *pkt, const struct smb_pkt *smb,
 }
 
 static const struct smb_cmd cmds[] = {
-	{.id = 0x04, .label = "Close"},
-	{.id = 0x10, .label = "CheckDirectory"},
-	{.id = 0x24, .label = "LockingAndX"},
-	{.id = 0x25, .label = "Trans"},
-	{.id = 0x2b, .label = "Echo"},
-	{.id = 0x2e, .label = "ReadAndX"},
-	{.id = 0x2f, .label = "WriteAndX"},
-	{.id = 0x32, .label = "Trans2"},
-	{.id = 0x71, .label = "TreeDisconnect"},
-	{.id = 0x72, .label = "NegotiateProtocol",
-			.req = negproto_req},
-	{.id = 0x73, .label = "SessionSetupAndX"},
-	{.id = 0x74, .label = "LogoffAndX"},
-	{.id = 0x75, .label = "TreeConnectAndX"},
-	{.id = 0xa0, .label = "NT_Trans"},
-	{.id = 0xa2, .label = "NT_CreateAndX"},
-	{.id = 0xa4, .label = "NT_CancelRequest"},
+	{.id = SMB_MKDIR,		.label = "mkdir"},
+	{.id = SMB_RMDIR,		.label = "rmdir"},
+	{.id = SMB_OPEN,		.label = "open"},
+	{.id = SMB_CREATE,		.label = "create"},
+	{.id = SMB_CLOSE,		.label = "Close"},
+	{.id = SMB_FLUSH,		.label = "Flush"},
+	{.id = SMB_DELETE,		.label = "Delete"},
+	{.id = SMB_RENAME,		.label = "Rename"},
+	{.id = SMB_GET_INFO,		.label = "QueryInfo"},
+	{.id = SMB_SET_INFO,		.label = "SetInfo"},
+	{.id = SMB_READ,		.label = "Read"},
+	{.id = SMB_WRITE,		.label = "Write"},
+	{.id = SMB_LOCK,		.label = "LockByteRange"},
+	{.id = SMB_UNLOCK,		.label = "UnlockByteRange"},
+	{.id = SMB_CREATE_TEMP,		.label = "CreateTemporary"},
+	{.id = SMB_CREATE_NEW,		.label = "CreateNew"},
+	{.id = SMB_CHECK_DIRECTORY,	.label = "CheckDirectory"},
+	{.id = SMB_PROCESS_EXIT,	.label = "ProcessExit"},
+	{.id = SMB_SEEK,		.label = "Seek"},
+	{.id = SMB_LOCK_READ,		.label = "LockRead"},
+	{.id = SMB_WRITE_UNLOCK,	.label = "WriteUnlock"},
+	{.id = SMB_READ_RAW,		.label = "ReadRaw"},
+	{.id = SMB_READ_BLOCK_MPX,	.label = "ReadBlockMultiplex"},
+	{.id = SMB_READ_BLOCK_S,	.label = "ReadBlockSecondary"},
+	{.id = SMB_WRITE_RAW,		.label = "WriteRaw"},
+	{.id = SMB_WRITE_BLOCK_MPX,	.label = "WriteBlockMultiplex"},
+	{.id = SMB_WRITE_BLOCK_S,	.label = "WriteBlockSecondary"},
+	{.id = SMB_WRITE_COMPLETE,	.label = "WriteComplete"},
+	{.id = SMB_SET_INFO2,		.label = "SetInfo2"},
+	{.id = SMB_GET_INFO2,		.label = "QueryInfo2"},
+	{.id = SMB_LOCKING_ANDX,	.label = "LockingAndX"},
+	{.id = SMB_TRANS,		.label = "Trans"},
+	{.id = SMB_TRANS_S,		.label = "TransSecondary"},
+	{.id = SMB_IOCTL,		.label = "Ioctl"},
+	{.id = SMB_IOCTL_S,		.label = "IoctlSecondary"},
+	{.id = SMB_COPY,		.label = "Copy"},
+	{.id = SMB_MOVE,		.label = "Move"},
+	{.id = SMB_ECHO,		.label = "Echo"},
+	{.id = SMB_WRITE_CLOSE,		.label = "WriteClose"},
+	{.id = SMB_OPEN_ANDX,		.label = "OpenAndX"},
+	{.id = SMB_READ_ANDX,		.label = "ReadAndX"},
+	{.id = SMB_WRITE_ANDX,		.label = "WriteAndX"},
+	{.id = SMB_TRANS2,		.label = "Trans2"},
+	{.id = SMB_TRANS2_S,		.label = "Trans2Secondary"},
+	{.id = SMB_FIND_CLOSE2,		.label = "FindClose2"},
+	{.id = SMB_FIND_NOTIFY_CLOSE,	.label = "FindNotifyClose"},
+	/* 0x60 - 0x6e: unix/xenix */
+	{.id = SMB_TREE_CONNECT,	.label = "TreeConnect"},
+	{.id = SMB_TREE_DISCONNECT,	.label = "TreeDisconnect"},
+	{.id = SMB_NEG_PROT,		.label = "NegotiateProtocol",
+					.req = negproto_req},
+	{.id = SMB_SESSION_SETUP_ANDX,	.label = "SessionSetupAndX"},
+	{.id = SMB_LOGOFF_ANDX,		.label = "LogoffAndX"},
+	{.id = SMB_TREE_CONNECT_ANDX,	.label = "TreeConnectAndX"},
+	{.id = SMB_GET_INFO_DISK,	.label = "QueryInfoDisk"},
+	{.id = SMB_SEARCH,		.label = "Search"},
+	{.id = SMB_FIND,		.label = "Find"},
+	{.id = SMB_FIND_UNIQUE,		.label = "FindUnique"},
+	{.id = SMB_FIND_CLOSE,		.label = "FindClose"},
+	{.id = SMB_NT_TRANS,		.label = "NT_Trans"},
+	{.id = SMB_NT_TRANS_S,		.label = "NT_TransSecondary"},
+	{.id = SMB_NT_CREATE_ANDX,	.label = "NT_CreateAndX"},
+	{.id = SMB_NT_CANCEL,		.label = "NT_CancelRequest"},
+	{.id = SMB_NT_RENAME,		.label = "NT_Rename"},
+	{.id = SMB_SPOOL_OPEN,		.label = "SpoolOpen"},
+	{.id = SMB_SPOOL_LOCK,		.label = "SpoolLock"},
+	{.id = SMB_SPOOL_CLOSE,		.label = "SpoolClose"},
+	{.id = SMB_SPOOL_RETQ,		.label = "SpoolRetQ"},
+	{.id = SMB_SENDS,		.label = "SendS"},
+	{.id = SMB_SENDB,		.label = "SendB"},
+	{.id = SMB_FWD_NAME,		.label = "ForwardName"},
+	{.id = SMB_CANCEL_FWD,		.label = "CancelForward"},
+	{.id = SMB_GETMAC,		.label = "GetMAC"},
+	{.id = SMB_SEND_START,		.label = "SendStart"},
+	{.id = SMB_SEND_TEXT,		.label = "SendText"},
+	{.id = SMB_READ_BULK,		.label = "ReadBulk"},
+	{.id = SMB_WRITE_BULK,		.label = "WriteBulk"},
+	{.id = SMB_WRITE_BULK_DATA,	.label = "WriteBulkData"},
 };
 
 static const struct smb_cmd *find_cmd(uint8_t cmd)
@@ -155,7 +216,7 @@ static int is_oplock_break(const struct smb_pkt *smb,
 
 static void cancel_transaction(struct smb_flow *f, const struct smb_pkt *smb)
 {
-	uint8_t i;
+	unsigned int i;
 
 	for(i = 0; i <= f->cur_trans; i++) {
 		struct smb_trans trans;
@@ -176,7 +237,7 @@ static void cancel_transaction(struct smb_flow *f, const struct smb_pkt *smb)
 
 static int unexpected_response(struct smb_flow *f, const struct smb_pkt *smb)
 {
-	uint8_t i;
+	unsigned int i;
 
 	for(i = 0; i <= f->cur_trans; i++) {
 		struct smb_trans trans;
@@ -202,6 +263,9 @@ static int unexpected_response(struct smb_flow *f, const struct smb_pkt *smb)
 	return 0;
 }
 
+/* FIXME; this is fucked... should let multiple requests through because
+ * some can be in flight for a long time... (shows in smbtorture)
+ */
 static int state_update(struct smb_flow *f, schan_t chan,
 			const struct smb_pkt *smb,
 			const uint8_t *buf, size_t len)
@@ -287,7 +351,7 @@ static int smb_pkt(struct _pkt *pkt, const uint8_t *buf, size_t len)
 
 	cmd = find_cmd(smb->smb_cmd);
 	if ( NULL == cmd ) {
-		mesg(M_WARN, "smb: unknown command 0x%2x", smb->smb_cmd);
+		mesg(M_WARN, "smb: unknown command 0x%.2x", smb->smb_cmd);
 		return 1;
 	}
 
@@ -384,7 +448,7 @@ static void name_decode(const uint8_t *in, uint8_t *out, size_t nchar)
 	*out = '\0';
 }
 
-static int nbss_setup(struct _pkt *pkt, const uint8_t *buf, size_t len)
+static int nbss_setup(struct _pkt *pkt, const struct nbss_pkt *nb, size_t len)
 {
 	uint8_t called[17], caller[17];
 	const struct tcpstream_dcb *dcb;
@@ -398,8 +462,8 @@ static int nbss_setup(struct _pkt *pkt, const uint8_t *buf, size_t len)
 		return 1;
 	}
 
-	name_decode(buf + 1, called, 16);
-	name_decode(buf + 35, caller, 16);
+	name_decode(nb->nb_u[0].setup.called + 1, called, 16);
+	name_decode(nb->nb_u[0].setup.caller + 1, caller, 16);
 
 	dbg(f, "mbss: session setup %s -> %s\n", called, caller);
 	return 1;
@@ -416,28 +480,22 @@ static int nbss_pkt(struct _pkt *pkt,
 	f = dcb->s->flow;
 
 	switch(nb->nb_type) {
-	case 0x00:
+	case NBSS_SESSION_MSG:
 		return smb_pkt(pkt, buf, len);
-	case 0x81:
-		return nbss_setup(pkt, buf, len);
-	case 0x82:
+	case NBSS_SESSION_SETUP:
+		return nbss_setup(pkt, nb, len);
+	case NBSS_SESSION_SETUP_OK:
 		dbg(f, "nbss: session setup OK\n");
 		break;
-	case 0x83:
+	case NBSS_SESSION_SETUP_ERR:
 		dbg(f, "nbss: session setup FUCKED\n");
-		/* len = 1, error code:
-		 * 	0x80: Not Listening On Called Name
-		 *	0x81: Not Listening For Calling Name 
-		 *	0x82: Called Name Not Present
-		 *	0x83: insufficient resources
-		 *	0x8f: unspecified error
-		*/
+		/* len = 1, error code */
 		break;
-	case 0x84:
+	case NBSS_SESSION_RETARGET:
 		dbg(f, "nbss: session setup RETARGET\n");
 		/* len = 6, (ip, port) */
 		break;
-	case 0x85:
+	case NBSS_SESSION_KEEPALIVE:
 		dbg(f, "nbss: session keepalive\n");
 		break;
 	default:
