@@ -2,6 +2,13 @@
  * This file is part of Firestorm NIDS.
  * Copyright (c) 2009 Gianni Tedesco <gianni@scaramanga.co.uk>
  * Released under the terms of the GNU GPL version 3
+ *
+ * TODO:
+ *  - incorporate NADS :]
+ *  - use htype for host header
+ *  - parse content-type options (htype_content_type)
+ *  - support chunked transfer encoding
+ *  - use BCD for protocol version 0xf for bad chars
 */
 
 #include <firestorm.h>
@@ -286,11 +293,8 @@ static size_t http_req(struct http_dcb *dcb, const uint8_t *ptr, size_t len)
 	if ( !hlen )
 		return 0;
 
-	/* Fill in other fields */
-	r->port = HTTP_DEFAULT_PORT;
 	r->proto_vers = http_proto_version(&pv);
 
-	/* Update flow state */
 	if ( clen > 0 )
 		r->http.content.v_len = clen;
 
@@ -334,6 +338,7 @@ static size_t http_req(struct http_dcb *dcb, const uint8_t *ptr, size_t len)
 
 done:
 	/* Extract the port from the host header */
+	r->port = HTTP_DEFAULT_PORT;
 	if ( r->host.v_ptr ) {
 		size_t i;
 		struct ro_vec port = { .v_ptr = NULL };
@@ -366,6 +371,22 @@ done:
 		r->uri.v_len = 1;
 	}
 
+	dmesg(M_DEBUG, ">>> HTTP %.*s %.*s:%u %.*s",
+		r->method.v_len, r->method.v_ptr,
+		r->host.v_len, r->host.v_ptr, r->port,
+		r->uri.v_len, r->uri.v_ptr);
+	if ( r->http.content.v_len )
+		dmesg(M_DEBUG, ">>> HTTP %u bytes of %.*s",
+			r->http.content.v_len,
+			r->http.content_type.v_len,
+			r->http.content_type.v_ptr);
+	if ( r->http.content_enc.v_len ||
+			r->http.transfer_enc.v_len )
+		dmesg(M_DEBUG, ">>>  HTTP encoding content=%.*s transfer=%.*s",
+			r->http.content_enc.v_len,
+			r->http.content_enc.v_ptr,
+			r->http.transfer_enc.v_len,
+			r->http.transfer_enc.v_ptr);
 	return hlen;
 }
 
@@ -421,6 +442,17 @@ static size_t http_resp(struct http_dcb *dcb, const uint8_t *ptr, size_t len)
 
 	r->proto_vers = http_proto_version(&pv);
 
+	dmesg(M_DEBUG, "<<< HTTP/%u - %u bytes %.*s",
+		r->code, r->http.content.v_len,
+		r->http.content_type.v_len,
+		r->http.content_type.v_ptr);
+	if ( r->http.content_enc.v_len ||
+			r->http.transfer_enc.v_len )
+		dmesg(M_DEBUG, "<<<  HTTP encoding content=%.*s transfer=%.*s",
+			r->http.content_enc.v_len,
+			r->http.content_enc.v_ptr,
+			r->http.transfer_enc.v_len,
+			r->http.transfer_enc.v_ptr);
 	return hlen;
 }
 
@@ -458,11 +490,14 @@ static ssize_t push_hdr(struct _pkt *pkt, struct http_fside *fs,
 
 	static const struct {
 		struct _proto *proto;
+		size_t max_content;
 		size_t (*parse)(struct http_dcb *d, const uint8_t *p, size_t l);
-	}parser[] = {
+	}p[] = {
 		[TCP_CHAN_TO_SERVER] = { .proto = &p_http_req,
+					 .max_content = HTTP_MAX_POST_DATA,
 					 .parse = http_req},
 		[TCP_CHAN_TO_CLIENT] = { .proto = &p_http_resp,
+					 .max_content = HTTP_MAX_RESP_DATA,
 					 .parse = http_resp},
 	};
 
@@ -483,30 +518,31 @@ static ssize_t push_hdr(struct _pkt *pkt, struct http_fside *fs,
 		buf = vec[0].v_ptr;
 	}
 
-	dcb = (struct http_dcb *)decode_layer0(pkt, parser[s->chan].proto);
+	dcb = (struct http_dcb *)decode_layer0(pkt, p[s->chan].proto);
 	if ( NULL == dcb )
 		return 0;
-	hsz = parser[s->chan].parse(dcb, buf, len);
+	hsz = p[s->chan].parse(dcb, buf, len);
 
 	if ( dcb->content.v_len && len == hsz ) {
 		if ( len + dcb->content.v_len <= bytes ) {
 			const uint8_t *buf2;
 
 			len = hsz + dcb->content.v_len;
+			ret = (ssize_t)len;
 			if ( vec[0].v_len < len ) {
 				buf2 = s->reasm(s->sbuf, len);
 				if ( NULL == buf2 ) {
 					ret = 0;
 					goto end;
 				}
-				hsz = parser[s->chan].parse(dcb, buf2, len);
+				hsz = p[s->chan].parse(dcb, buf2, len);
 				dcb->content.v_ptr = buf2 + hsz;
 				buf = buf2;
 			}else{
 				dcb->content.v_ptr = buf + hsz;
 			}
 		}else{
-			if ( dcb->content.v_len > HTTP_MAX_RESP_DATA ) {
+			if ( dcb->content.v_len > p[s->chan].max_content ) {
 				fs->state = HTTP_STATE_CONTENT;
 				fs->content_len = dcb->content.v_len;
 			}else{
