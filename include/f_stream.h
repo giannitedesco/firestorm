@@ -16,6 +16,7 @@ enum {
 struct _sdecode {
 	ssize_t (*sd_push)(struct _pkt *pkt, struct ro_vec *vec,
 				size_t numv, size_t bytes);
+	void (*sd_stream_clear)(const struct _dcb *dcb);
 	int (*sd_flow_init)(void *priv);
 	void (*sd_flow_fini)(void *priv);
 	size_t sd_flow_sz;

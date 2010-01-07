@@ -265,6 +265,9 @@ static int unexpected_response(struct smb_flow *f, const struct smb_pkt *smb)
 
 /* FIXME; this is fucked... should let multiple requests through because
  * some can be in flight for a long time... (shows in smbtorture)
+ *
+ * requires an sd_buffer_cleared() callback otherwise one bogus server
+ * response could terminate reasm state machine...
  */
 static int state_update(struct smb_flow *f, schan_t chan,
 			const struct smb_pkt *smb,
@@ -322,6 +325,18 @@ static int state_update(struct smb_flow *f, schan_t chan,
 	}
 
 	return 0;
+}
+
+static void stream_clear(const struct _dcb *dcb)
+{
+	const struct tcpstream_dcb *stream;
+	struct smb_flow *f;
+
+	stream = (const struct tcpstream_dcb *)dcb;
+	f = stream->s->flow;
+
+	dbg(f, "smb: %s stream_clear\n",
+		(stream->chan) ? "client" : "server");
 }
 
 static int smb_pkt(struct _pkt *pkt, const uint8_t *buf, size_t len)
@@ -596,6 +611,7 @@ static void flow_fini(void *priv)
 static struct _sdecode sd_nbt = {
 	.sd_label = "nbt",
 	.sd_push = nbt_push,
+	.sd_stream_clear = stream_clear,
 	.sd_flow_sz = sizeof(struct smb_flow),
 	.sd_flow_init = flow_init,
 	.sd_flow_fini = flow_fini,
@@ -605,6 +621,7 @@ static struct _sdecode sd_nbt = {
 static struct _sdecode sd_smb = {
 	.sd_label = "smb",
 	.sd_push = smb_push,
+	.sd_stream_clear = stream_clear,
 	.sd_flow_sz = sizeof(struct smb_flow),
 	.sd_flow_init = flow_init,
 	.sd_flow_fini = flow_fini,

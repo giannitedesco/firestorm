@@ -479,17 +479,20 @@ int _tcp_reasm_inject(struct tcp_session *s, unsigned int chan,
 	return 0;
 }
 
-static void sbuf_free(struct tcp_sbuf *s, int abort)
+static void sbuf_free(struct tcp_session *ss, struct tcp_sbuf *s, int abort)
 {
 	struct tcp_rbuf *r, *tr;
 	unsigned int i;
 
 	if ( NULL == s )
 		return;
-	
-	if ( !abort ) {
-		/* FIXME: push remaining data */
-	}
+
+	if ( !abort )
+		if (s->s_reasm_begin != s->s_end) {
+			mesg(M_DEBUG, "whoah %u bytes left %u gaps (%s)",
+				tcp_diff(s->s_reasm_begin, s->s_end),
+				s->s_num_gaps, ss->proto->sd_label);
+		}
 
 	if ( s->s_bufs.prev ) {
 		list_for_each_entry_safe(r, tr, &s->s_bufs, r_list) {
@@ -522,11 +525,18 @@ static struct tcp_sbuf *sbuf_new(struct tcp_session *ss, uint32_t isn)
 	return s;
 }
 
+static void final_push(struct tcp_session *s);
 void _tcp_reasm_free(struct tcp_session *s, int abort)
 {
-	sbuf_free(s->c_wnd.reasm, abort);
+	if ( NULL == s )
+		return;
+
+	if ( !abort )
+		final_push(s);
+
+	sbuf_free(s, s->c_wnd.reasm, abort);
 	if ( s->s_wnd )
-		sbuf_free(s->s_wnd->reasm, abort);
+		sbuf_free(s, s->s_wnd->reasm, abort);
 }
 
 int _tcp_reasm_init(struct tcp_session *s)
@@ -537,7 +547,7 @@ int _tcp_reasm_init(struct tcp_session *s)
 
 	s->s_wnd->reasm = sbuf_new(s, s->s_wnd->snd_nxt);
 	if ( NULL == s->s_wnd->reasm ) {
-		sbuf_free(s->c_wnd.reasm, 1);
+		sbuf_free(s, s->c_wnd.reasm, 1);
 		s->c_wnd.reasm = NULL;
 		return 0;
 	}
@@ -661,19 +671,21 @@ static struct ro_vec *advance_reasm_begin(struct tcp_sbuf *s,
 	for(i = 0; i < n; i++, vec++, (*numv)--) {
 		struct tcp_rbuf *r = first_buffer(s);
 
+		s->s_begin = r->r_seq;
+
 		if ( bytes < vec->v_len ) {
 			vec->v_len -= bytes;
 			vec->v_ptr += bytes;
 			break;
 		}
 
-		s->s_begin = r->r_seq;
 		if ( vec->v_ptr + vec->v_len == r->r_base + RBUF_SIZE ) {
 			rbuf_free(s, r);
 			if ( s->s_contig == r )
 				s->s_contig = NULL;
 		}
 
+		assert(bytes >= vec->v_len);
 		bytes -= vec->v_len;
 	}
 
@@ -687,7 +699,8 @@ void _tcpstream_decode(struct _pkt *pkt)
 }
 
 static struct _pkt reasm_pkt;
-static ssize_t do_push(struct tcp_session *ss, unsigned int chan, uint32_t seq)
+static ssize_t stream_push(struct tcp_session *ss,
+				unsigned int chan, uint32_t seq)
 {
 	static struct ro_vec *vbuf;
 	static size_t vbuf_sz;
@@ -705,6 +718,8 @@ static ssize_t do_push(struct tcp_session *ss, unsigned int chan, uint32_t seq)
 		break;
 	case TCP_CHAN_TO_CLIENT:
 		str = "to_client";
+		if ( NULL == ss->s_wnd )
+			return 0;
 		s = ss->s_wnd->reasm;
 		break;
 	default:
@@ -775,10 +790,13 @@ static ssize_t do_push(struct tcp_session *ss, unsigned int chan, uint32_t seq)
 		push_bytes += ret;
 	}
 
-	if ( list_empty(&s->s_bufs) ) {
+	if ( s->s_begin == s->s_end ) {
+		assert(list_empty(&s->s_bufs));
 		assert(s->s_end == s->s_contig_seq);
 		assert(s->s_reasm_begin == s->s_contig_seq);
 		s->s_begin = s->s_contig_seq;
+		if ( ss->proto->sd_stream_clear )
+			ss->proto->sd_stream_clear(&dcb->dcb);
 	}
 
 	assert(!tcp_before(s->s_contig_seq, s->s_begin));
@@ -796,9 +814,14 @@ static uint32_t spec_ack(struct tcp_state *wnd)
 	return wnd->snd_una;
 }
 
-int _tcp_stream_push(struct tcp_session *ss, unsigned int chan, uint32_t ack)
+static int do_push(struct tcp_session *ss, schan_t chan,
+			uint32_t c_seq, uint32_t s_seq)
 {
 	int tries;
+	uint32_t seq[] = {
+		[TCP_CHAN_TO_SERVER] = c_seq,
+		[TCP_CHAN_TO_CLIENT] = s_seq,
+	};
 
 	if ( unlikely(NULL == reasm_pkt.pkt_dcb) ) {
 		if ( !decode_pkt_realloc(&reasm_pkt,
@@ -806,22 +829,10 @@ int _tcp_stream_push(struct tcp_session *ss, unsigned int chan, uint32_t ack)
 			return 0;
 	}
 
-	struct {
-		struct tcp_state *s;
-		uint32_t seq;
-	}deets[] = {
-		[TCP_CHAN_TO_SERVER] = {&ss->c_wnd, 0},
-		[TCP_CHAN_TO_CLIENT] = {ss->s_wnd, 0},
-	};
-
-	chan = !!chan;
-	deets[chan].seq = ack;
-	deets[chan ^ 1].seq = spec_ack(deets[chan ^ 1].s);
-
-	for(tries = 0; tries < 2; chan = chan ^ 1) {
+	for(tries = 0; tries < 2; chan ^= 1 ) {
 		int ret;
-		
-		ret = do_push(ss, chan, deets[chan].seq);
+
+		ret = stream_push(ss, chan, seq[chan]);
 		if ( ret < -1 )
 			return 0;
 		if ( 0 == ret ) 
@@ -830,6 +841,32 @@ int _tcp_stream_push(struct tcp_session *ss, unsigned int chan, uint32_t ack)
 			tries = 0;
 	}
 	return 1;
+}
+
+int _tcp_stream_push(struct tcp_session *s, unsigned int chan, uint32_t ack)
+{
+	switch(chan) {
+	case TCP_CHAN_TO_SERVER:
+		return do_push(s, chan, ack, spec_ack(s->s_wnd));
+	case TCP_CHAN_TO_CLIENT:
+		return do_push(s, chan, spec_ack(&s->c_wnd), ack);
+	default:
+		return 1;
+	}
+}
+
+static void final_push(struct tcp_session *s)
+{
+	uint32_t c_seq, s_seq;
+
+	if ( NULL == s->c_wnd.reasm || NULL == s->proto )
+		return;
+	c_seq = spec_ack(&s->c_wnd);
+	s_seq = (s->s_wnd && s->s_wnd->reasm) ? spec_ack(s->s_wnd) : 0;
+
+	/* arbitrary choice of first chan to try */
+	mesg(M_DEBUG, "final push (%s)", s->proto->sd_label);
+	do_push(s, TCP_CHAN_TO_SERVER, c_seq, s_seq);
 }
 
 int _tcp_reasm_ctor(mempool_t pool)
