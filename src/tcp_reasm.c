@@ -817,7 +817,7 @@ again:
 		sesh->app->a_state_update(sesh, chan, &pkt);
 	}
 
-	return bytes;
+	return pkt.pkt_len;
 }
 
 static size_t fill_vectors(struct tcp_sbuf *s, size_t bytes,
@@ -1054,4 +1054,6 @@ void _tcp_reasm_dtor(void)
 
 	mesg(M_INFO, "tcp_reasm: reasm=%u push=%u avg_bytes=%u max_gaps=%u",
 		num_reasm, num_push, avg, max_gaps);
+
+	free(reasm_dcb);
 }

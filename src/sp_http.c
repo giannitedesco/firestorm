@@ -4,12 +4,12 @@
  * Released under the terms of the GNU GPL version 3
  *
  * TODO:
+ *  - support chunked transfer encoding
  *  - incorporate NADS :]
+ *  - additional state tracking for connection: keep-alive
  *  - use htype for host header
  *  - parse content-type options (htype_content_type)
- *  - support chunked transfer encoding
  *  - use BCD for protocol version 0xf for bad chars
- *  - additional state tracking for connection: keep-alive
 */
 
 #include <firestorm.h>
@@ -678,13 +678,14 @@ static int do_push_hdr(tcp_sesh_t sesh, tcp_chan_t chan)
 		return 0;
 
 	//dmesg(M_WARN, "http: got %u bytes in %u vectors", bytes, numv);
-	//hex_dump(vec[0].v_ptr, vec[0].v_len, 16);
 
 	ret = parse_req(vec, numv, bytes);
 	if ( ret <= 0 )
 		return (int)ret;
 
-	tcp_sesh_inject(sesh, chan, ret);
+	bytes = tcp_sesh_inject(sesh, chan, ret);
+	if ( 0 == bytes )
+		return 0;
 
 	return 1;
 }
