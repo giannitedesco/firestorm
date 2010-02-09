@@ -631,7 +631,10 @@ static size_t contig_bytes(struct tcp_session *sesh, tcp_chan_t chan)
 		seq--;
 
 	assert(!tcp_before(s->reasm->s_contig_seq, s->reasm->s_reasm_begin));
-	assert(!tcp_before(seq, s->reasm->s_reasm_begin));
+	if ( tcp_before(seq, s->reasm->s_reasm_begin) ) {
+		mesg(M_CRIT, "wierd? %u %u", seq, s->reasm->s_reasm_begin);
+		return 0;
+	}
 
 	if ( unlikely(tcp_after(seq, s->reasm->s_contig_seq)) ) {
 		dmesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
