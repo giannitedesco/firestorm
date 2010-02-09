@@ -381,6 +381,9 @@ static int do_inject(struct tcp_session *ss, struct tcp_sbuf *s,
 	int is_contig;
 	struct tcp_rbuf *r, *lr;
 
+	if ( NULL == s )
+		return 1;
+
 	dmesg(M_DEBUG, "Inject Packet: %u - %u",
 		seq, seq + len);
 
@@ -518,6 +521,8 @@ static struct tcp_sbuf *sbuf_new(struct tcp_session *ss, uint32_t isn)
 
 static void do_abort(struct tcp_session *s, int rst)
 {
+	dmesg(M_DEBUG, "Aborting seshion with%s RST packet",
+		(rst) ? "" : "out");
 	if ( s->c_wnd.reasm ) {
 		sbuf_free(s, s->c_wnd.reasm);
 		s->c_wnd.reasm = NULL;
@@ -579,10 +584,13 @@ void _tcp_reasm_init(struct tcp_session *s, uint8_t to_server,
 	app = _tcp_app_find_by_dport(s->s_port);
 	if ( NULL == app || !app->a_init(s) )
 		return;
+
 	if ( !alloc_reasm_buffers(s) ) {
 		app->a_fini(s);
 		return;
 	}
+
+	dmesg(M_DEBUG, "allocated reasm buffers for %s", app->a_label);
 	s->app = app;
 	do_data(s, to_server, seq, len, buf);
 }
@@ -706,41 +714,32 @@ size_t tcp_sesh_get_bytes(tcp_sesh_t sesh, tcp_chan_t chan)
 static void munch_bytes(struct tcp_sbuf *s, size_t bytes)
 {
 	struct tcp_rbuf *buf, *tmp;
+	uint32_t seq_end;
+
+	seq_end = s->s_reasm_begin + bytes;
+	assert(!tcp_after(seq_end, s->s_contig_seq));
 
 	list_for_each_entry_safe(buf, tmp, &s->s_bufs, r_list) {
-		s->s_begin = buf->r_seq;
-		if ( bytes >= RBUF_SIZE ) {
-			bytes -= RBUF_SIZE;
-			s->s_reasm_begin += RBUF_SIZE;
-			rbuf_free(s, buf);
-			s->s_begin += RBUF_SIZE;
-			dmesg(M_DEBUG, "munched rbuf, s_begin = %u",
-				s->s_begin);
-			if ( buf == s->s_contig ) {
-				assert(0 == bytes);
+		uint32_t buf_end;
+
+		buf_end = buf->r_seq + RBUF_SIZE;
+		if ( tcp_after(seq_end, buf_end) ) {
+			if ( buf == s->s_contig )
 				s->s_contig = NULL;
-				dmesg(M_DEBUG, "no more contig bytes");
-			}
-		}else{
-			dmesg(M_DEBUG, "munched trailing %u bytes", bytes);
-			s->s_reasm_begin += bytes;
-			bytes = 0;
-			if ( s->s_reasm_begin == s->s_end ) {
-				dmesg(M_DEBUG, "last byte in reasm buffer");
-				rbuf_free(s, buf);
-				if ( buf == s->s_contig )
-					s->s_contig = NULL;
-			}
-		}
-		if ( 0 == bytes )
+			rbuf_free(s, buf);
+		}else
 			break;
+
 	}
 
-	assert(bytes == 0);
+	s->s_reasm_begin = seq_end;
 	if ( list_empty(&s->s_bufs) ) {
 		dmesg(M_DEBUG, "re-basing from %u to %u",
 			s->s_begin, s->s_reasm_begin);
 		s->s_begin = s->s_reasm_begin;
+	}else{
+		buf = first_buffer(s);
+		s->s_begin = buf->r_seq;
 	}
 	assert(!tcp_after(s->s_begin, s->s_reasm_begin));
 }
@@ -772,6 +771,13 @@ size_t tcp_sesh_inject(tcp_sesh_t sesh, tcp_chan_t chan, size_t bytes)
 		return bytes;
 	}
 
+again:
+	total_bytes = contig_bytes(sesh, chan);
+	assert(bytes <= total_bytes);
+	buf = do_reasm(s->reasm, bytes);
+	if ( NULL == buf )
+		return 0;
+
 	pkt.pkt_dcb = reasm_dcb;
 	pkt.pkt_dcb_end = pkt.pkt_dcb + reasm_dcb_sz;
 	pkt.pkt_dcb_top = pkt.pkt_dcb;
@@ -783,41 +789,30 @@ size_t tcp_sesh_inject(tcp_sesh_t sesh, tcp_chan_t chan, size_t bytes)
 	dcb->sesh = sesh;
 	dcb->chan = chan;
 
-again:
-	total_bytes = contig_bytes(sesh, chan);
-	assert(bytes <= total_bytes);
-	buf = do_reasm(s->reasm, bytes);
-	if ( NULL == buf )
-		return 0;
-
-	/* to be populated by stream push */
 	pkt.pkt_caplen = total_bytes;
 	pkt.pkt_len = bytes;
 	pkt.pkt_base = buf;
 	pkt.pkt_end = buf + pkt.pkt_len;
 	pkt.pkt_nxthdr = pkt.pkt_base;
 
-	/* when calling in to decoder set pkt_len = bytes and
-	 * pkt_caplen = buffer size, if packet is returned with modified
-	 * pkt_len > bytes then reassemble again.
-	 *
-	 * In any case remove pkt_len bytes from reasm buffers
-	*/
-
 	dmesg(M_DEBUG, "tcp_reasm: %s: injecting %u/%u bytes",
 		sesh->app->a_label, bytes, total_bytes);
 	sesh->app->a_decode->d_decode(&pkt);
 	if ( pkt.pkt_len > bytes ) {
+		assert(pkt.pkt_caplen == total_bytes);
 		if ( pkt.pkt_len <= total_bytes ) {
+			dmesg(M_DEBUG, "tcp_reasm: trying again for %u bytes",
+				pkt.pkt_len);
 			bytes = pkt.pkt_len;
 			goto again;
 		}
-		bytes = 0;
-	}else
-		bytes = pkt.pkt_len;
+		pkt.pkt_len = 0;
+	}
 
-	if ( bytes ) {
-		munch_bytes(s->reasm, bytes);
+	if ( pkt.pkt_len ) {
+		dmesg(M_DEBUG, "tcp_reasm: injecting %u byte packet",
+			pkt.pkt_len);
+		munch_bytes(s->reasm, pkt.pkt_len);
 		pkt_inject(&pkt);
 		sesh->app->a_state_update(sesh, chan, &pkt);
 	}
@@ -993,6 +988,12 @@ void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
 	}else{
 		sbuf_free(s, s->s_wnd->reasm);
 		s->s_wnd->reasm = NULL;
+	}
+
+	if ( s->reasm_shutdown & (TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT) ) {
+		s->app->a_fini(s);
+		s->app = NULL;
+		s->flow = NULL;
 	}
 }
 

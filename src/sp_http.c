@@ -476,7 +476,6 @@ static void decode_hdr(const struct http_flow *f, const struct http_fside *fs,
 		dcb->content.v_ptr = pkt->pkt_base + hlen;
 	}else{
 		pkt->pkt_len = hlen;
-		clen = 0;
 	}
 }
 
@@ -527,6 +526,7 @@ static void http_decode(struct _pkt *pkt)
 	case HTTP_STATE_CHUNKED:
 	case HTTP_STATE_CLOSING:
 		dmesg(M_WARN, "TODO");
+		pkt->pkt_len = 0;
 		break;
 	default:
 		dmesg(M_CRIT, "http: corrupt flow");
@@ -615,6 +615,8 @@ static void state_update_hdr(struct http_flow *f, struct http_fside *fs,
 			r->http.transfer_enc.v_len,
 			r->http.transfer_enc.v_ptr);
 	}
+	if ( dcb->content.v_ptr )
+		hex_dump(dcb->content.v_ptr, dcb->content.v_len, 16);
 }
 
 static void state_update_content(struct http_flow *f, struct http_fside *fs,
