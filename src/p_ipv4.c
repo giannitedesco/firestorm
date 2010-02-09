@@ -97,6 +97,11 @@ static struct _proto p_tcp = {
 	.p_flowtrack = _tcpflow_track,
 };
 
+struct _proto _p_tcpstream = {
+	.p_label = "tcpstream",
+	.p_dcb_sz = sizeof(struct tcpstream_dcb),
+};
+
 static struct _proto p_udp = {
 	.p_label = "udp",
 	.p_dcb_sz = sizeof(struct udp_dcb),
@@ -107,10 +112,6 @@ struct _decoder _ipv4_decoder = {
 	.d_decode = ipv4_decode,
 	.d_flow_ctor = flow_track_ctor,
 	.d_flow_dtor = flow_track_dtor,
-};
-
-struct _decoder _tcpstream_decoder = {
-	.d_label = "tcpstream",
 };
 
 static void __attribute__((constructor)) _ctor(void)
@@ -126,10 +127,9 @@ static void __attribute__((constructor)) _ctor(void)
 	proto_add(&_ipv4_decoder, &p_sctp);
 	proto_add(&_ipv4_decoder, &p_dccp);
 	proto_add(&_ipv4_decoder, &p_tcp);
+	proto_add(&_ipv4_decoder, &_p_tcpstream);
 	proto_add(&_ipv4_decoder, &p_udp);
 	proto_add(&_ipv4_decoder, &p_esp);
-
-	decoder_add(&_tcpstream_decoder);
 }
 
 void iptostr(ipstr_t str, uint32_t ip)

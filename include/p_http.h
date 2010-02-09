@@ -22,9 +22,9 @@
 
 struct http_dcb {
 	struct _dcb dcb;
+	struct ro_vec transfer_enc;
 	struct ro_vec content_type;
 	struct ro_vec content_enc;
-	struct ro_vec transfer_enc;
 	struct ro_vec content;
 };
 

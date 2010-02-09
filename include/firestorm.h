@@ -52,8 +52,6 @@ typedef struct _dcb *dcb_t;
 typedef uint8_t proto_ns_t;
 typedef uint16_t proto_id_t;
 
-typedef uint8_t schan_t;
-
 typedef uint8_t mesg_code_t;
 
 /* Message codes */

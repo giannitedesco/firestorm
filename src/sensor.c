@@ -21,7 +21,6 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 
 	decode_init();
-	stream_init();
 
 	if ( argc > 1 ) {
 		src = capture_tcpdump_open(argv[1]);

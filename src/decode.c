@@ -107,7 +107,7 @@ struct _dcb *decode_layerv(pkt_t pkt, struct _proto *p, size_t sz)
 	assert(NULL == p || sz >= p->p_dcb_sz);
 	assert(sz >= sizeof(struct _dcb));
 	ret = dcb_alloc(pkt, sz);
-	if ( ret  )
+	if ( ret )
 		ret->dcb_proto = p;
 	return ret;
 }
@@ -118,7 +118,7 @@ struct _dcb *decode_layerv0(pkt_t pkt, struct _proto *p, size_t sz)
 	assert(NULL == p || sz >= p->p_dcb_sz);
 	assert(sz >= sizeof(struct _dcb));
 	ret = dcb_alloc(pkt, sz);
-	if ( ret  ) {
+	if ( ret ) {
 		ret->dcb_proto = p;
 		memset(&ret[1], 0, sz - sizeof(*ret));
 	}

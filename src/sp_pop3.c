@@ -7,7 +7,6 @@
 #include <firestorm.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_stream.h>
 #include <p_tcp.h>
 #include <p_pop3.h>
 

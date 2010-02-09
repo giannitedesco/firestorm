@@ -8,7 +8,6 @@
 #include <f_packet.h>
 #include <f_decode.h>
 #include <p_tcp.h>
-#include <f_stream.h>
 
 #include <limits.h>
 #include <ctype.h>

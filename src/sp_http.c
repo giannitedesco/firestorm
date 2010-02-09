@@ -9,6 +9,7 @@
  *  - parse content-type options (htype_content_type)
  *  - support chunked transfer encoding
  *  - use BCD for protocol version 0xf for bad chars
+ *  - additional state tracking for connection: keep-alive
 */
 
 #include <firestorm.h>
@@ -16,12 +17,11 @@
 #include <f_decode.h>
 #include <p_tcp.h>
 #include <p_http.h>
-#include <f_stream.h>
 
 #include <limits.h>
 #include <ctype.h>
 
-#if 0
+#if 1
 #define dmesg mesg
 #define dhex_dump hex_dump
 #else
@@ -263,9 +263,10 @@ static size_t http_decode_buf(struct http_hcb *d, size_t num_dcb,
 }
 
 /* Parse an HTTP request header and fill in the http response structure */
-static size_t http_req(struct http_dcb *dcb, const uint8_t *ptr, size_t len)
+static size_t http_req(struct http_request_dcb *dcb,
+			const uint8_t *ptr, size_t len)
 {
-	struct http_request_dcb *r = (struct http_request_dcb *)dcb;
+	struct http_request_dcb *r = dcb;
 	const uint8_t *end = ptr + len;
 	int clen = -1;
 	size_t hlen;
@@ -302,11 +303,12 @@ static size_t http_req(struct http_dcb *dcb, const uint8_t *ptr, size_t len)
 	 * information if there was no host header
 	 */
 	if ( !prox ) {
-		if ( r->uri.v_len < 7 || memcmp(r->uri.v_ptr, "http://", 7) )
+		if ( r->uri.v_len < 7 ||
+			strncasecmp((const char *)r->uri.v_ptr, "http://", 7) )
 			goto done;
 	}
 
-	for(i=state=do_host=0; i < r->uri.v_len; i++) {
+	for(i = state = do_host = 0; i < r->uri.v_len; i++) {
 		if ( state == 0 ) {
 			if ( ((char *)r->uri.v_ptr)[i] == ':' )
 				state++;
@@ -344,7 +346,7 @@ done:
 		struct ro_vec port = { .v_ptr = NULL };
 		unsigned int prt;
 
-		for(i=r->host.v_len; i; i--) {
+		for(i = r->host.v_len; i; i--) {
 			if (  ((uint8_t *)r->host.v_ptr)[i-1] == ':' ) {
 				port.v_len = r->host.v_len - i;
 				port.v_ptr = r->host.v_ptr + i;
@@ -371,18 +373,18 @@ done:
 		r->uri.v_len = 1;
 	}
 
-	dmesg(M_DEBUG, ">>> HTTP %.*s %.*s:%u %.*s",
+	dmesg(M_DEBUG, "http: >>> %.*s %.*s:%u %.*s",
 		r->method.v_len, r->method.v_ptr,
 		r->host.v_len, r->host.v_ptr, r->port,
 		r->uri.v_len, r->uri.v_ptr);
 	if ( r->http.content.v_len )
-		dmesg(M_DEBUG, ">>> HTTP %u bytes of %.*s",
+		dmesg(M_DEBUG, "http: >>> %u bytes of %.*s",
 			r->http.content.v_len,
 			r->http.content_type.v_len,
 			r->http.content_type.v_ptr);
 	if ( r->http.content_enc.v_len ||
 			r->http.transfer_enc.v_len )
-		dmesg(M_DEBUG, ">>>  HTTP encoding content=%.*s transfer=%.*s",
+		dmesg(M_DEBUG, "http: >>>  encoding content=%.*s transfer=%.*s",
 			r->http.content_enc.v_len,
 			r->http.content_enc.v_ptr,
 			r->http.transfer_enc.v_len,
@@ -390,7 +392,7 @@ done:
 	return hlen;
 }
 
-static int check_req(struct ro_vec *vec, size_t vb, size_t b,
+static int check_req(const struct ro_vec *vec, size_t vb, size_t b,
 					size_t v, size_t i)
 {
 	uint8_t pb;
@@ -409,14 +411,15 @@ static int check_req(struct ro_vec *vec, size_t vb, size_t b,
 	}else if ( v ) {
 		pb = vec[v - 1].v_ptr[vec[v - 1].v_len - 1];
 	}else
-		return 9;
+		return 0;
 
 	return 1;
 }
 
-static size_t http_resp(struct http_dcb *dcb, const uint8_t *ptr, size_t len)
+static size_t http_resp(struct http_response_dcb *dcb,
+				const uint8_t *ptr, size_t len)
 {
-	struct http_response_dcb *r = (struct http_response_dcb *)dcb;
+	struct http_response_dcb *r = dcb;
 	const uint8_t *end = ptr + len;
 	int clen = -1;
 	size_t hlen;
@@ -442,13 +445,13 @@ static size_t http_resp(struct http_dcb *dcb, const uint8_t *ptr, size_t len)
 
 	r->proto_vers = http_proto_version(&pv);
 
-	dmesg(M_DEBUG, "<<< HTTP/%u - %u bytes %.*s",
+	dmesg(M_DEBUG, "http: <<< HTTP/%u - %u bytes %.*s",
 		r->code, r->http.content.v_len,
 		r->http.content_type.v_len,
 		r->http.content_type.v_ptr);
 	if ( r->http.content_enc.v_len ||
 			r->http.transfer_enc.v_len )
-		dmesg(M_DEBUG, "<<<  HTTP encoding content=%.*s transfer=%.*s",
+		dmesg(M_DEBUG, "http: <<<  encoding content=%.*s transfer=%.*s",
 			r->http.content_enc.v_len,
 			r->http.content_enc.v_ptr,
 			r->http.transfer_enc.v_len,
@@ -456,8 +459,121 @@ static size_t http_resp(struct http_dcb *dcb, const uint8_t *ptr, size_t len)
 	return hlen;
 }
 
-static ssize_t parse_req(struct http_flow *f, struct http_fside *fs,
-		struct ro_vec *vec, size_t numv, size_t bytes)
+static void decode_hdr(struct http_flow *f, struct http_fside *fs,
+			struct _pkt *pkt)
+{
+	struct http_dcb *dcb;
+	struct tcpstream_dcb *tcp_dcb;
+	size_t hlen, clen;
+
+	tcp_dcb = (struct tcpstream_dcb *)pkt->pkt_dcb;
+
+	//hex_dump(pkt->pkt_base, pkt->pkt_len, 16);
+	if ( tcp_dcb->chan == TCP_CHAN_TO_SERVER ) {
+		dcb = (struct http_dcb *)decode_layer0(pkt, &p_http_req);
+		hlen = http_req((struct http_request_dcb *)dcb,
+				pkt->pkt_base, pkt->pkt_len);
+	}else{
+		dcb = (struct http_dcb *)decode_layer0(pkt, &p_http_resp);
+		hlen = http_resp((struct http_response_dcb *)dcb,
+				pkt->pkt_base, pkt->pkt_len);
+	}
+
+	if ( 0 == hlen ) {
+		pkt->pkt_len = 0;
+		return;
+	}
+
+	clen = dcb->content.v_len;
+	if ( pkt->pkt_len < hlen + clen && hlen + clen <= pkt->pkt_caplen ) {
+		pkt->pkt_len = hlen + clen;
+		return;
+	}
+
+	if ( clen && hlen + clen <= pkt->pkt_len ) {
+		pkt->pkt_len = hlen + clen;
+		dcb->content.v_ptr = pkt->pkt_base + hlen;
+	}else{
+		pkt->pkt_len = hlen;
+		clen = 0;
+	}
+
+	pkt_inject(pkt);
+	
+	if ( dcb->content.v_len && clen == 0 ) {
+		fs->state = HTTP_STATE_CONTENT;
+		fs->content_len = dcb->content.v_len;
+	}else{
+		fs->state = HTTP_STATE_HEADER;
+		f->seq++;
+	}
+}
+
+static void decode_content(struct http_flow *f, struct http_fside *fs,
+			struct _pkt *pkt)
+{
+	struct tcpstream_dcb *tcp_dcb;
+
+	assert(pkt->pkt_len <= fs->content_len);
+
+	tcp_dcb = (struct tcpstream_dcb *)pkt->pkt_dcb;
+
+	dmesg(M_DEBUG, "http: %s %u/%u bytes of content",
+		((tcp_dcb->chan) == TCP_CHAN_TO_SERVER) ? ">>>" : "<<<",
+		pkt->pkt_len, fs->content_len);
+
+	pkt_inject(pkt);
+	fs->content_len -= pkt->pkt_len;
+	if ( 0 == fs->content_len ) {
+		fs->state = HTTP_STATE_HEADER;
+		f->seq++;
+	}
+}
+
+static void http_decode(struct _pkt *pkt)
+{
+	struct tcpstream_dcb *tcp_dcb;
+	struct http_flow *f;
+	struct http_fside *fs;
+
+	tcp_dcb = (struct tcpstream_dcb *)pkt->pkt_dcb;
+
+	f = tcp_sesh_get_flow(tcp_dcb->sesh);
+	if ( f->seq & 0x1 ) {
+		assert(tcp_dcb->chan == TCP_CHAN_TO_CLIENT);
+		fs = &f->server;
+	}else{
+		assert(tcp_dcb->chan == TCP_CHAN_TO_SERVER);
+		fs = &f->client;
+	}
+
+	//dmesg(M_WARN, "http: pkt %u/%u bytes", pkt->pkt_len, pkt->pkt_caplen);
+	//hex_dump(pkt->pkt_base, pkt->pkt_len, 16);
+
+	switch(fs->state) {
+	case HTTP_STATE_HEADER:
+		decode_hdr(f, fs, pkt);
+		break;
+	case HTTP_STATE_CONTENT:
+		decode_content(f, fs, pkt);
+		break;
+	case HTTP_STATE_CHUNKED:
+	case HTTP_STATE_CLOSING:
+		dmesg(M_WARN, "TODO");
+		break;
+	default:
+		dmesg(M_CRIT, "http: corrupt flow");
+		pkt->pkt_len = 0;
+		break;
+	}
+
+	if ( f->seq & 0x1 )
+		tcp_sesh_wait(tcp_dcb->sesh, TCP_CHAN_TO_CLIENT);
+	else
+		tcp_sesh_wait(tcp_dcb->sesh, TCP_CHAN_TO_SERVER);
+}
+
+static ssize_t parse_req(const struct ro_vec *vec, size_t numv, size_t bytes)
 {
 	size_t vb = bytes;
 	size_t v, i, b;
@@ -478,192 +594,162 @@ static ssize_t parse_req(struct http_flow *f, struct http_fside *fs,
 	return 0;
 }
 
-static ssize_t push_hdr(struct _pkt *pkt, struct http_fside *fs,
-			struct ro_vec *vec, size_t numv, size_t bytes)
+static int do_push_hdr(tcp_sesh_t sesh, tcp_chan_t chan)
 {
-	const struct tcpstream_dcb *s;
-	struct http_flow *f;
-	struct http_dcb *dcb;
-	const uint8_t *buf;
-	size_t len, hsz;
+	const struct ro_vec *vec;
+	size_t numv, bytes;
 	ssize_t ret;
 
-	static const struct {
-		struct _proto *proto;
-		size_t max_content;
-		size_t (*parse)(struct http_dcb *d, const uint8_t *p, size_t l);
-	}p[] = {
-		[TCP_CHAN_TO_SERVER] = { .proto = &p_http_req,
-					 .max_content = HTTP_MAX_POST_DATA,
-					 .parse = http_req},
-		[TCP_CHAN_TO_CLIENT] = { .proto = &p_http_resp,
-					 .max_content = HTTP_MAX_RESP_DATA,
-					 .parse = http_resp},
-	};
+	vec = tcp_sesh_get_buf(sesh, chan, &numv, &bytes);
+	if ( NULL == vec )
+		return 0;
 
-	s = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = s->s->flow;
+	//dmesg(M_WARN, "http: got %u bytes in %u vectors", bytes, numv);
+	//hex_dump(vec[0].v_ptr, vec[0].v_len, 16);
 
-	ret = parse_req(f, fs, vec, numv, bytes);
+	ret = parse_req(vec, numv, bytes);
 	if ( ret <= 0 )
-		return ret;
+		return (int)ret;
 
-	len = (size_t)ret;
+	tcp_sesh_inject(sesh, chan, ret);
 
-	if ( vec[0].v_len < len ) {
-		buf = s->reasm(s->sbuf, len);
-		if ( NULL == buf )
-			return 0;
-	}else{
-		buf = vec[0].v_ptr;
-	}
-
-	dcb = (struct http_dcb *)decode_layer0(pkt, p[s->chan].proto);
-	if ( NULL == dcb )
-		return 0;
-	hsz = p[s->chan].parse(dcb, buf, len);
-
-	if ( dcb->content.v_len && len == hsz ) {
-		if ( len + dcb->content.v_len <= bytes ) {
-			const uint8_t *buf2;
-
-			len = hsz + dcb->content.v_len;
-			ret = (ssize_t)len;
-			if ( vec[0].v_len < len ) {
-				buf2 = s->reasm(s->sbuf, len);
-				if ( NULL == buf2 ) {
-					ret = 0;
-					goto end;
-				}
-				hsz = p[s->chan].parse(dcb, buf2, len);
-				dcb->content.v_ptr = buf2 + hsz;
-				buf = buf2;
-			}else{
-				dcb->content.v_ptr = buf + hsz;
-			}
-		}else{
-			if ( dcb->content.v_len > p[s->chan].max_content ) {
-				fs->state = HTTP_STATE_CONTENT;
-				fs->content_len = dcb->content.v_len;
-			}else{
-				ret = 0;
-			}
-		}
-	}
-
-	if ( ret > 0 ) {
-		pkt->pkt_caplen = pkt->pkt_len = len;
-		pkt->pkt_base = buf;
-		pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
-		pkt_inject(pkt);
-	}
-
-end:
-	return ret;
+	return 1;
 }
 
-static ssize_t http_content(struct _pkt *pkt, const uint8_t *ptr, size_t len)
+static int do_push_content(tcp_sesh_t sesh, tcp_chan_t chan)
 {
-	struct http_cont_dcb *dcb;
-
-	dcb = (struct http_cont_dcb *)decode_layer0(pkt, &p_http_cont);
-	if ( NULL == dcb )
-		return 0;
-
-	pkt->pkt_caplen = pkt->pkt_len = len;
-	pkt->pkt_base = ptr;
-	pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
-	pkt_inject(pkt);
-
-	return pkt->pkt_len;
-}
-
-static ssize_t http_push(struct _pkt *pkt, struct ro_vec *vec, size_t numv,
-				size_t bytes)
-{
-	const struct tcpstream_dcb *dcb;
 	struct http_flow *f;
 	struct http_fside *fs;
-	ssize_t ret;
+	size_t bytes;
 
-	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = dcb->s->flow;
-
+	f = tcp_sesh_get_flow(sesh);
 	if ( f->seq & 0x1 ) {
-		if ( dcb->chan != TCP_CHAN_TO_CLIENT )
-			return 0;
+		assert(chan == TCP_CHAN_TO_CLIENT);
 		fs = &f->server;
 	}else{
-		if ( dcb->chan != TCP_CHAN_TO_SERVER )
-			return 0;
+		assert(chan == TCP_CHAN_TO_SERVER);
+		fs = &f->client;
+	}
+
+	bytes = tcp_sesh_get_bytes(sesh, chan);
+	if ( fs->content_len < bytes )
+		tcp_sesh_inject(sesh, chan, fs->content_len);
+	else
+		tcp_sesh_inject(sesh, chan, bytes);
+
+	return 1;
+}
+
+static int http_push(tcp_sesh_t sesh, tcp_chan_t chan)
+{
+	const struct http_flow *f;
+	const struct http_fside *fs;
+
+	f = tcp_sesh_get_flow(sesh);
+
+	if ( f->seq & 0x1 ) {
+		assert(chan & TCP_CHAN_TO_CLIENT);
+		chan = TCP_CHAN_TO_CLIENT;
+		fs = &f->server;
+	}else{
+		assert(chan & TCP_CHAN_TO_SERVER);
+		chan = TCP_CHAN_TO_SERVER;
 		fs = &f->client;
 	}
 
 	switch(fs->state) {
 	case HTTP_STATE_HEADER:
-		ret = push_hdr(pkt, fs, vec, numv, bytes);
-		break;
+		return do_push_hdr(sesh, chan);
 	case HTTP_STATE_CONTENT:
-		if ( vec[0].v_len > fs->content_len ) {
-			ret = http_content(pkt, vec[0].v_ptr, fs->content_len);
-		}else{
-			ret = http_content(pkt, vec[0].v_ptr, vec[0].v_len);
-		}
-		if ( ret <= 0 )
-			break;
-		fs->content_len -= (size_t)ret;
-		if ( 0 == fs->content_len )
-			fs->state = HTTP_STATE_HEADER;
-		break;
+		return do_push_content(sesh, chan);
 	case HTTP_STATE_CHUNKED:
-		ret = bytes;
-		break;
 	case HTTP_STATE_CLOSING:
-		ret = bytes;
-		break;
+		dmesg(M_WARN, "TODO");
+		return 0;
 	default:
-		ret = bytes;
-		assert(0);
+		dmesg(M_CRIT, "http: corrupt flow");
+		return -1;
 	}
-
-	if ( fs->state == HTTP_STATE_HEADER )
-		f->seq++;
-	return ret;
 }
 
-static int flow_init(void *priv)
+static objcache_t flow_cache;
+
+static int http_shutdown(tcp_sesh_t sesh, tcp_chan_t chan)
 {
-	struct tcp_session *s = priv;
-	struct http_flow *f = s->flow;
-	f->client.state = HTTP_STATE_HEADER;
-	f->server.state = HTTP_STATE_HEADER;
-	f->seq = 0;
 	return 1;
 }
 
-static void flow_fini(void *priv)
+static int http_init(tcp_sesh_t sesh)
 {
+	struct http_flow *f;
+
+	f = objcache_alloc(flow_cache);
+	if ( NULL == f )
+		return 0;
+
+	dmesg(M_DEBUG, "http_init");
+	f->client.state = HTTP_STATE_HEADER;
+	f->server.state = HTTP_STATE_HEADER;
+	f->seq = 0;
+
+	tcp_sesh_set_flow(sesh, f);
+	tcp_sesh_wait(sesh, TCP_CHAN_TO_SERVER);
+	return 1;
 }
 
+static void http_fini(tcp_sesh_t sesh)
+{
+	struct http_flow *f;
 
-static struct _sdecode sd_http = {
-	.sd_label = "http",
-	.sd_push = http_push,
-	.sd_flow_init = flow_init,
-	.sd_flow_fini = flow_fini,
-	.sd_flow_sz = sizeof(struct http_flow),
-	.sd_max_msg = 8192,
+	f = tcp_sesh_get_flow(sesh);
+	if ( NULL == f )
+		return;
+
+	dmesg(M_DEBUG, "http_fini");
+	objcache_free2(flow_cache, f);
+}
+
+static int http_flow_ctor(void)
+{
+	flow_cache = objcache_init(NULL, "http_flows",
+					sizeof(struct http_flow));
+	if ( NULL == flow_cache )
+		return 0;
+	
+	return 1;
+}
+
+static void http_flow_dtor(void)
+{
+	objcache_fini(flow_cache);
+}
+
+static struct _decoder http_decoder = {
+	.d_decode = http_decode,
+	.d_flow_ctor = http_flow_ctor,
+	.d_flow_dtor = http_flow_dtor,
+	.d_label = "http",
+};
+
+static struct tcp_app http_app = {
+	.a_push = http_push,
+	.a_shutdown = http_shutdown,
+	.a_init = http_init,
+	.a_fini = http_fini,
+	.a_decode = &http_decoder,
+	.a_label = "http",
 };
 
 static void __attribute__((constructor)) http_ctor(void)
 {
-	sdecode_add(&sd_http);
-	sdecode_register(&sd_http, SNS_TCP, sys_be16(80));
-	sdecode_register(&sd_http, SNS_TCP, sys_be16(81));
-	sdecode_register(&sd_http, SNS_TCP, sys_be16(3128));
-	sdecode_register(&sd_http, SNS_TCP, sys_be16(8080));
+	decoder_add(&http_decoder);
+	proto_add(&http_decoder, &p_http_req);
+	proto_add(&http_decoder, &p_http_resp);
+	proto_add(&http_decoder, &p_http_cont);
 
-	proto_add(&_tcpstream_decoder, &p_http_req);
-	proto_add(&_tcpstream_decoder, &p_http_resp);
-	proto_add(&_tcpstream_decoder, &p_http_cont);
+	tcp_app_register(&http_app);
+	tcp_app_register_dport(&http_app, 80);
+	tcp_app_register_dport(&http_app, 8080);
+	tcp_app_register_dport(&http_app, 8081);
+	tcp_app_register_dport(&http_app, 3128);
 }

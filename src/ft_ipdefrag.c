@@ -27,6 +27,7 @@
 #include <f_decode.h>
 #include <pkt/ip.h>
 #include <p_ipv4.h>
+#include <p_tcp.h> /* gah */
 
 #include "tcpip.h"
 
