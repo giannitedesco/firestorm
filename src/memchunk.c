@@ -282,7 +282,7 @@ objcache_t objcache_init(mempool_t pool, const char *label, size_t obj_sz)
 {
 	struct _objcache *o;
 
-	assert(obj_sz < MEMCHUNK_SIZE);
+	assert(obj_sz <= MEMCHUNK_SIZE);
 
 	if ( 0 == obj_sz )
 		return NULL;
