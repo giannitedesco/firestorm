@@ -28,6 +28,7 @@ void tcp_sesh_wait(tcp_sesh_t sesh, tcp_chan_t chan);
 
 struct tcp_app {
 	int (*a_push)(tcp_sesh_t sesh, tcp_chan_t chan);
+	void (*a_state_update)(tcp_sesh_t sesh, tcp_chan_t chan, pkt_t pkt);
 	int (*a_shutdown)(tcp_sesh_t sesh, tcp_chan_t chan);
 	int (*a_init)(tcp_sesh_t sesh);
 	void (*a_fini)(tcp_sesh_t sesh);

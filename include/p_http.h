@@ -30,14 +30,14 @@ struct http_dcb {
 
 struct http_request_dcb {
 	struct http_dcb http;
-	uint8_t proto_vers;
-	uint8_t _pad0;
-	uint16_t port;
 	struct ro_vec uri;
 	struct ro_vec method;
 	struct ro_vec host;
 	struct ro_vec uri_path;
 	struct ro_vec uri_query;
+	uint8_t proto_vers;
+	uint8_t _pad0;
+	uint16_t port;
 };
 
 struct http_response_dcb {

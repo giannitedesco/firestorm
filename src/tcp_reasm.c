@@ -477,30 +477,13 @@ static int do_inject(struct tcp_session *ss, struct tcp_sbuf *s,
 	return 1;
 }
 
-int _tcp_reasm_inject(struct tcp_session *s, uint8_t to_server,
-			uint32_t seq, uint32_t len, const uint8_t *buf)
-{
-	if ( to_server ) {
-		return do_inject(s, s->c_wnd.reasm, seq, len, buf);
-	}else{
-		return do_inject(s, s->s_wnd->reasm, seq, len, buf);
-	}
-}
-
-static void sbuf_free(struct tcp_session *ss, struct tcp_sbuf *s, int abort)
+static void sbuf_free(struct tcp_session *ss, struct tcp_sbuf *s)
 {
 	struct tcp_rbuf *r, *tr;
 	unsigned int i;
 
 	if ( NULL == s )
 		return;
-
-	if ( !abort )
-		if (s->s_reasm_begin != s->s_end) {
-			mesg(M_DEBUG, "whoah %u bytes left %u gaps (%s)",
-				tcp_diff(s->s_reasm_begin, s->s_end),
-				s->s_num_gaps, ss->proto->a_label);
-		}
 
 	if ( s->s_bufs.prev ) {
 		list_for_each_entry_safe(r, tr, &s->s_bufs, r_list) {
@@ -533,17 +516,38 @@ static struct tcp_sbuf *sbuf_new(struct tcp_session *ss, uint32_t isn)
 	return s;
 }
 
-void _tcp_reasm_free(struct tcp_session *s, int abort)
+static void do_abort(struct tcp_session *s, int rst)
 {
-	if ( NULL == s )
-		return;
-
-	sbuf_free(s, s->c_wnd.reasm, abort);
-	if ( s->s_wnd )
-		sbuf_free(s, s->s_wnd->reasm, abort);
+	if ( s->c_wnd.reasm ) {
+		sbuf_free(s, s->c_wnd.reasm);
+		s->c_wnd.reasm = NULL;
+	}
+	if ( s->s_wnd && s->s_wnd->reasm ) {
+		sbuf_free(s, s->s_wnd->reasm);
+		s->s_wnd->reasm = NULL;
+	}
+	if ( s->app )
+		s->app->a_fini(s);
+	s->app = NULL;
+	s->flow = NULL;
 }
 
-int _tcp_reasm_init(struct tcp_session *s)
+static void do_data(struct tcp_session *s, uint8_t to_server,
+			uint32_t seq, uint32_t len, const uint8_t *buf)
+{
+	int ret;
+
+	if ( to_server ) {
+		ret = do_inject(s, s->c_wnd.reasm, seq, len, buf);
+	}else{
+		ret = do_inject(s, s->s_wnd->reasm, seq, len, buf);
+	}
+
+	if ( !ret )
+		do_abort(s, 0);
+}
+
+static int alloc_reasm_buffers(struct tcp_session *s)
 {
 	s->c_wnd.reasm = sbuf_new(s, s->c_wnd.snd_nxt);
 	if ( NULL == s->c_wnd.reasm )
@@ -551,7 +555,7 @@ int _tcp_reasm_init(struct tcp_session *s)
 
 	s->s_wnd->reasm = sbuf_new(s, s->s_wnd->snd_nxt);
 	if ( NULL == s->s_wnd->reasm ) {
-		sbuf_free(s, s->c_wnd.reasm, 1);
+		sbuf_free(s, s->c_wnd.reasm);
 		s->c_wnd.reasm = NULL;
 		return 0;
 	}
@@ -559,41 +563,29 @@ int _tcp_reasm_init(struct tcp_session *s)
 	return 1;
 }
 
-#if 0
-static struct ro_vec *advance_reasm_begin(struct tcp_sbuf *s,
-						struct ro_vec *vec,
-						size_t *numv,
-						size_t bytes)
+void _tcp_reasm_data(struct tcp_session *s, uint8_t to_server,
+			uint32_t seq, uint32_t len, const uint8_t *buf)
 {
-	size_t i, n = *numv;
-
-	s->s_reasm_begin += bytes;
-
-	for(i = 0; i < n; i++, vec++, (*numv)--) {
-		struct tcp_rbuf *r = first_buffer(s);
-
-		s->s_begin = r->r_seq;
-
-		if ( bytes < vec->v_len ) {
-			vec->v_len -= bytes;
-			vec->v_ptr += bytes;
-			break;
-		}
-
-		if ( vec->v_ptr + vec->v_len == r->r_base + RBUF_SIZE ) {
-			rbuf_free(s, r);
-			if ( s->s_contig == r )
-				s->s_contig = NULL;
-		}
-
-		assert(bytes >= vec->v_len);
-		bytes -= vec->v_len;
-	}
-
-	return vec;
-
+	if ( NULL == s->app )
+		return;
+	do_data(s, to_server, seq, len, buf);
 }
-#endif
+
+void _tcp_reasm_init(struct tcp_session *s, uint8_t to_server,
+			uint32_t seq, uint32_t len, const uint8_t *buf)
+{
+	struct tcp_app *app;
+
+	app = _tcp_app_find_by_dport(s->s_port);
+	if ( NULL == app || !app->a_init(s) )
+		return;
+	if ( !alloc_reasm_buffers(s) ) {
+		app->a_fini(s);
+		return;
+	}
+	s->app = app;
+	do_data(s, to_server, seq, len, buf);
+}
 
 static const char *tcp_chan_str(tcp_chan_t chan)
 {
@@ -611,19 +603,44 @@ static const char *tcp_chan_str(tcp_chan_t chan)
 	}
 }
 
-static int stream_data(struct tcp_sbuf *s)
+static size_t contig_bytes(struct tcp_session *sesh, tcp_chan_t chan)
 {
-	return tcp_after(s->s_contig_seq, s->s_reasm_begin);
+	struct tcp_state *s;
+	uint32_t seq;
+
+	assert(chan == TCP_CHAN_TO_CLIENT || chan == TCP_CHAN_TO_SERVER);
+
+	if ( chan == TCP_CHAN_TO_CLIENT )
+		s = sesh->s_wnd;
+	else
+		s = &sesh->c_wnd;
+
+	if ( NULL == s->reasm )
+		return 0;
+
+	seq = s->snd_una;
+	if ( chan & sesh->reasm_shutdown )
+		seq--;
+
+	assert(!tcp_before(s->reasm->s_contig_seq, s->reasm->s_reasm_begin));
+	assert(!tcp_before(seq, s->reasm->s_reasm_begin));
+
+	if ( unlikely(tcp_after(seq, s->reasm->s_contig_seq)) ) {
+		dmesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
+			sesh->app->a_label, s->reasm->s_contig_seq,
+			seq, s->reasm->s_num_rbuf);
+		seq = s->reasm->s_contig_seq;
+	}
+
+	return tcp_diff(s->reasm->s_reasm_begin, seq);
 }
 
 static tcp_chan_t tcp_chan_data(struct tcp_session *s)
 {
 	tcp_chan_t ret = 0;
-	
-	if ( s->c_wnd.reasm )
-		ret |= (stream_data(s->c_wnd.reasm)) ? TCP_CHAN_TO_SERVER : 0;
-	if ( s->s_wnd->reasm )
-		ret |= (stream_data(s->s_wnd->reasm)) ? TCP_CHAN_TO_CLIENT: 0;
+
+	ret |= (contig_bytes(s, TCP_CHAN_TO_SERVER)) ? TCP_CHAN_TO_SERVER : 0;
+	ret |= (contig_bytes(s, TCP_CHAN_TO_CLIENT)) ? TCP_CHAN_TO_CLIENT : 0;
 
 	return ret;
 }
@@ -638,7 +655,9 @@ static const uint8_t *do_reasm(struct tcp_sbuf *s, size_t sz)
 
 	if ( 0 == sz )
 		return NULL;
-	
+
+	/* FIXME: avoid buffer copy if buffer is contained in first rbuf */
+
 	if ( tcp_after(s->s_reasm_begin + sz, s->s_contig_seq) )
 		return NULL;
 
@@ -679,38 +698,9 @@ static const uint8_t *do_reasm(struct tcp_sbuf *s, size_t sz)
 	return buf;
 }
 
-static size_t tcp_stream_bytes(struct tcp_session *sesh, tcp_chan_t chan)
-{
-	struct tcp_state *s;
-	uint32_t seq;
-
-	assert(chan == TCP_CHAN_TO_CLIENT || chan == TCP_CHAN_TO_SERVER);
-
-	if ( chan == TCP_CHAN_TO_CLIENT )
-		s = sesh->s_wnd;
-	else
-		s = &sesh->c_wnd;
-
-	seq = s->snd_una;
-	if ( chan & sesh->reasm_shutdown )
-		seq--;
-
-	assert(tcp_chan_data(sesh) & chan);
-	assert(tcp_after(seq, s->reasm->s_reasm_begin));
-
-	if ( unlikely(tcp_after(seq, s->reasm->s_contig_seq)) ) {
-		dmesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
-			sesh->proto->sd_label, s->reasm->s_contig_seq,
-			seq, s->reasm->s_num_rbuf);
-		seq = s->reasm->s_contig_seq;
-	}
-
-	return tcp_diff(s->reasm->s_reasm_begin, seq);
-}
-
 size_t tcp_sesh_get_bytes(tcp_sesh_t sesh, tcp_chan_t chan)
 {
-	return tcp_stream_bytes(sesh, chan);
+	return contig_bytes(sesh, chan);
 }
 
 static void munch_bytes(struct tcp_sbuf *s, size_t bytes)
@@ -766,6 +756,9 @@ size_t tcp_sesh_inject(tcp_sesh_t sesh, tcp_chan_t chan, size_t bytes)
 	const uint8_t *buf;
 	size_t total_bytes;
 
+	if ( 0 == bytes )
+		return 0;
+
 	switch(chan) {
 	case TCP_CHAN_TO_SERVER:
 		s = &sesh->c_wnd;
@@ -775,7 +768,7 @@ size_t tcp_sesh_inject(tcp_sesh_t sesh, tcp_chan_t chan, size_t bytes)
 		break;
 	default:
 		mesg(M_WARN, "%s: attempted to get bad buf: %s",
-			sesh->proto->a_label, tcp_chan_str(chan));
+			sesh->app->a_label, tcp_chan_str(chan));
 		return bytes;
 	}
 
@@ -791,8 +784,11 @@ size_t tcp_sesh_inject(tcp_sesh_t sesh, tcp_chan_t chan, size_t bytes)
 	dcb->chan = chan;
 
 again:
-	total_bytes = tcp_stream_bytes(sesh, chan);
+	total_bytes = contig_bytes(sesh, chan);
+	assert(bytes <= total_bytes);
 	buf = do_reasm(s->reasm, bytes);
+	if ( NULL == buf )
+		return 0;
 
 	/* to be populated by stream push */
 	pkt.pkt_caplen = total_bytes;
@@ -809,8 +805,8 @@ again:
 	*/
 
 	dmesg(M_DEBUG, "tcp_reasm: %s: injecting %u/%u bytes",
-		sesh->proto->a_label, bytes, total_bytes);
-	sesh->proto->a_decode->d_decode(&pkt);
+		sesh->app->a_label, bytes, total_bytes);
+	sesh->app->a_decode->d_decode(&pkt);
 	if ( pkt.pkt_len > bytes ) {
 		if ( pkt.pkt_len <= total_bytes ) {
 			bytes = pkt.pkt_len;
@@ -820,7 +816,11 @@ again:
 	}else
 		bytes = pkt.pkt_len;
 
-	munch_bytes(s->reasm, bytes);
+	if ( bytes ) {
+		munch_bytes(s->reasm, bytes);
+		pkt_inject(&pkt);
+		sesh->app->a_state_update(sesh, chan, &pkt);
+	}
 
 	return bytes;
 }
@@ -868,11 +868,11 @@ static int assure_vbuf(struct tcp_sbuf *s, struct ro_vec **vec, size_t *numvec)
 
 	if ( *numvec >= n )
 		return 1;
-	
+
 	new = realloc(*vec, sizeof(*new) * n);
 	if ( NULL == new )
 		return 0;
-	
+
 	*vec = new;
 	*numvec = n;
 	return 1;
@@ -896,7 +896,7 @@ const struct ro_vec *tcp_sesh_get_buf(tcp_sesh_t sesh, tcp_chan_t chan,
 		break;
 	default:
 		mesg(M_WARN, "%s: attempted to get bad buf: %s",
-			sesh->proto->a_label, tcp_chan_str(chan));
+			sesh->app->a_label, tcp_chan_str(chan));
 		return NULL;
 	}
 
@@ -906,7 +906,7 @@ const struct ro_vec *tcp_sesh_get_buf(tcp_sesh_t sesh, tcp_chan_t chan,
 	if ( !assure_vbuf(s->reasm, &vbuf, &vbuf_sz) )
 		return NULL;
 
-	b = tcp_stream_bytes(sesh, chan);
+	b = contig_bytes(sesh, chan);
 	if ( 0 == b )
 		return NULL;
 
@@ -920,7 +920,7 @@ const struct ro_vec *tcp_sesh_get_buf(tcp_sesh_t sesh, tcp_chan_t chan,
 	return vec;
 }
 
-int _tcp_stream_push(struct tcp_session *s, tcp_chan_t chan)
+static void do_push(struct tcp_session *s, tcp_chan_t chan)
 {
 	tcp_chan_t achan;
 	int ret;
@@ -931,40 +931,69 @@ int _tcp_stream_push(struct tcp_session *s, tcp_chan_t chan)
 	dmesg(M_ERR, "available chans: %s", tcp_chan_str(achan));
 
 	for(; achan & s->reasm_flags; achan = tcp_chan_data(s) ) {
-		dmesg(M_ERR, "%s_push: %s", s->proto->a_label,
+		dmesg(M_ERR, "%s_push: %s", s->app->a_label,
 			tcp_chan_str(achan));
-		ret = s->proto->a_push(s, achan);
+		ret = s->app->a_push(s, achan);
 		if ( ret < 0 )
-			dmesg(M_CRIT, "%s: desynchronised", s->proto->a_label);
+			mesg(M_CRIT, "%s: desynchronised", s->app->a_label);
 		if ( ret <= 0 )
 			break;
 	}
-
-	return 1;
 }
 
-int _tcp_stream_shutdown(struct tcp_session *s, tcp_chan_t chan)
+void _tcp_reasm_ack(struct tcp_session *s, uint8_t to_server)
 {
-	tcp_chan_t achan;
+	if ( NULL == s->app )
+		return;
+
+	do_push(s, (to_server) ?
+			TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT);
+}
+
+void _tcp_reasm_abort(struct tcp_session *s, int rst)
+{
+	if ( NULL == s->app )	
+		return;
+	do_abort(s, rst);
+}
+
+size_t _tcp_reasm_buffer_size(struct tcp_session *s)
+{
+	size_t ret = 0;
+
+	if ( NULL == s->app )
+		return ret;
+
+	if ( s->c_wnd.reasm )
+		ret += s->c_wnd.reasm->s_num_rbuf << RBUF_SHIFT;
+	if ( s->s_wnd && s->s_wnd->reasm )
+		ret += s->s_wnd->reasm->s_num_rbuf << RBUF_SHIFT;
+
+	return ret;
+}
+
+void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
+{
+	tcp_chan_t chan;
+
+	if ( NULL == s->app )
+		return;
+
+	chan = (to_server) ? TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT;
 
 	s->reasm_shutdown |= chan;
 
-	achan = tcp_chan_data(s);
-
-	mesg(M_ERR, "stream_shutdown called: %s", tcp_chan_str(chan));
-
-	mesg(M_ERR, "remaining buffers: %s", tcp_chan_str(achan));
-
-	chan &= achan;
-
+	do_push(s, tcp_chan_data(s));
 	mesg(M_ERR, "stream_shutdown: %s", tcp_chan_str(chan));
+	s->app->a_shutdown(s, chan);
 
-	if ( chan & TCP_CHAN_TO_CLIENT ) {
-		sbuf_free(s, s->s_wnd->reasm, 0);
+	if ( to_server ) {
+		sbuf_free(s, s->c_wnd.reasm);
+		s->c_wnd.reasm = NULL;
+	}else{
+		sbuf_free(s, s->s_wnd->reasm);
 		s->s_wnd->reasm = NULL;
 	}
-
-	return 1;
 }
 
 
@@ -982,7 +1011,7 @@ void tcp_sesh_wait(tcp_sesh_t sesh, tcp_chan_t chan)
 {
 	if ( chan & sesh->reasm_shutdown ) {
 		mesg(M_WARN, "%s: attempted to wait on shutdown chan: %s",
-			sesh->proto->a_label,
+			sesh->app->a_label,
 			tcp_chan_str(chan & sesh->reasm_shutdown));
 		chan &= ~sesh->reasm_shutdown;
 	}

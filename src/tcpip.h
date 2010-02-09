@@ -67,7 +67,7 @@ struct tcp_session {
 	struct tcp_state c_wnd;
 	struct tcp_state *s_wnd;
 
-	const struct tcp_app *proto;
+	const struct tcp_app *app;
 	void *flow;
 
 	struct list_head lru;
@@ -85,14 +85,15 @@ void *_tcp_alloc(struct tcp_session *s, objcache_t o, int reasm);
 
 int _tcp_reasm_ctor(mempool_t pool);
 void _tcp_reasm_dtor(void);
-int _tcp_reasm_init(struct tcp_session *s);
-int _tcp_reasm_inject(struct tcp_session *s, uint8_t to_server,
-			uint32_t seq, uint32_t len, const uint8_t *buf);
-int _tcp_stream_push(struct tcp_session *s, tcp_chan_t chan);
-int _tcp_stream_shutdown(struct tcp_session *s, tcp_chan_t chan);
-void _tcp_reasm_free(struct tcp_session *s, int abort);
 
-void _tcpstream_decode(struct _pkt *pkt);
+void _tcp_reasm_init(struct tcp_session *s, uint8_t to_server,
+			uint32_t seq, uint32_t len, const uint8_t *buf);
+void _tcp_reasm_data(struct tcp_session *s, uint8_t to_server,
+			uint32_t seq, uint32_t len, const uint8_t *buf);
+void _tcp_reasm_ack(struct tcp_session *s, uint8_t to_server);
+void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server);
+void _tcp_reasm_abort(struct tcp_session *s, int rst);
+size_t _tcp_reasm_buffer_size(struct tcp_session *s);
 
 struct tcp_app *_tcp_app_find_by_dport(uint16_t dport);
 size_t _tcp_app_max_dcb(void);
