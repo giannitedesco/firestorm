@@ -13,7 +13,7 @@
 #include <limits.h>
 #include <ctype.h>
 
-#if 1
+#if 0
 #define dmesg mesg
 #define dhex_dump hex_dump
 #else
@@ -204,16 +204,13 @@ static void smtp_decode(struct _pkt *pkt)
 
 	switch(f->state) {
 	case SMTP_STATE_INIT:
+	case SMTP_STATE_RESP:
 		assert(tcp->chan == TCP_CHAN_TO_CLIENT);
 		ret = decode_response(pkt, &line);
 		break;
 	case SMTP_STATE_CMD:
 		assert(tcp->chan == TCP_CHAN_TO_SERVER);
 		ret = decode_request(pkt, &line);
-		break;
-	case SMTP_STATE_RESP:
-		assert(tcp->chan == TCP_CHAN_TO_CLIENT);
-		ret = decode_response(pkt, &line);
 		break;
 	case SMTP_STATE_DATA:
 		assert(tcp->chan == TCP_CHAN_TO_SERVER);
