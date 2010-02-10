@@ -798,6 +798,9 @@ again:
 	pkt.pkt_end = buf + pkt.pkt_len;
 	pkt.pkt_nxthdr = pkt.pkt_base;
 
+	/* TODO: provide mechanism to detach protocols when encountering
+	 * an invalid message. In the case of heuristically discovered
+	 * protocols this will give us a chance to re-synchronize */
 	dmesg(M_DEBUG, "tcp_reasm: %s: injecting %u/%u bytes",
 		sesh->app->a_label, bytes, total_bytes);
 	sesh->app->a_decode->d_decode(&pkt);
@@ -973,6 +976,7 @@ size_t _tcp_reasm_buffer_size(struct tcp_session *s)
 void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
 {
 	tcp_chan_t chan;
+	size_t bytes;
 
 	if ( NULL == s->app )
 		return;
@@ -987,23 +991,18 @@ void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
 	s->app->a_shutdown(s, chan);
 
 	if ( to_server ) {
-		size_t bytes;
 		bytes = contig_bytes(s, TCP_CHAN_TO_SERVER);
-		if ( bytes )
-			mesg(M_WARN, "TO_SERVER %u bytes left on shutdown",
-				bytes);
 		sbuf_free(s, s->c_wnd.reasm);
 		s->c_wnd.reasm = NULL;
 	}else{
-		size_t bytes;
 		bytes = contig_bytes(s, TCP_CHAN_TO_CLIENT);
-		if ( bytes )
-			mesg(M_WARN, "TO_CLIENT %u bytes left on shutdown",
-				bytes);
 		sbuf_free(s, s->s_wnd->reasm);
 		s->s_wnd->reasm = NULL;
 	}
 
+	if ( bytes )
+		mesg(M_WARN, "%s: TO_CLIENT %u bytes left on shutdown",
+			s->app->a_label, bytes);
 	if ( s->reasm_shutdown & (TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT) ) {
 		s->app->a_fini(s);
 		s->app = NULL;
