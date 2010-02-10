@@ -108,7 +108,7 @@ struct tcp_app *_tcp_app_find_by_dport(uint16_t dport)
 	return NULL;
 }
 
-size_t tcp_app_single_line(struct ro_vec *vec, size_t numv, size_t bytes,
+size_t tcp_app_single_line(const struct ro_vec *vec, size_t numv, size_t bytes,
 				size_t *bufsz)
 {
 	size_t v, i, b;
