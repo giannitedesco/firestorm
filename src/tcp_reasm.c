@@ -929,8 +929,8 @@ static void do_push(struct tcp_session *s, tcp_chan_t chan)
 	dmesg(M_ERR, "available chans: %s", tcp_chan_str(achan));
 
 	for(; achan & s->reasm_flags; achan = tcp_chan_data(s) ) {
-		dmesg(M_ERR, "%s_push: %s", s->app->a_label,
-			tcp_chan_str(achan));
+		dmesg(M_ERR, "%s_push: %s waiting for %s", s->app->a_label,
+			tcp_chan_str(achan), tcp_chan_str(s->reasm_flags));
 		ret = s->app->a_push(s, achan);
 		if ( ret < 0 )
 			mesg(M_CRIT, "%s: desynchronised", s->app->a_label);
@@ -979,16 +979,27 @@ void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
 
 	chan = (to_server) ? TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT;
 
+	do_push(s, tcp_chan_data(s));
+
 	s->reasm_shutdown |= chan;
 
-	do_push(s, tcp_chan_data(s));
 	mesg(M_ERR, "stream_shutdown: %s", tcp_chan_str(chan));
 	s->app->a_shutdown(s, chan);
 
 	if ( to_server ) {
+		size_t bytes;
+		bytes = contig_bytes(s, TCP_CHAN_TO_SERVER);
+		if ( bytes )
+			mesg(M_WARN, "TO_SERVER %u bytes left on shutdown",
+				bytes);
 		sbuf_free(s, s->c_wnd.reasm);
 		s->c_wnd.reasm = NULL;
 	}else{
+		size_t bytes;
+		bytes = contig_bytes(s, TCP_CHAN_TO_CLIENT);
+		if ( bytes )
+			mesg(M_WARN, "TO_CLIENT %u bytes left on shutdown",
+				bytes);
 		sbuf_free(s, s->s_wnd->reasm);
 		s->s_wnd->reasm = NULL;
 	}
@@ -1017,6 +1028,7 @@ void tcp_sesh_wait(tcp_sesh_t sesh, tcp_chan_t chan)
 		mesg(M_WARN, "%s: attempted to wait on shutdown chan: %s",
 			sesh->app->a_label,
 			tcp_chan_str(chan & sesh->reasm_shutdown));
+		asm volatile ("int $0x3\n");
 		chan &= ~sesh->reasm_shutdown;
 	}
 
