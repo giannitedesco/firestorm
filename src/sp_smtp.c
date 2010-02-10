@@ -145,9 +145,6 @@ static int decode_request(struct _pkt *pkt, struct ro_vec *v)
 
 	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
 
-	if ( v->v_len < 4 )
-		return 0;
-
 	r.cmd.v_ptr = v->v_ptr;
 	r.cmd.v_len = 0;
 
