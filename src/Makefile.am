@@ -48,12 +48,12 @@ firestorm_SOURCES = \
 	\
 	sp_http.c \
 	sp_smtp.c \
+	sp_pop3.c \
 	\
 	s_pipeline.c \
 	s_mesg.c \
 	sensor.c
 
-#	sp_pop3.c \
 #	sp_ftp.c \
 #	\
 #	sp_smb.c \

@@ -12,7 +12,7 @@
 
 #include <ctype.h>
 
-#if 0
+#if 1
 #define dmesg mesg
 #define dhex_dump hex_dump
 #else
@@ -65,46 +65,9 @@ static int parse_response(struct pop3_response_dcb *r, struct ro_vec *v)
 	return 1;
 }
 
-static int pop3_content(struct _pkt *pkt, struct ro_vec *v)
+static int decode_response(struct _pkt *pkt, struct ro_vec *v)
 {
-	struct pop3_cont_dcb *dcb;
-
-	dcb = (struct pop3_cont_dcb *)decode_layer0(pkt, &p_pop3_cont);
-	if ( NULL == dcb )
-		return 0;
-
-	pkt->pkt_caplen = pkt->pkt_len = v->v_len;
-	pkt->pkt_base = v->v_ptr;
-	pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
-	pkt_inject(pkt);
-
-	return 1;
-}
-
-static int do_response(struct _pkt *pkt, struct ro_vec *v)
-{
-	const struct tcpstream_dcb *stream;
-	struct pop3_flow *f;
 	struct pop3_response_dcb *r;
-
-	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = stream->s->flow;
-
-	switch(f->state) {
-	case POP3_STATE_INIT:
-	case POP3_STATE_RESP:
-	case POP3_STATE_RESP_DATA:
-		break;
-	case POP3_STATE_DATA:
-		if ( v->v_len == 1 && v->v_ptr[0] == '.' ) {
-			f->state = POP3_STATE_CMD;
-			return 1;
-		}else{
-			return pop3_content(pkt, v);
-		}
-	default:
-		return 1;
-	}
 
 	r = (struct pop3_response_dcb *)decode_layer(pkt, &p_pop3_resp);
 	if ( NULL == r )
@@ -112,23 +75,21 @@ static int do_response(struct _pkt *pkt, struct ro_vec *v)
 
 	if ( !parse_response(r, v) ) {
 		mesg(M_ERR, "pop3: response: %.*s", v->v_len, v->v_ptr);
-		return 1;
+		return 0;
 	}
 
-	if ( f->state == POP3_STATE_RESP_DATA && r->ok ) {
-		f->state = POP3_STATE_DATA;
-	}else{
-		f->state = POP3_STATE_CMD;
-	}
+	return 1;
+}
 
-	dmesg(M_DEBUG, "<<< %s %.*s",
-		(r->ok) ? "OK" : "ERR",
-		r->str.v_len, r->str.v_ptr);
+static int decode_content(struct _pkt *pkt, struct ro_vec *v)
+{
+	struct pop3_cont_dcb *dcb;
 
-	pkt->pkt_caplen = pkt->pkt_len = v->v_len;
-	pkt->pkt_base = v->v_ptr;
-	pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
-	pkt_inject(pkt);
+	dcb = (struct pop3_cont_dcb *)decode_layer0(pkt, &p_pop3_cont);
+	if ( NULL == dcb )
+		return 0;
+
+	dcb->content = *v;
 	return 1;
 }
 
@@ -155,13 +116,8 @@ static const struct pop3_cmd cmds[] = {
 static int dispatch_req(struct _pkt *pkt, struct pop3_request_dcb *r,
 			 struct ro_vec *v)
 {
-	struct pop3_request_dcb *dcb;
 	const struct pop3_cmd *c;
 	unsigned int n;
-
-	dmesg(M_DEBUG, ">>> %.*s %.*s",
-		r->cmd.v_len, r->cmd.v_ptr,
-		r->str.v_len, r->str.v_ptr);
 
 	for(n = sizeof(cmds)/sizeof(*cmds), c = cmds; n; ) {
 		unsigned int i;
@@ -181,33 +137,13 @@ static int dispatch_req(struct _pkt *pkt, struct pop3_request_dcb *r,
 		}
 	}
 
-	/* generic cmd/string dcb */
-	dcb = (struct pop3_request_dcb *)decode_layer0(pkt, &p_pop3_req);
-	if ( NULL == dcb )
-		return 0;
-
-	dcb->cmd = r->cmd;
-	dcb->str = r->str;
-
-	pkt->pkt_caplen = pkt->pkt_len = v->v_len;
-	pkt->pkt_base = v->v_ptr;
-	pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
-	pkt_inject(pkt);
 	return 1;
 }
 
 static int parse_request(struct _pkt *pkt, struct pop3_request_dcb *r,
 				struct ro_vec *v)
 {
-	const struct tcpstream_dcb *stream;
-	struct pop3_flow *f;
 	const uint8_t *ptr, *end;
-
-	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = stream->s->flow;
-
-	if ( v->v_len < 4 )
-		return 0;
 
 	r->cmd.v_ptr = v->v_ptr;
 	r->cmd.v_len = 0;
@@ -223,120 +159,258 @@ static int parse_request(struct _pkt *pkt, struct pop3_request_dcb *r,
 	r->str.v_len = end - ptr;
 	r->str.v_ptr = (r->str.v_len) ? ptr : NULL;
 
-	return dispatch_req(pkt, r, v);
+	return 1;
 }
 
-static int do_request(struct _pkt *pkt, struct ro_vec *v)
+static int decode_request(struct _pkt *pkt, struct ro_vec *v)
 {
-	const struct tcpstream_dcb *stream;
-	struct pop3_flow *f;
-	struct pop3_request_dcb r;
-	struct ro_vec data = {
-		.v_ptr = (uint8_t *)"RETR",
-		.v_len = 4,
-	};
+	struct pop3_request_dcb *dcb;
 
-	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = stream->s->flow;
-
-	if ( f->state != POP3_STATE_CMD )
+	dcb = (struct pop3_request_dcb *)decode_layer0(pkt, &p_pop3_req);
+	if ( NULL == dcb )
 		return 0;
 
-	if ( !parse_request(pkt, &r, v) ) {
+	if ( !parse_request(pkt, dcb, v) ) {
 		mesg(M_ERR, "pop3: request: %.*s", v->v_len, v->v_ptr);
 		return 1;
 	}
 
-	if ( vcasecmp(&data, &r.cmd) ) {
-		f->state = POP3_STATE_RESP;
-	}else{
-		f->state = POP3_STATE_RESP_DATA;
-	}
-	return 1;
+	return dispatch_req(pkt, dcb, v);
 }
 
-static int pop3_line(struct _pkt *pkt, const uint8_t *ptr, size_t len)
+static int parse_line(struct _pkt *pkt, struct ro_vec *vec)
 {
-	const struct tcpstream_dcb *stream;
-	struct pop3_flow *f;
-	struct ro_vec vec;
+	const uint8_t *ptr;
 
-	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = stream->s->flow;
+	vec->v_ptr = pkt->pkt_base;
+	for(vec->v_len = 0, ptr = vec->v_ptr;
+		*ptr != '\r' && *ptr != '\n';
+		ptr++, vec->v_len++)
+		/* o nothing */;
+	
+	return (*ptr == '\r' || *ptr == '\n');
+}
 
-	assert(f->state < POP3_STATE_MAX);
+static void pop3_decode(struct _pkt *pkt)
+{
+	const struct pop3_flow *f;
+	const struct tcpstream_dcb *tcp;
+	struct ro_vec line;
+	int ret;
 
-	vec.v_ptr = ptr;
-	vec.v_len = len;
+	tcp = (struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = tcp_sesh_get_flow(tcp->sesh);
 
-	switch(stream->chan) {
-	case TCP_CHAN_TO_CLIENT:
-		return do_response(pkt, &vec);
-	case TCP_CHAN_TO_SERVER:
-		return do_request(pkt, &vec);
+	if ( !parse_line(pkt, &line) ) {
+		pkt->pkt_len = 0;
+		return;
+	}
+
+	switch(f->state) {
+	case POP3_STATE_CMD:
+		assert(tcp->chan == TCP_CHAN_TO_SERVER);
+		ret = decode_request(pkt, &line);
+		break;
+	case POP3_STATE_INIT:
+	case POP3_STATE_RESP:
+	case POP3_STATE_RESP_DATA:
+		assert(tcp->chan == TCP_CHAN_TO_CLIENT);
+		ret = decode_response(pkt, &line);
+		break;
+	case POP3_STATE_DATA:
+		assert(tcp->chan == TCP_CHAN_TO_CLIENT);
+		ret = decode_content(pkt, &line);
+		break;
 	default:
+		mesg(M_CRIT, "pop3: corrupt flow");
+		ret = 0;
 		break;
 	}
 
-	return 1;
+	if ( !ret )
+		pkt->pkt_len = 0;
 }
 
-static ssize_t pop3_push(struct _pkt *pkt, struct ro_vec *vec, size_t numv,
-			 size_t bytes)
+static void state_update(tcp_sesh_t sesh, tcp_chan_t chan, pkt_t pkt)
 {
-	const struct tcpstream_dcb *stream;
+	const struct tcpstream_dcb *tcp;
+	struct _dcb *dcb;
 	struct pop3_flow *f;
-	const uint8_t *buf;
-	ssize_t ret;
-	size_t sz;
 
-	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = stream->s->flow;
+	tcp = (struct tcpstream_dcb *)pkt->pkt_dcb;
+	dcb = tcp->dcb.dcb_next;
+	f = tcp_sesh_get_flow(sesh);
 
-	ret = stream_push_line(vec, numv, bytes, &sz);
-	if ( ret <= 0 )
-		return ret;
+	assert(dcb->dcb_proto == &p_pop3_req ||
+		dcb->dcb_proto == &p_pop3_resp ||
+		dcb->dcb_proto == &p_pop3_cont);
 
-	if ( sz > vec[0].v_len ) {
-		buf = stream->reasm(stream->sbuf, sz);
-	}else{
-		buf = vec[0].v_ptr;
+	if ( dcb->dcb_proto == &p_pop3_req ) {
+		struct pop3_request_dcb *r;
+		static const struct ro_vec retr = {
+			.v_ptr = (uint8_t *)"RETR",
+			.v_len = 4,
+		};
+
+		r = (struct pop3_request_dcb *)dcb;
+
+		if ( vcasecmp(&retr, &r->cmd) ) {
+			f->state = POP3_STATE_RESP;
+		}else{
+			f->state = POP3_STATE_RESP_DATA;
+		}
+
+		dmesg(M_DEBUG, ">>> %.*s %.*s",
+			r->cmd.v_len, r->cmd.v_ptr,
+			r->str.v_len, r->str.v_ptr);
+	}else if ( dcb->dcb_proto == &p_pop3_resp ) {
+		struct pop3_response_dcb *r;
+		r = (struct pop3_response_dcb *)dcb;
+
+		if ( f->state == POP3_STATE_RESP_DATA && r->ok ) {
+			f->state = POP3_STATE_DATA;
+		}else{
+			f->state = POP3_STATE_CMD;
+		}
+
+		dmesg(M_DEBUG, "<<< %s %.*s",
+			(r->ok) ? "OK" : "ERR",
+			r->str.v_len, r->str.v_ptr);
+	}else if ( dcb->dcb_proto == &p_pop3_cont ) {
+		struct pop3_cont_dcb *r;
+		r = (struct pop3_cont_dcb *)dcb;
+
+		if ( r->content.v_len == 1 && r->content.v_ptr[0] == '.' )
+			f->state = POP3_STATE_CMD;
 	}
 
-	if ( !pop3_line(pkt, buf, sz) )
-		ret = 0;
-
-	return ret;
+	switch(f->state) {
+	case POP3_STATE_CMD:
+		tcp_sesh_wait(sesh, TCP_CHAN_TO_SERVER);
+		break;
+	case POP3_STATE_INIT:
+	case POP3_STATE_RESP:
+	case POP3_STATE_RESP_DATA:
+	case POP3_STATE_DATA:
+		tcp_sesh_wait(sesh, TCP_CHAN_TO_CLIENT);
+		break;
+	default:
+		mesg(M_CRIT, "pop3: corrupt flow");
+		return;
+	}
 }
 
-static int flow_init(void *priv)
+static int push(tcp_sesh_t sesh, tcp_chan_t chan)
 {
-	struct tcp_session *s = priv;
-	struct pop3_flow *f = s->flow;
-	f->state = POP3_STATE_INIT;
+	const struct pop3_flow *f;
+	const struct ro_vec *vec;
+	size_t numv, bytes, llen, b;
+	tcp_chan_t c;
+
+	f = tcp_sesh_get_flow(sesh);
+	switch(f->state) {
+	case POP3_STATE_CMD:
+		c = TCP_CHAN_TO_SERVER;
+		break;
+	case POP3_STATE_INIT:
+	case POP3_STATE_RESP:
+	case POP3_STATE_RESP_DATA:
+	case POP3_STATE_DATA:
+		c = TCP_CHAN_TO_CLIENT;
+		break;
+	default:
+		mesg(M_CRIT, "pop3: corrupt flow");
+		return -1;
+	}
+
+	assert(chan & c);
+
+	vec = tcp_sesh_get_buf(sesh, c, &numv, &bytes);
+	if ( NULL == vec )
+		return 0;
+
+	b = tcp_app_single_line(vec, numv, bytes, &llen);
+	if ( 0 == b )
+		return 0;
+
+	tcp_sesh_inject(sesh, c, b);
+
+	return 1;
+}
+static objcache_t flow_cache;
+
+static int shutdown(tcp_sesh_t sesh, tcp_chan_t chan)
+{
 	return 1;
 }
 
-static void flow_fini(void *priv)
+static int init(tcp_sesh_t sesh)
 {
+	struct pop3_flow *f;
+
+	f = objcache_alloc(flow_cache);
+	if ( NULL == f )
+		return 0;
+
+	dmesg(M_DEBUG, "pop3_init");
+	f->state = POP3_STATE_INIT;
+
+	tcp_sesh_set_flow(sesh, f);
+	tcp_sesh_wait(sesh, TCP_CHAN_TO_CLIENT);
+	return 1;
 }
 
+static void fini(tcp_sesh_t sesh)
+{
+	struct pop3_flow *f;
 
-static struct _sdecode sd_pop3 = {
-	.sd_label = "pop3",
-	.sd_push = pop3_push,
-	.sd_flow_init = flow_init,
-	.sd_flow_fini = flow_fini,
-	.sd_flow_sz = sizeof(struct pop3_flow),
-	.sd_max_msg = 1024,
+	f = tcp_sesh_get_flow(sesh);
+	if ( NULL == f )
+		return;
+
+	dmesg(M_DEBUG, "pop3_fini");
+	objcache_free2(flow_cache, f);
+}
+
+static int pop3_flow_ctor(void)
+{
+	flow_cache = objcache_init(NULL, "pop3_flows",
+					sizeof(struct pop3_flow));
+	if ( NULL == flow_cache )
+		return 0;
+
+	return 1;
+}
+
+static void pop3_flow_dtor(void)
+{
+	objcache_fini(flow_cache);
+}
+
+static struct _decoder pop3_decoder = {
+	.d_decode = pop3_decode,
+	.d_flow_ctor = pop3_flow_ctor,
+	.d_flow_dtor = pop3_flow_dtor,
+	.d_label = "pop3",
+};
+
+static struct tcp_app pop3_app = {
+	.a_push = push,
+	.a_state_update = state_update,
+	.a_shutdown = shutdown,
+	.a_init = init,
+	.a_fini = fini,
+	.a_decode = &pop3_decoder,
+	.a_label = "pop3",
 };
 
 static void __attribute__((constructor)) pop3_ctor(void)
 {
-	sdecode_add(&sd_pop3);
-	sdecode_register(&sd_pop3, SNS_TCP, sys_be16(110));
+	decoder_add(&pop3_decoder);
+	proto_add(&pop3_decoder, &p_pop3_req);
+	proto_add(&pop3_decoder, &p_pop3_resp);
+	proto_add(&pop3_decoder, &p_pop3_cont);
 
-	proto_add(&_tcpstream_decoder, &p_pop3_req);
-	proto_add(&_tcpstream_decoder, &p_pop3_resp);
-	proto_add(&_tcpstream_decoder, &p_pop3_cont);
+	tcp_app_register(&pop3_app);
+	tcp_app_register_dport(&pop3_app, 110);
 }

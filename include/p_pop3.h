@@ -27,6 +27,7 @@ struct pop3_request_dcb {
 
 struct pop3_cont_dcb {
 	struct _dcb dcb;
+	struct ro_vec content;
 };
 
 #endif /* _P_POP3_HEADER_INCLUDED_ */
