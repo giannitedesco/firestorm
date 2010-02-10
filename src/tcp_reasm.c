@@ -631,18 +631,17 @@ static size_t contig_bytes(struct tcp_session *sesh, tcp_chan_t chan)
 		return 0;
 
 	seq = s->snd_una;
-	if ( chan & sesh->reasm_fin_sent )
+	if ( chan & sesh->reasm_fin_sent && seq == s->snd_nxt )
 		seq--;
 
 	assert(!tcp_before(s->reasm->s_contig_seq, s->reasm->s_reasm_begin));
 	if ( tcp_before(seq, s->reasm->s_reasm_begin) ) {
-		/* Not wierd, need fin_sent flag after all, duh */
 		mesg(M_CRIT, "wierd? %u %u", seq, s->reasm->s_reasm_begin);
 		return 0;
 	}
 
 	if ( unlikely(tcp_after(seq, s->reasm->s_contig_seq)) ) {
-		dmesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
+		mesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
 			sesh->app->a_label, s->reasm->s_contig_seq,
 			seq, s->reasm->s_num_rbuf);
 		seq = s->reasm->s_contig_seq;
@@ -985,10 +984,40 @@ void _tcp_reasm_fin_sent(struct tcp_session *s, uint8_t to_server)
 	s->reasm_fin_sent |= chan;
 }
 
+static void do_shutdown(struct tcp_session *s, tcp_chan_t chan)
+{
+	struct tcp_sbuf **pptr;
+	size_t bytes;
+
+	switch(chan) {
+	case TCP_CHAN_TO_SERVER:
+		pptr = &s->c_wnd.reasm;
+		break;
+	case TCP_CHAN_TO_CLIENT:
+		pptr = &s->s_wnd->reasm;
+		break;
+	default:
+		assert(0);
+		break;
+	}
+
+	bytes = contig_bytes(s, chan);
+	if ( bytes ) {
+		const uint8_t *buf;
+		mesg(M_WARN, "%s: TO_CLIENT %u bytes left on shutdown",
+			s->app->a_label, bytes);
+		buf = do_reasm(*pptr, bytes);
+		if ( NULL != buf )
+			hex_dump(buf, (bytes > 0x100) ? 0x100 : bytes, 16);
+	}
+
+
+	sbuf_free(s, *pptr);
+	*pptr = NULL;
+}
 void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
 {
 	tcp_chan_t chan;
-	size_t bytes;
 
 	if ( NULL == s->app )
 		return;
@@ -1002,20 +1031,7 @@ void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
 	dmesg(M_ERR, "stream_shutdown: %s", tcp_chan_str(chan));
 	s->app->a_shutdown(s, chan);
 
-	if ( to_server ) {
-		bytes = contig_bytes(s, TCP_CHAN_TO_SERVER);
-		sbuf_free(s, s->c_wnd.reasm);
-		s->c_wnd.reasm = NULL;
-	}else{
-		bytes = contig_bytes(s, TCP_CHAN_TO_CLIENT);
-		sbuf_free(s, s->s_wnd->reasm);
-		s->s_wnd->reasm = NULL;
-	}
-
-	if ( bytes ) {
-		mesg(M_WARN, "%s: TO_CLIENT %u bytes left on shutdown",
-			s->app->a_label, bytes);
-	}
+	do_shutdown(s, (to_server) ? TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT);
 
 	if ( s->reasm_shutdown & (TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT) ) {
 		s->app->a_fini(s);
