@@ -126,40 +126,35 @@ static int dispatch_req(struct _pkt *pkt, struct smtp_request_dcb *r,
 		}
 	}
 
-	/* generic cmd/string dcb */
-	dcb = (struct smtp_request_dcb *)decode_layer0(pkt, &p_smtp_req);
-	if ( NULL == dcb )
-		return 0;
-
-	dcb->cmd = r->cmd;
-	dcb->str = r->str;
-
 	return 1;
 }
 
 static int decode_request(struct _pkt *pkt, struct ro_vec *v)
 {
 	const struct tcpstream_dcb *stream;
-	struct smtp_request_dcb r;
+	struct smtp_request_dcb *r;
 	const uint8_t *ptr, *end;
 
 	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	r = (struct smtp_request_dcb *)decode_layer0(pkt, &p_smtp_req);
+	if ( NULL == r )
+		return 0;
 
-	r.cmd.v_ptr = v->v_ptr;
-	r.cmd.v_len = 0;
+	r->cmd.v_ptr = v->v_ptr;
+	r->cmd.v_len = 0;
 
 	for(ptr = v->v_ptr, end = v->v_ptr + v->v_len; ptr < end; ptr++) {
 		if ( isspace(*ptr) )
 			break;
-		r.cmd.v_len++;
+		r->cmd.v_len++;
 	}
 	for(; ptr < end && isspace(*ptr); ptr++)
 		/* nothing */;
 
-	r.str.v_len = end - ptr;
-	r.str.v_ptr = (r.str.v_len) ? ptr : NULL;
+	r->str.v_len = end - ptr;
+	r->str.v_ptr = (r->str.v_len) ? ptr : NULL;
 
-	return dispatch_req(pkt, &r, v);
+	return dispatch_req(pkt, r, v);
 }
 
 static int decode_content(struct _pkt *pkt, struct ro_vec *v)
