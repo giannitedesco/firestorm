@@ -581,6 +581,10 @@ void _tcp_reasm_init(struct tcp_session *s, uint8_t to_server,
 {
 	struct tcp_app *app;
 
+	s->reasm_flags = 0;
+	s->reasm_shutdown = 0;
+	s->reasm_fin_sent = 0;
+
 	app = _tcp_app_find_by_dport(s->s_port);
 	if ( NULL == app || !app->a_init(s) )
 		return;
@@ -627,11 +631,12 @@ static size_t contig_bytes(struct tcp_session *sesh, tcp_chan_t chan)
 		return 0;
 
 	seq = s->snd_una;
-	if ( chan & sesh->reasm_shutdown )
+	if ( chan & sesh->reasm_fin_sent )
 		seq--;
 
 	assert(!tcp_before(s->reasm->s_contig_seq, s->reasm->s_reasm_begin));
 	if ( tcp_before(seq, s->reasm->s_reasm_begin) ) {
+		/* Not wierd, need fin_sent flag after all, duh */
 		mesg(M_CRIT, "wierd? %u %u", seq, s->reasm->s_reasm_begin);
 		return 0;
 	}
@@ -973,6 +978,13 @@ size_t _tcp_reasm_buffer_size(struct tcp_session *s)
 	return ret;
 }
 
+void _tcp_reasm_fin_sent(struct tcp_session *s, uint8_t to_server)
+{
+	tcp_chan_t chan;
+	chan = (to_server) ? TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT;
+	s->reasm_fin_sent |= chan;
+}
+
 void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
 {
 	tcp_chan_t chan;
@@ -987,7 +999,7 @@ void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
 
 	s->reasm_shutdown |= chan;
 
-	mesg(M_ERR, "stream_shutdown: %s", tcp_chan_str(chan));
+	dmesg(M_ERR, "stream_shutdown: %s", tcp_chan_str(chan));
 	s->app->a_shutdown(s, chan);
 
 	if ( to_server ) {
@@ -1000,9 +1012,11 @@ void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
 		s->s_wnd->reasm = NULL;
 	}
 
-	if ( bytes )
+	if ( bytes ) {
 		mesg(M_WARN, "%s: TO_CLIENT %u bytes left on shutdown",
 			s->app->a_label, bytes);
+	}
+
 	if ( s->reasm_shutdown & (TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT) ) {
 		s->app->a_fini(s);
 		s->app = NULL;

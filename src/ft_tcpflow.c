@@ -654,6 +654,7 @@ static void fin_processing(struct tcpseg *cur, struct tcp_session *s)
 		dmesg(M_DEBUG, "FIN in wrong state");
 		return;
 	}
+	_tcp_reasm_fin_sent(s, cur->to_server);
 	cur->snd->snd_nxt++;
 }
 

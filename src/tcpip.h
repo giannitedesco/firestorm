@@ -61,7 +61,7 @@ struct tcp_session {
 	uint8_t state;
 	uint8_t reasm_flags;
 	uint8_t reasm_shutdown;
-	uint8_t _pad0;
+	uint8_t reasm_fin_sent;
 
 	/* TCP state: host byte order */
 	struct tcp_state c_wnd;
@@ -92,6 +92,7 @@ void _tcp_reasm_data(struct tcp_session *s, uint8_t to_server,
 			uint32_t seq, uint32_t len, const uint8_t *buf);
 void _tcp_reasm_ack(struct tcp_session *s, uint8_t to_server);
 void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server);
+void _tcp_reasm_fin_sent(struct tcp_session *s, uint8_t to_server);
 void _tcp_reasm_abort(struct tcp_session *s, int rst);
 size_t _tcp_reasm_buffer_size(struct tcp_session *s);
 
