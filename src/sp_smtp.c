@@ -7,14 +7,13 @@
 #include <firestorm.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_stream.h>
 #include <p_tcp.h>
 #include <p_smtp.h>
 
 #include <limits.h>
 #include <ctype.h>
 
-#if 0
+#if 1
 #define dmesg mesg
 #define dhex_dump hex_dump
 #else
@@ -64,22 +63,9 @@ static int parse_response(struct smtp_response_dcb *r, struct ro_vec *v)
 	return 1;
 }
 
-static int do_response(struct _pkt *pkt, struct ro_vec *v)
+static int decode_response(struct _pkt *pkt, struct ro_vec *v)
 {
-	const struct tcpstream_dcb *stream;
 	struct smtp_response_dcb *r;
-	struct smtp_flow *f;
-
-	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = stream->s->flow;
-
-	switch(f->state) {
-	case SMTP_STATE_CMD:
-	case SMTP_STATE_DATA:
-		return 0;
-	default:
-		break;
-	}
 
 	r = (struct smtp_response_dcb *)decode_layer0(pkt, &p_smtp_resp);
 	if ( NULL == r )
@@ -89,22 +75,6 @@ static int do_response(struct _pkt *pkt, struct ro_vec *v)
 		mesg(M_ERR, "smtp: parse error: %.*s", v->v_len, v->v_ptr);
 		return 1;
 	}
-
-	if ( 0 == (r->flags & SMTP_RESP_MULTI) ) {
-		if ( r->code == 354 )
-			f->state = SMTP_STATE_DATA;
-		else
-			f->state = SMTP_STATE_CMD;
-	}
-
-	dmesg(M_DEBUG, "<<< %3u%c%.*s", r.code,
-		(r->flags & SMTP_RESP_MULTI) ? '-' : ' ',
-		r->msg.v_len, r->msg.v_ptr);
-
-	pkt->pkt_caplen = pkt->pkt_len = v->v_len;
-	pkt->pkt_base = v->v_ptr;
-	pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
-	pkt_inject(pkt);
 
 	return 1;
 }
@@ -137,10 +107,6 @@ static int dispatch_req(struct _pkt *pkt, struct smtp_request_dcb *r,
 	const struct smtp_cmd *c;
 	unsigned int n;
 
-	dmesg(M_DEBUG, ">>> %.*s %.*s",
-		r->cmd.v_len, r->cmd.v_ptr,
-		r->str.v_len, r->str.v_ptr);
-
 	/* TODO: may want special dcb for parsing senders/recipients etc */
 	for(n = sizeof(cmds)/sizeof(*cmds), c = cmds; n; ) {
 		unsigned int i;
@@ -168,22 +134,16 @@ static int dispatch_req(struct _pkt *pkt, struct smtp_request_dcb *r,
 	dcb->cmd = r->cmd;
 	dcb->str = r->str;
 
-	pkt->pkt_caplen = pkt->pkt_len = v->v_len;
-	pkt->pkt_base = v->v_ptr;
-	pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
-	pkt_inject(pkt);
 	return 1;
 }
 
-static int parse_request(struct _pkt *pkt, struct ro_vec *v)
+static int decode_request(struct _pkt *pkt, struct ro_vec *v)
 {
 	const struct tcpstream_dcb *stream;
-	struct smtp_flow *f;
 	struct smtp_request_dcb r;
 	const uint8_t *ptr, *end;
 
 	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = stream->s->flow;
 
 	if ( v->v_len < 4 )
 		return 0;
@@ -205,7 +165,7 @@ static int parse_request(struct _pkt *pkt, struct ro_vec *v)
 	return dispatch_req(pkt, &r, v);
 }
 
-static int smtp_content(struct _pkt *pkt, struct ro_vec *v)
+static int decode_content(struct _pkt *pkt, struct ro_vec *v)
 {
 	struct smtp_cont_dcb *dcb;
 
@@ -213,125 +173,239 @@ static int smtp_content(struct _pkt *pkt, struct ro_vec *v)
 	if ( NULL == dcb )
 		return 0;
 
-	pkt->pkt_caplen = pkt->pkt_len = v->v_len;
-	pkt->pkt_base = v->v_ptr;
-	pkt->pkt_end = pkt->pkt_nxthdr = pkt->pkt_base + pkt->pkt_len;
-	pkt_inject(pkt);
-
+	dcb->content = *v;
 	return 1;
 }
 
-static int do_request(struct _pkt *pkt, struct ro_vec *v)
+static int parse_line(struct _pkt *pkt, struct ro_vec *vec)
 {
-	const struct tcpstream_dcb *stream;
+	const uint8_t *ptr;
+
+	vec->v_ptr = pkt->pkt_base;
+	for(vec->v_len = 0, ptr = vec->v_ptr;
+		*ptr != '\r' && *ptr != '\n';
+		ptr++, vec->v_len++)
+		/* o nothing */;
+	
+	return (*ptr == '\r' || *ptr == '\n');
+}
+
+static void smtp_decode(struct _pkt *pkt)
+{
+	const struct smtp_flow *f;
+	const struct tcpstream_dcb *tcp;
+	struct ro_vec line;
+	int ret;
+
+	tcp = (struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = tcp_sesh_get_flow(tcp->sesh);
+
+	if ( !parse_line(pkt, &line) ) {
+		pkt->pkt_len = 0;
+		return;
+	}
+
+	switch(f->state) {
+	case SMTP_STATE_INIT:
+		assert(tcp->chan == TCP_CHAN_TO_CLIENT);
+		ret = decode_response(pkt, &line);
+		break;
+	case SMTP_STATE_CMD:
+		assert(tcp->chan == TCP_CHAN_TO_SERVER);
+		ret = decode_request(pkt, &line);
+		break;
+	case SMTP_STATE_RESP:
+		assert(tcp->chan == TCP_CHAN_TO_CLIENT);
+		ret = decode_response(pkt, &line);
+		break;
+	case SMTP_STATE_DATA:
+		assert(tcp->chan == TCP_CHAN_TO_SERVER);
+		ret = decode_content(pkt, &line);
+		break;
+	default:
+		mesg(M_CRIT, "smtp: corrupt flow");
+		ret = 0;
+		return;
+	}
+
+	if ( !ret )
+		pkt->pkt_len = 0;
+}
+
+static void state_update(tcp_sesh_t sesh, tcp_chan_t chan, pkt_t pkt)
+{
+	const struct tcpstream_dcb *tcp;
+	struct _dcb *dcb;
 	struct smtp_flow *f;
 
-	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = stream->s->flow;
+	tcp = (struct tcpstream_dcb *)pkt->pkt_dcb;
+	dcb = tcp->dcb.dcb_next;
+	f = tcp_sesh_get_flow(sesh);
+
+	assert(dcb->dcb_proto == &p_smtp_req ||
+		dcb->dcb_proto == &p_smtp_resp ||
+		dcb->dcb_proto == &p_smtp_cont);
+
+	if ( dcb->dcb_proto == &p_smtp_req ) {
+		struct smtp_request_dcb *r;
+		r = (struct smtp_request_dcb *)dcb;
+
+		f->state = SMTP_STATE_RESP;
+
+		dmesg(M_DEBUG, ">>> %.*s %.*s",
+			r->cmd.v_len, r->cmd.v_ptr,
+			r->str.v_len, r->str.v_ptr);
+	}else if ( dcb->dcb_proto == &p_smtp_resp ) {
+		struct smtp_response_dcb *r;
+		r = (struct smtp_response_dcb *)dcb;
+
+		if ( 0 == (r->flags & SMTP_RESP_MULTI) ) {
+			if ( r->code == 354 ) {
+				f->state = SMTP_STATE_DATA;
+			}else{
+				f->state = SMTP_STATE_CMD;
+			}
+		}
+
+		dmesg(M_DEBUG, "<<< %3u%c%.*s", r->code,
+			(r->flags & SMTP_RESP_MULTI) ? '-' : ' ',
+			r->msg.v_len, r->msg.v_ptr);
+	}else if ( dcb->dcb_proto == &p_smtp_cont ) {
+		struct smtp_cont_dcb *r;
+		r = (struct smtp_cont_dcb *)dcb;
+		if ( r->content.v_len == 1 && r->content.v_ptr[0] == '.' )
+			f->state = SMTP_STATE_RESP;
+		dmesg(M_DEBUG, ">>> DATA: %.*s",
+			r->content.v_len, r->content.v_ptr);
+	}
 
 	switch(f->state) {
 	case SMTP_STATE_CMD:
-		if ( !parse_request(pkt, v) ) {
-			mesg(M_ERR, "smtp: parse error: %.*s",
-				v->v_len, v->v_ptr);
-			return 1;
-		}
-		f->state = SMTP_STATE_RESP;
-		break;
 	case SMTP_STATE_DATA:
-		if ( v->v_len == 1 && v->v_ptr[0] == '.' )
-			f->state = SMTP_STATE_RESP;
-		else if ( !smtp_content(pkt, v) )
-			return 0;
+		tcp_sesh_wait(sesh, TCP_CHAN_TO_SERVER);
+		break;
+	case SMTP_STATE_INIT:
+	case SMTP_STATE_RESP:
+		tcp_sesh_wait(sesh, TCP_CHAN_TO_CLIENT);
 		break;
 	default:
+		assert(0);
+		break;
+	}
+}
+
+static int push(tcp_sesh_t sesh, tcp_chan_t chan)
+{
+	const struct smtp_flow *f;
+	const struct ro_vec *vec;
+	size_t numv, bytes, llen, b;
+	tcp_chan_t c;
+
+	f = tcp_sesh_get_flow(sesh);
+	switch(f->state) {
+	case SMTP_STATE_RESP:
+	case SMTP_STATE_INIT:
+		c = TCP_CHAN_TO_CLIENT;
+		break;
+	case SMTP_STATE_CMD:
+	case SMTP_STATE_DATA:
+		c = TCP_CHAN_TO_SERVER;
+		break;
+	default:
+		mesg(M_CRIT, "smtp: corrupt flow");
+		return -1;
+	}
+
+	assert(chan & c);
+
+	vec = tcp_sesh_get_buf(sesh, c, &numv, &bytes);
+	if ( NULL == vec )
 		return 0;
-	}
+
+	b = tcp_app_single_line(vec, numv, bytes, &llen);
+	if ( 0 == b )
+		return 0;
+
+	tcp_sesh_inject(sesh, c, b);
 
 	return 1;
 }
 
-static int smtp_line(struct _pkt *pkt, const uint8_t *ptr, size_t len)
+static objcache_t flow_cache;
+
+static int shutdown(tcp_sesh_t sesh, tcp_chan_t chan)
 {
-	const struct tcpstream_dcb *stream;
-	struct smtp_flow *f;
-	struct ro_vec vec;
-
-	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = stream->s->flow;
-
-	assert(f->state < SMTP_STATE_MAX);
-
-	vec.v_ptr = ptr;
-	vec.v_len = len;
-
-	switch(stream->chan) {
-	case TCP_CHAN_TO_CLIENT:
-		return do_response(pkt, &vec);
-	case TCP_CHAN_TO_SERVER:
-		return do_request(pkt, &vec);
-	}
-
 	return 1;
 }
 
-static ssize_t smtp_push(struct _pkt *pkt, struct ro_vec *vec, size_t numv,
-			 size_t bytes)
+static int init(tcp_sesh_t sesh)
 {
-	const struct tcpstream_dcb *stream;
 	struct smtp_flow *f;
-	const uint8_t *buf;
-	ssize_t ret;
-	size_t sz;
 
-	stream = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = stream->s->flow;
+	f = objcache_alloc(flow_cache);
+	if ( NULL == f )
+		return 0;
 
-	ret = stream_push_line(vec, numv, bytes, &sz);
-	if ( ret <= 0 )
-		return ret;
-	
-	if ( sz > vec[0].v_len ) {
-		buf = stream->reasm(stream->sbuf, sz);
-		if ( NULL == buf )
-			return 0;
-	}else{
-		buf = vec[0].v_ptr;
-	}
-
-	if ( !smtp_line(pkt, buf, sz) )
-		ret = 0;
-
-	return ret;
-}
-
-static int flow_init(void *priv)
-{
-	struct tcp_session *s = priv;
-	struct smtp_flow *f = s->flow;
+	dmesg(M_DEBUG, "smtp_init");
 	f->state = SMTP_STATE_INIT;
+	f->flags = 0;
+
+	tcp_sesh_set_flow(sesh, f);
+	tcp_sesh_wait(sesh, TCP_CHAN_TO_CLIENT);
 	return 1;
 }
 
-static void flow_fini(void *priv)
+static void fini(tcp_sesh_t sesh)
 {
+	struct smtp_flow *f;
+
+	f = tcp_sesh_get_flow(sesh);
+	if ( NULL == f )
+		return;
+
+	dmesg(M_DEBUG, "smtp_fini");
+	objcache_free2(flow_cache, f);
 }
 
-static struct _sdecode sd_smtp = {
-	.sd_label = "smtp",
-	.sd_push = smtp_push,
-	.sd_flow_init = flow_init,
-	.sd_flow_fini = flow_fini,
-	.sd_flow_sz = sizeof(struct smtp_flow),
-	.sd_max_msg = 1024,
+static int smtp_flow_ctor(void)
+{
+	flow_cache = objcache_init(NULL, "smtp_flows",
+					sizeof(struct smtp_flow));
+	if ( NULL == flow_cache )
+		return 0;
+
+	return 1;
+}
+
+static void smtp_flow_dtor(void)
+{
+	objcache_fini(flow_cache);
+}
+
+static struct _decoder smtp_decoder = {
+	.d_decode = smtp_decode,
+	.d_flow_ctor = smtp_flow_ctor,
+	.d_flow_dtor = smtp_flow_dtor,
+	.d_label = "smtp",
+};
+
+static struct tcp_app smtp_app = {
+	.a_push = push,
+	.a_state_update = state_update,
+	.a_shutdown = shutdown,
+	.a_init = init,
+	.a_fini = fini,
+	.a_decode = &smtp_decoder,
+	.a_label = "smtp",
 };
 
 static void __attribute__((constructor)) smtp_ctor(void)
 {
-	sdecode_add(&sd_smtp);
-	sdecode_register(&sd_smtp, SNS_TCP, sys_be16(25));
+	decoder_add(&smtp_decoder);
+	proto_add(&smtp_decoder, &p_smtp_req);
+	proto_add(&smtp_decoder, &p_smtp_resp);
+	proto_add(&smtp_decoder, &p_smtp_cont);
 
-	proto_add(&_tcpstream_decoder, &p_smtp_req);
-	proto_add(&_tcpstream_decoder, &p_smtp_resp);
-	proto_add(&_tcpstream_decoder, &p_smtp_cont);
+	tcp_app_register(&smtp_app);
+	tcp_app_register_dport(&smtp_app, 25);
 }

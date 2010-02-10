@@ -21,7 +21,7 @@
 #include <limits.h>
 #include <ctype.h>
 
-#if 1
+#if 0
 #define dmesg mesg
 #define dhex_dump hex_dump
 #else

@@ -42,6 +42,10 @@ void tcp_app_register(struct tcp_app *app);
 void tcp_app_register_dport(struct tcp_app *app, uint16_t dport);
 /* TODO: register content/initiator-chan heuristics for proto detection */
 
+/* Helper functions for dealing with I/O vectors */
+size_t tcp_app_single_line(struct ro_vec *vec, size_t numv, size_t bytes,
+				size_t *bufsz);
+
 struct tcpstream_dcb {
 	struct _dcb dcb;
 	tcp_sesh_t sesh;

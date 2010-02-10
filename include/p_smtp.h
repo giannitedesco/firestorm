@@ -32,6 +32,7 @@ struct smtp_request_dcb {
 
 struct smtp_cont_dcb {
 	struct _dcb dcb;
+	struct ro_vec content;
 };
 
 #endif /* _P_SMTP_HEADER_INCLUDED_ */
