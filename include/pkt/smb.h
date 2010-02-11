@@ -111,6 +111,7 @@ struct nbss_pkt {
 #define SMB_WRITE_BULK_DATA		0xda
 
 struct smb_pkt {
+#define SMB_MAGIC			"\xffSMB"
 	uint8_t 	smb_magic[4];
 	uint8_t		smb_cmd;
 	uint8_t		smb_err_class;

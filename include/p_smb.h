@@ -13,7 +13,7 @@ struct smb_trans {
 #define SMB_NUM_TRANS 8
 struct smb_flow {
 	FILE *file;
-	uint8_t cur_trans;
+	uint8_t num_trans;
 	struct smb_trans trans[SMB_NUM_TRANS];
 };
 
