@@ -66,9 +66,10 @@ static objcache_t rbuf_cache;
 static objcache_t data_cache;
 static objcache_t gap_cache;
 static unsigned int max_gaps;
-static unsigned int num_reasm;
 static unsigned int num_push;
-static uint64_t push_bytes;
+static unsigned int num_reasm;
+static unsigned int num_inject;
+static uint64_t inject_bytes;
 
 static uint32_t seq_base(struct tcp_sbuf *s, uint32_t seq)
 {
@@ -824,6 +825,8 @@ again:
 			pkt.pkt_len);
 		munch_bytes(s->reasm, pkt.pkt_len);
 		pkt_inject(&pkt);
+		num_inject++;
+		inject_bytes += pkt.pkt_len;
 		sesh->app->a_state_update(sesh, chan, &pkt);
 	}
 
@@ -939,6 +942,7 @@ static void do_push(struct tcp_session *s, tcp_chan_t chan)
 		dmesg(M_ERR, "%s_push: %s waiting for %s", s->app->a_label,
 			tcp_chan_str(achan), tcp_chan_str(s->reasm_flags));
 		ret = s->app->a_push(s, achan);
+		num_push++;
 		if ( ret < 0 )
 			mesg(M_CRIT, "%s: desynchronised", s->app->a_label);
 		if ( ret <= 0 )
@@ -1094,10 +1098,11 @@ void _tcp_reasm_dtor(void)
 {
 	unsigned int avg;
 
-	avg = push_bytes / ((num_push) ? num_push : 1);
+	avg = inject_bytes / ((num_inject) ? num_inject : 1);
 
-	mesg(M_INFO, "tcp_reasm: reasm=%u push=%u avg_bytes=%u max_gaps=%u",
-		num_reasm, num_push, avg, max_gaps);
+	mesg(M_INFO, "tcp_reasm: push=%u reasm=%u "
+		"inject=%u avg_bytes=%u max_gaps=%u",
+		num_push, num_reasm, num_inject, avg, max_gaps);
 
 	free(reasm_dcb);
 }
