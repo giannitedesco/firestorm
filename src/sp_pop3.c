@@ -12,7 +12,7 @@
 
 #include <ctype.h>
 
-#if 1
+#if 0
 #define dmesg mesg
 #define dhex_dump hex_dump
 #else
@@ -333,7 +333,8 @@ static int push(tcp_sesh_t sesh, tcp_chan_t chan)
 	if ( 0 == b )
 		return 0;
 
-	tcp_sesh_inject(sesh, c, b);
+	if ( !tcp_sesh_inject(sesh, c, b) )
+		return 0;
 
 	return 1;
 }

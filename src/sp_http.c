@@ -4,6 +4,7 @@
  * Released under the terms of the GNU GPL version 3
  *
  * TODO:
+ *  - include partial content with req/resp if possible
  *  - support chunked transfer encoding
  *  - incorporate NADS :]
  *  - additional state tracking for connection: keep-alive
@@ -209,7 +210,7 @@ static size_t http_decode_buf(struct http_hcb *d, size_t num_dcb,
 				}
 				break;
 			case '\n':
-				if ( hv[i].v_len && *(cur-1) == '\r' )
+				if ( hv[i].v_len && *(cur - 1) == '\r' )
 					hv[i].v_len--;
 				k.v_ptr = (void *)cur + 1;
 				k.v_len = 0;
@@ -238,9 +239,8 @@ static size_t http_decode_buf(struct http_hcb *d, size_t num_dcb,
 		case 4:
 			v.v_len++;
 			if ( *cur == '\n' ) {
-				if ( v.v_len && *(cur-1)=='\r' ) {
+				if ( v.v_len && *(cur-1) == '\r' )
 					v.v_len--;
-				}
 				dispatch_hdr(d + 3, num_dcb - 3, &k, &v);
 				k.v_ptr = (void *)cur + 1;
 				k.v_len = 0;
@@ -400,14 +400,6 @@ static int check_req(const struct ro_vec *vec, size_t vb, size_t b,
 	return 1;
 }
 
-static void http_update_seq(tcp_sesh_t sesh, struct http_flow *f)
-{
-	if ( ++f->seq & 0x1 )
-		tcp_sesh_wait(sesh, TCP_CHAN_TO_CLIENT);
-	else
-		tcp_sesh_wait(sesh, TCP_CHAN_TO_SERVER);
-}
-
 static size_t http_resp(struct http_response_dcb *dcb,
 				const uint8_t *ptr, size_t len)
 {
@@ -535,26 +527,12 @@ static void http_decode(struct _pkt *pkt)
 	}
 }
 
-static ssize_t parse_req(const struct ro_vec *vec, size_t numv, size_t bytes)
+static void http_update_seq(tcp_sesh_t sesh, struct http_flow *f)
 {
-	size_t vb = bytes;
-	size_t v, i, b;
-
-	/* FIXME: doesn't check for '\r' */
-	for(b = v = 0; v < numv; v++) {
-		for(i = 0; i < vec[v].v_len; i++) {
-			if ( vec[v].v_ptr[i] != '\n' )
-				continue;
-			if ( !check_req(vec, vb, b + i, v, i) ) {
-				vb = b + i;
-				continue;
-			}
-			return b + i + 1;
-		}
-		b += vec[v].v_len;
-	}
-
-	return 0;
+	if ( ++f->seq & 0x1 )
+		tcp_sesh_wait(sesh, TCP_CHAN_TO_CLIENT);
+	else
+		tcp_sesh_wait(sesh, TCP_CHAN_TO_SERVER);
 }
 
 static void state_update_hdr(struct http_flow *f, struct http_fside *fs,
@@ -667,6 +645,28 @@ static void state_update(tcp_sesh_t sesh, tcp_chan_t chan, struct _pkt *pkt)
 	}
 }
 
+static ssize_t parse_req(const struct ro_vec *vec, size_t numv, size_t bytes)
+{
+	size_t vb = bytes;
+	size_t v, i, b;
+
+	/* FIXME: doesn't check for '\r' */
+	for(b = v = 0; v < numv; v++) {
+		for(i = 0; i < vec[v].v_len; i++) {
+			if ( vec[v].v_ptr[i] != '\n' )
+				continue;
+			if ( !check_req(vec, vb, b + i, v, i) ) {
+				vb = b + i;
+				continue;
+			}
+			return b + i + 1;
+		}
+		b += vec[v].v_len;
+	}
+
+	return 0;
+}
+
 static int do_push_hdr(tcp_sesh_t sesh, tcp_chan_t chan)
 {
 	const struct ro_vec *vec;
@@ -707,9 +707,12 @@ static int do_push_content(tcp_sesh_t sesh, tcp_chan_t chan)
 
 	bytes = tcp_sesh_get_bytes(sesh, chan);
 	if ( fs->content_len < bytes )
-		tcp_sesh_inject(sesh, chan, fs->content_len);
+		bytes = tcp_sesh_inject(sesh, chan, fs->content_len);
 	else
-		tcp_sesh_inject(sesh, chan, bytes);
+		bytes = tcp_sesh_inject(sesh, chan, bytes);
+
+	if ( !bytes )
+		return 0;
 
 	return 1;
 }

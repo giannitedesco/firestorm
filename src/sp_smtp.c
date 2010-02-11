@@ -103,7 +103,6 @@ static const struct smtp_cmd cmds[] = {
 static int dispatch_req(struct _pkt *pkt, struct smtp_request_dcb *r,
 			 struct ro_vec *v)
 {
-	struct smtp_request_dcb *dcb;
 	const struct smtp_cmd *c;
 	unsigned int n;
 
@@ -315,7 +314,8 @@ static int push(tcp_sesh_t sesh, tcp_chan_t chan)
 	if ( 0 == b )
 		return 0;
 
-	tcp_sesh_inject(sesh, c, b);
+	if ( !tcp_sesh_inject(sesh, c, b) )
+		return 0;
 
 	return 1;
 }
