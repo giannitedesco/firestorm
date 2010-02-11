@@ -637,12 +637,12 @@ static size_t contig_bytes(struct tcp_session *sesh, tcp_chan_t chan)
 
 	assert(!tcp_before(s->reasm->s_contig_seq, s->reasm->s_reasm_begin));
 	if ( tcp_before(seq, s->reasm->s_reasm_begin) ) {
-		mesg(M_CRIT, "wierd? %u %u", seq, s->reasm->s_reasm_begin);
+		dmesg(M_CRIT, "wierd? %u %u", seq, s->reasm->s_reasm_begin);
 		return 0;
 	}
 
 	if ( unlikely(tcp_after(seq, s->reasm->s_contig_seq)) ) {
-		mesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
+		dmesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
 			sesh->app->a_label, s->reasm->s_contig_seq,
 			seq, s->reasm->s_num_rbuf);
 		seq = s->reasm->s_contig_seq;
@@ -805,7 +805,13 @@ again:
 
 	/* TODO: provide mechanism to detach protocols when encountering
 	 * an invalid message. In the case of heuristically discovered
-	 * protocols this will give us a chance to re-synchronize */
+	 * protocols this will give us a chance to re-synchronize
+	 *
+	 * Actually there can be two types of error, recoverable and
+	 * unrecoverable. An example of recoverable would be binary protocol
+	 * with len field but msg type indicates len field insufficient for
+	 * expected data...
+	 */
 	dmesg(M_DEBUG, "tcp_reasm: %s: injecting %u/%u bytes",
 		sesh->app->a_label, bytes, total_bytes);
 	sesh->app->a_decode->d_decode(&pkt);
@@ -933,6 +939,8 @@ static void do_push(struct tcp_session *s, tcp_chan_t chan)
 	tcp_chan_t achan;
 	int ret;
 
+	assert(s->reasm_flags);
+
 	achan = tcp_chan_data(s);
 
 	dmesg(M_ERR, "stream_push: %s", tcp_chan_str(chan));
@@ -1057,6 +1065,8 @@ void *tcp_sesh_get_flow(tcp_sesh_t sesh)
 
 void tcp_sesh_wait(tcp_sesh_t sesh, tcp_chan_t chan)
 {
+	assert(chan);
+
 	if ( chan & sesh->reasm_shutdown ) {
 		mesg(M_WARN, "%s: attempted to wait on shutdown chan: %s",
 			sesh->app->a_label,
