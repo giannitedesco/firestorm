@@ -30,7 +30,7 @@ struct nbss_pkt {
 #define NBSS_ERR_CALLING_NAME		0x81
 #define NBSS_ERR_NAME_NOT_PRESENT	0x82
 #define NBSS_ERR_RESOURCE		0x83
-#define NBSS_ERR_UNSPECIFIED		0xdff
+#define NBSS_ERR_UNSPECIFIED		0xff
 
 /* SMB Core Commands */
 #define SMB_MKDIR			0x00

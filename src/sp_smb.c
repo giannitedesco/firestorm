@@ -67,32 +67,22 @@ static void hex_dumpf(FILE *f, const uint8_t *tmp, size_t len, size_t llen)
 static void hex_dumpf(FILE *f, const uint8_t *tmp, size_t len, size_t llen) {}
 #endif
 
+static struct _proto p_nbss = {
+	.p_label = "nbss",
+	.p_dcb_sz = sizeof(struct nbss_dcb),
+};
+
+static struct _proto p_smb = {
+	.p_label = "smb",
+	.p_dcb_sz = sizeof(struct smb_dcb),
+};
+
 struct smb_cmd {
 	uint8_t id;
 	const char *label;
-	void (*req)(struct _pkt *pkt, const struct smb_pkt *smb,
-			const uint8_t *buf, size_t len);
-	void (*resp)(struct _pkt *pkt, const struct smb_pkt *smb,
-			const uint8_t *buf, size_t len);
+	void (*req)(struct _pkt *pkt, struct smb_dcb *dcb);
+	void (*resp)(struct _pkt *pkt, struct smb_dcb *dcb);
 };
-
-static void negproto_req(struct _pkt *pkt, const struct smb_pkt *smb,
-			const uint8_t *buf, size_t len)
-{
-	const struct tcpstream_dcb *tcp;
-	const uint8_t *end = buf + len;
-	const struct smb_flow *f;
-	size_t sz;
-
-	tcp = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = tcp_sesh_get_flow(tcp->sesh);
-
-	for(buf += 4; buf < end; buf += sz + 1) {
-		buf += 1;
-		sz = strnlen((char *)buf, (end - buf));
-		dbg(f, " negproto: %.*s\n", sz, buf);
-	}
-}
 
 static const struct smb_cmd cmds[] = {
 	{.id = SMB_MKDIR,		.label = "mkdir"},
@@ -144,8 +134,7 @@ static const struct smb_cmd cmds[] = {
 	/* 0x60 - 0x6e: unix/xenix */
 	{.id = SMB_TREE_CONNECT,	.label = "TreeConnect"},
 	{.id = SMB_TREE_DISCONNECT,	.label = "TreeDisconnect"},
-	{.id = SMB_NEG_PROT,		.label = "NegotiateProtocol",
-					.req = negproto_req},
+	{.id = SMB_NEG_PROT,		.label = "NegotiateProtocol"},
 	{.id = SMB_SESSION_SETUP_ANDX,	.label = "SessionSetupAndX"},
 	{.id = SMB_LOGOFF_ANDX,		.label = "LogoffAndX"},
 	{.id = SMB_TREE_CONNECT_ANDX,	.label = "TreeConnectAndX"},
@@ -199,7 +188,142 @@ static const struct smb_cmd *find_cmd(uint8_t cmd)
 	return NULL;
 }
 
+static void smb_state_update(tcp_sesh_t sesh, tcp_chan_t chan, pkt_t pkt)
+{
+	const struct tcpstream_dcb *tcp;
+	const struct smb_dcb *dcb;
+	const struct smb_pkt *smb;
+	const struct smb_cmd *cmd;
+	const struct smb_flow *f;
+
+	tcp = (struct tcpstream_dcb *)pkt->pkt_dcb;
+	dcb = (struct smb_dcb *)tcp->dcb.dcb_next;
+	f = tcp_sesh_get_flow(tcp->sesh);
+	smb = dcb->smb;
+
+	cmd = find_cmd(smb->smb_cmd);
+	if ( NULL == cmd ) {
+		mesg(M_WARN, "smb: unknown command 0x%.2x", smb->smb_cmd);
+		return;
+	}
+
+	dbg(f, "smb_pkt: %s : %s\n", cmd->label,
+		(smb->smb_flags & SMB_FLAGS_RESPONSE) ? "Response" : "Request");
+	dbg(f, " TCP_CHAN_%s\n",
+		(tcp->chan == TCP_CHAN_TO_CLIENT) ? "TO_CLIENT" : "TO_SERVER");
+	dbg(f, " PID/MID: %.4x / %.4x\n",
+		sys_be16(smb->smb_pid), sys_be16(smb->smb_mid));
+	dbg(f, " TID/UID: %.4x / %.4x\n",
+		sys_be16(smb->smb_tid), sys_be16(smb->smb_uid));
+	
+}
+
+static void nbss_state_update(tcp_sesh_t sesh, tcp_chan_t chan, pkt_t pkt)
+{
+	const struct tcpstream_dcb *tcp;
+	const struct nbss_dcb *dcb;
+	const struct nbss_pkt *nb;
+	const struct smb_flow *f;
+	size_t plen;
+
+	tcp = (struct tcpstream_dcb *)pkt->pkt_dcb;
+	dcb = (struct nbss_dcb *)tcp->dcb.dcb_next;
+	f = tcp_sesh_get_flow(tcp->sesh);
+	nb = dcb->nb;
+	plen = sys_be16(nb->nb_len);
+
+	switch(nb->nb_type) {
+		break;
+	case NBSS_SESSION_SETUP:
+		dbg(f, "mbss: session setup %s -> %s\n",
+			dcb->called, dcb->caller);
+		break;
+	case NBSS_SESSION_SETUP_OK:
+		dbg(f, "nbss: session setup OK\n");
+		break;
+	case NBSS_SESSION_SETUP_ERR:
+		if ( plen ) {
+			dbg(f, "nbss: session setup FUCKED: ");
+			switch(nb->nb_u[0].err.code) {
+			case NBSS_ERR_CALLED_NAME:
+				dbg(f, "called name\n");
+				break;
+			case NBSS_ERR_CALLING_NAME:
+				dbg(f, "calling name\n");
+				break;
+			case NBSS_ERR_NAME_NOT_PRESENT:
+				dbg(f, "name not present\n");
+				break;
+			case NBSS_ERR_RESOURCE:
+				dbg(f, "resource allocation failure\n");
+				break;
+			case NBSS_ERR_UNSPECIFIED:
+				dbg(f, "unspecified\n");
+				break;
+			default:
+				dbg(f, "code 0x%.2x\n",
+					nb->nb_u[0].err.code);
+			}
+		}else{
+			dbg(f, "nbss: session setup FUCKED\n");
+		}
+		break;
+	case NBSS_SESSION_RETARGET:
+		if ( plen >= sizeof(nb->nb_u[0].retarget) ) {
+			ipstr_t ip;
+			iptostr(ip, nb->nb_u[0].retarget.ip);
+			dbg(f, "nbss: session setup RETARGET: %s:%u\n",
+				ip, sys_be16(nb->nb_u[0].retarget.port));
+		}else{
+			dbg(f, "nbss: session setup RETARGET\n");
+		}
+		/* len = 6, (ip, port) */
+		break;
+	case NBSS_SESSION_KEEPALIVE:
+		dbg(f, "nbss: session keepalive\n");
+		break;
+	default:
+		dbg(f, "nbss: unknown packet type: 0x%.2x\n",
+			nb->nb_type);
+	}
+}
+
+static void state_update(tcp_sesh_t sesh, tcp_chan_t chan, pkt_t pkt)
+{
+	const struct tcpstream_dcb *tcp;
+	struct _dcb *dcb;
+
+	tcp = (struct tcpstream_dcb *)pkt->pkt_dcb;
+	dcb = tcp->dcb.dcb_next;
+
+	assert(dcb->dcb_proto == &p_nbss || dcb->dcb_proto == &p_smb);
+
+	if ( dcb->dcb_proto == &p_nbss ) {
+		nbss_state_update(sesh, chan, pkt);
+	}else{
+		smb_state_update(sesh, chan, pkt);
+	}
+}
+
 #if 0
+static void negproto_req(struct _pkt *pkt, const struct smb_pkt *smb,
+			const uint8_t *buf, size_t len)
+{
+	const struct tcpstream_dcb *tcp;
+	const uint8_t *end = buf + len;
+	const struct smb_flow *f;
+	size_t sz;
+
+	tcp = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	f = tcp_sesh_get_flow(tcp->sesh);
+
+	for(buf += 4; buf < end; buf += sz + 1) {
+		buf += 1;
+		sz = strnlen((char *)buf, (end - buf));
+		dbg(f, " negproto: %.*s\n", sz, buf);
+	}
+}
+
 static int is_oplock_break(const struct smb_pkt *smb,
 			const uint8_t *buf, size_t len)
 {
@@ -382,7 +506,7 @@ static void smb_decode(struct _pkt *pkt)
 	const struct tcpstream_dcb *tcp;
 	const struct smb_flow *f;
 	const struct smb_pkt *smb;
-	const struct smb_cmd *cmd;
+	struct smb_dcb *dcb;
 	const uint8_t *buf;
 	uint32_t hlen;
 	size_t len;
@@ -419,23 +543,34 @@ static void smb_decode(struct _pkt *pkt)
 	buf += sizeof(*smb);
 	len -= sizeof(smb);
 
-	cmd = find_cmd(smb->smb_cmd);
-	if ( NULL == cmd ) {
-		mesg(M_WARN, "smb: unknown command 0x%.2x", smb->smb_cmd);
+	dcb = (struct smb_dcb *)decode_layer0(pkt, &p_smb);
+	if ( NULL == dcb ) {
+		pkt->pkt_len = 0;
 		return;
 	}
 
-	dbg(f, "smb_pkt: %s : %s\n", cmd->label,
-		(smb->smb_flags & SMB_FLAGS_RESPONSE) ? "Response" : "Request");
-	dbg(f, " TCP_CHAN_%s\n",
-		(tcp->chan == TCP_CHAN_TO_CLIENT) ? "TO_CLIENT" : "TO_SERVER");
-	dbg(f, " PID/MID: %.4x / %.4x\n",
-		sys_be16(smb->smb_pid), sys_be16(smb->smb_mid));
-	dbg(f, " TID/UID: %.4x / %.4x\n",
-		sys_be16(smb->smb_tid), sys_be16(smb->smb_uid));
+	dcb->smb = smb;
+	dcb->payload = buf;
+	dcb->len = len;
+
+	/* If this message begins a new transaction, it's OK as long as
+	 * there is available slot in flow tracker of course.
+	 *
+	 * if it's a response to a pending transaction that's also cool
+	 *
+	 * problem arises if it's a response to an unknown transaction.
+	 * there could be one of two reasons for this.
+	 * firstly - the request part could just be sat in the other reasm buf
+	 * secondly - someone could be fucking with us...
+	 *
+	 * in first case want to return 0 here and look in other buffer for
+	 * that request...
+	 *
+	 * in second case, that's last thing we want to do...
+	 */
 }
 
-static void name_decode(const uint8_t *in, uint8_t *out, size_t nchar)
+static void name_decode(const uint8_t *in, char *out, size_t nchar)
 {
 	size_t i;
 
@@ -448,38 +583,14 @@ static void name_decode(const uint8_t *in, uint8_t *out, size_t nchar)
 	*out = '\0';
 }
 
-static int nbss_setup_decode(struct _pkt *pkt)
-{
-	uint8_t called[17], caller[17];
-	const struct tcpstream_dcb *tcp;
-	const struct nbss_pkt *nb;
-	struct smb_flow *f;
-	size_t len;
-
-	tcp = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = tcp_sesh_get_flow(tcp->sesh);
-	nb = (struct nbss_pkt *)pkt->pkt_base;
-	len = sys_be16(nb->nb_len);
-
-	if ( len < 68 || tcp->chan != TCP_CHAN_TO_SERVER ) {
-		mesg(M_ERR, "nbss: setup: invalid packet");
-		return 1;
-	}
-
-	name_decode(nb->nb_u[0].setup.called + 1, called, 16);
-	name_decode(nb->nb_u[0].setup.caller + 1, caller, 16);
-
-	dbg(f, "mbss: session setup %s -> %s\n", called, caller);
-	return 1;
-}
-
 static void nbss_decode(struct _pkt *pkt)
 {
 	const struct tcpstream_dcb *tcp;
 	const struct smb_flow *f;
 	const struct nbss_pkt *nb;
+	struct nbss_dcb *dcb;
 
-	tcp = (const struct tcpstream_dcb *)pkt->pkt_dcb;
+	tcp = (struct tcpstream_dcb *)pkt->pkt_dcb;
 	f = tcp_sesh_get_flow(tcp->sesh);
 
 	nb = (struct nbss_pkt *)pkt->pkt_base;
@@ -490,97 +601,75 @@ static void nbss_decode(struct _pkt *pkt)
 		return;
 	}
 
-	switch(nb->nb_type) {
-	case NBSS_SESSION_MSG:
+	if ( nb->nb_type == NBSS_SESSION_MSG ) {
 		smb_decode(pkt);
-		break;
-	case NBSS_SESSION_SETUP:
-		nbss_setup_decode(pkt);
-		break;
-	case NBSS_SESSION_SETUP_OK:
-		dbg(f, "nbss: session setup OK\n");
-		break;
-	case NBSS_SESSION_SETUP_ERR:
-		dbg(f, "nbss: session setup FUCKED\n");
-		/* len = 1, error code */
-		break;
-	case NBSS_SESSION_RETARGET:
-		dbg(f, "nbss: session setup RETARGET\n");
-		/* len = 6, (ip, port) */
-		break;
-	case NBSS_SESSION_KEEPALIVE:
-		dbg(f, "nbss: session keepalive\n");
-		break;
-	default:
-		dbg(f, "nbss: unknown packet type: 0x%.2x\n", nb->nb_type);
+		return;
+	}
+
+	dcb = (struct nbss_dcb *)decode_layer0(pkt, &p_nbss);
+	if ( NULL == dcb ) {
+		pkt->pkt_len = 0;
+		return;
+	}
+
+	dcb->nb = nb;
+	if ( nb->nb_type == NBSS_SESSION_SETUP && sys_be16(nb->nb_len) >= 68 ) {
+		name_decode(nb->nb_u[0].setup.called + 1, dcb->called, 16);
+		name_decode(nb->nb_u[0].setup.caller + 1, dcb->caller, 16);
 	}
 }
 
-static void state_update(tcp_sesh_t sesh, tcp_chan_t chan, pkt_t pkt)
+static size_t get_len(const struct ro_vec *vec, size_t numv, size_t bytes)
 {
-}
-
-/* FIXME: these are a bit of a mess */
-static size_t smb_get_len(const struct ro_vec *vec, size_t numv, size_t bytes)
-{
-	uint8_t b1 = 0, b2 = 0, b3;
+	uint32_t ret;
 	size_t i, b;
 
 	if ( bytes < 4 )
 		return 0;
+	if ( vec[0].v_len >= 4 )
+		return sys_be32(*(uint32_t *)vec[0].v_ptr) + 4;
 
-	for(i = b = 0; i < numv; b += vec[i].v_len, i++) {
-		if ( b + vec[i].v_len > 1 && 1 >= b )
-			b1 = vec[i].v_ptr[1 - b];
-		if ( b + vec[i].v_len > 2 && 2 >= b )
-			b2 = vec[i].v_ptr[2 - b];
-		if ( b + vec[i].v_len > 3 ) {
-			uint32_t len;
-			b3 = vec[i].v_ptr[3 - b];
-			len = (b1 << 16) | (b2 << 8) | b3;
-			len += 4;
+	/* Assume 4 bytes is minumum value for maximum buffer size */
+	assert(numv >= 2);
+	assert(vec[0].v_len + vec[1].v_len >= 4);
 
-			if ( len > bytes )
-				return 0;
+	ret = 0;
+	for(i = b = 0; i < vec[0].v_len; i++, b++)
+		ret = (ret << 8) | vec[0].v_ptr[i];
+	for(i = 0; b < 4; i++, b++)
+		ret = (ret << 8) | vec[1].v_ptr[i];
 
-			return len;
-		}
-	}
+	return ret + 4;
+}
 
-	return 0;
+static size_t smb_get_len(const struct ro_vec *vec, size_t numv, size_t bytes)
+{
+	return get_len(vec, numv, bytes) & 0x1ffff;
 }
 
 static size_t nbt_get_len(const struct ro_vec *vec, size_t numv, size_t bytes)
 {
-	uint8_t b1 = 0, b2 = 0, b3;
-	size_t i, b;
-
-	if ( bytes < 4 )
-		return 0;
-
-	for(i = b = 0; i < numv; b += vec[i].v_len, i++) {
-		if ( b + vec[i].v_len > 1 && 1 >= b )
-			b1 = vec[i].v_ptr[1 - b];
-		if ( b + vec[i].v_len > 2 && 2 >= b )
-			b2 = vec[i].v_ptr[2 - b];
-		if ( b + vec[i].v_len > 3 ) {
-			uint32_t len;
-			b3 = vec[i].v_ptr[3 - b];
-			len = (b2 << 8) | b3;
-			if ( b1 & 1 )
-				len |= (1 << 16);
-			len += 4;
-			if ( len > bytes )
-				return 0;
-
-			return len;
-		}
-	}
-
-	return 0;
+	return get_len(vec, numv, bytes) & 0xffff;
 }
 
-
+/*
+ * Let us assume that requests enter reasm buffer before before the response in
+ * all legit cases. If during decode we encounter a response to a message which
+ * is not in the pending transaction queue then the request must be in the
+ * other reasm buffer. Now, here's the rub, it isn't necessarily at the front
+ * of the other buffer.
+ *
+ * Who gives a fuck? Just call tcp_sesh_inject() on it multiple times...
+ *
+ * there's a potential deadlock if the last pending transaction to fit in the
+ * flow buffer is an oplock break... so we need to be careful to avoid this
+ * 
+ * re-ordering some of the messages would be handy to get us out of a tight
+ * squeeze if pending transaction buffer is full, would require more complex
+ * stuff in tcp_reasm and more probably-ugly hackage here...  this is the case
+ * where "need to allocate new queue entry to free up an old one". Only in this
+ * case do we need to batch multiple messages up
+ */
 static int do_push(tcp_sesh_t sesh, tcp_chan_t chan, int nbt)
 {
 	const struct ro_vec *vec;
@@ -611,8 +700,10 @@ static int do_push(tcp_sesh_t sesh, tcp_chan_t chan, int nbt)
 		else
 			b = smb_get_len(vec, numv, bytes);
 
-		if ( 0 == b )
+		if ( b > bytes || 0 == b ) {
 			chan &= ~c;
+			continue;
+		}
 
 		tcp_sesh_inject(sesh, c, b);
 	}
@@ -722,12 +813,10 @@ static struct tcp_app nbt_app = {
 static void __attribute__((constructor)) smb_ctor(void)
 {
 	decoder_add(&smb_decoder);
-	/* TODO: not sure what protos to register here,
-	 * probably just smb packet until we have futher decode
-	 */
+	proto_add(&smb_decoder, &p_smb);
 
 	decoder_add(&nbss_decoder);
-	/* session setup messages etc.. */
+	proto_add(&nbss_decoder, &p_nbss);
 
 	tcp_app_register(&smb_app);
 	tcp_app_register_dport(&smb_app, 445);
