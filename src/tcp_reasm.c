@@ -600,7 +600,7 @@ void _tcp_reasm_init(struct tcp_session *s, uint8_t to_server,
 	do_data(s, to_server, seq, len, buf);
 }
 
-static const char *tcp_chan_str(tcp_chan_t chan)
+static const char *chan_str(tcp_chan_t chan)
 {
 	switch(chan) {
 	case TCP_CHAN_TO_SERVER:
@@ -614,6 +614,11 @@ static const char *tcp_chan_str(tcp_chan_t chan)
 	default:
 		return "FUCKED";
 	}
+}
+
+const char *tcp_chan_str(tcp_chan_t chan)
+{
+	return chan_str(chan);
 }
 
 static size_t contig_bytes(struct tcp_session *sesh, tcp_chan_t chan)
@@ -775,7 +780,7 @@ size_t tcp_sesh_inject(tcp_sesh_t sesh, tcp_chan_t chan, size_t bytes)
 		break;
 	default:
 		mesg(M_WARN, "%s: attempted to get bad buf: %s",
-			sesh->app->a_label, tcp_chan_str(chan));
+			sesh->app->a_label, chan_str(chan));
 		return bytes;
 	}
 
@@ -917,7 +922,7 @@ const struct ro_vec *tcp_sesh_get_buf(tcp_sesh_t sesh, tcp_chan_t chan,
 		break;
 	default:
 		mesg(M_WARN, "%s: attempted to get bad buf: %s",
-			sesh->app->a_label, tcp_chan_str(chan));
+			sesh->app->a_label, chan_str(chan));
 		return NULL;
 	}
 
@@ -934,7 +939,7 @@ const struct ro_vec *tcp_sesh_get_buf(tcp_sesh_t sesh, tcp_chan_t chan,
 	vec = vbuf;
 	n = fill_vectors(s->reasm, b, vec);
 	dmesg(M_DEBUG, "tcp_reasm(%s): alloc %u bytes in %u vectors",
-			tcp_chan_str(chan), b, n);
+			chan_str(chan), b, n);
 
 	*numv = n;
 	*bytes = b;
@@ -950,12 +955,12 @@ static void do_push(struct tcp_session *s, tcp_chan_t chan)
 
 	achan = tcp_chan_data(s);
 
-	dmesg(M_ERR, "stream_push: %s", tcp_chan_str(chan));
-	dmesg(M_ERR, "available chans: %s", tcp_chan_str(achan));
+	dmesg(M_ERR, "stream_push: %s", chan_str(chan));
+	dmesg(M_ERR, "available chans: %s", chan_str(achan));
 
 	for(; achan & s->reasm_flags; achan = tcp_chan_data(s) ) {
 		dmesg(M_ERR, "%s_push: %s waiting for %s", s->app->a_label,
-			tcp_chan_str(achan), tcp_chan_str(s->reasm_flags));
+			chan_str(achan), chan_str(s->reasm_flags));
 		ret = s->app->a_push(s, achan);
 		num_push++;
 		if ( ret < 0 )
@@ -1047,7 +1052,7 @@ void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
 
 	s->reasm_shutdown |= chan;
 
-	dmesg(M_ERR, "stream_shutdown: %s", tcp_chan_str(chan));
+	dmesg(M_ERR, "stream_shutdown: %s", chan_str(chan));
 	s->app->a_shutdown(s, chan);
 
 	do_shutdown(s, (to_server) ? TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT);
@@ -1085,7 +1090,7 @@ void tcp_sesh_wait(tcp_sesh_t sesh, tcp_chan_t chan)
 	if ( chan & sesh->reasm_shutdown ) {
 		mesg(M_WARN, "%s: attempted to wait on shutdown chan: %s",
 			sesh->app->a_label,
-			tcp_chan_str(chan & sesh->reasm_shutdown));
+			chan_str(chan & sesh->reasm_shutdown));
 		asm volatile ("int $0x3\n");
 		chan &= ~sesh->reasm_shutdown;
 	}

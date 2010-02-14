@@ -33,6 +33,8 @@ size_t tcp_decode_err_recoverable(tcp_sesh_t sesh, tcp_chan_t chan,
 void tcp_sesh_wait(tcp_sesh_t sesh, tcp_chan_t chan);
 tcp_chan_t tcp_sesh_get_wait(tcp_sesh_t sesh);
 
+const char *tcp_chan_str(tcp_chan_t chan);
+
 struct tcp_app {
 	int (*a_push)(tcp_sesh_t sesh, tcp_chan_t chan);
 	void (*a_state_update)(tcp_sesh_t sesh, tcp_chan_t chan, pkt_t pkt);
