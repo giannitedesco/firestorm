@@ -21,6 +21,7 @@
 			const struct smb_flow *__FLOW = flow; \
 			if ( __FLOW->file ) { \
 				fprintf(__FLOW->file, fmt , ##x); \
+				fflush(__FLOW->file); \
 			} \
 		}while(0);
 static void hex_dumpf(FILE *f, const uint8_t *tmp, size_t len, size_t llen)
@@ -77,11 +78,230 @@ static struct _proto p_smb = {
 	.p_dcb_sz = sizeof(struct smb_dcb),
 };
 
+static void reap_pending(struct smb_flow *f)
+{
+	unsigned int i, n;
+	struct smb_pend *inp, *outp;
+
+	dbg(f, "Transaction reaper called %u/%u:\n",
+		f->num_trans_live, f->num_trans);
+	for(inp = outp = f->pend, i = 0, n = f->num_trans, f->num_trans = 0;
+			i < n; i++, inp++) {
+		if ( !(inp->flags & SMB_PEND_CANCELLED) ) {
+			*outp = *inp;
+			outp++;
+			f->num_trans++;
+		}else{
+			dbg(f, " Deleted transaction index %u\n",
+				inp - f->pend);
+		}
+	}
+}
+
+static struct smb_pend *find_pending(struct smb_flow *f,
+					const struct smb_dcb *dcb,
+					int cancel)
+{
+	const struct smb_pkt *smb = dcb->smb;
+	unsigned int i;
+
+	for(i = 0; i < f->num_trans; i++) {
+		if ( smb->smb_pid != f->pend[i].pid )
+			continue;
+		if ( !cancel && smb->smb_cmd != f->pend[i].cmd )
+			continue;
+		if ( smb->smb_mid != f->pend[i].mid )
+			continue;
+		return f->pend + i;
+	}
+
+	return NULL;
+}
+
+static void add_pending(struct smb_flow *f,
+			const struct smb_dcb *dcb)
+{
+	const struct smb_pkt *smb = dcb->smb;
+
+again:
+	if ( f->num_trans >= SMB_MAX_PENDING ) {
+		if ( f->num_trans > f->num_trans_live ) {
+			reap_pending(f);
+			goto again;
+		}
+		dbg(f, "MAX_PENDING exceeded %u/%u\n",
+			f->num_trans_live, f->num_trans);
+		/* FIXME: handle in similar way to response for non-pending
+		 * transaction, are these cases isomorphic?
+		 */
+		return;
+	}
+
+	dbg(f, " Initiating new transaction %u\n", f->num_trans);
+	f->pend[f->num_trans].flags = 0;
+	f->pend[f->num_trans].cmd = smb->smb_cmd;
+	f->pend[f->num_trans].mid = smb->smb_mid;
+	f->pend[f->num_trans].pid = smb->smb_pid;
+	f->num_trans++;
+	f->num_trans_live++;
+}
+
+static void cancel_pending(struct smb_flow *f,
+			struct smb_pend *pend)
+{
+	unsigned int idx;
+
+	assert(pend >= f->pend && pend <= f->pend + (SMB_MAX_PENDING - 1));
+
+	idx = pend - f->pend;
+	dbg(f, " Cancelling transaction index %u\n", idx);
+
+	f->pend[idx].flags |= SMB_PEND_CANCELLED;
+
+	f->num_trans_live--;
+}
+
+static void delete_pending(struct smb_flow *f,
+			struct smb_pend *pend)
+{
+	unsigned int idx, i;
+
+	assert(pend >= f->pend && pend <= f->pend + (SMB_MAX_PENDING - 1));
+
+	idx = pend - f->pend;
+	dbg(f, " Closing transaction index %u\n", idx);
+
+	assert((f->pend[idx].flags & SMB_PEND_CANCELLED) == 0);
+
+	for(i = idx + 1; i < f->num_trans; i++)
+		f->pend[i - 1] = f->pend[i];
+
+	f->num_trans_live--;
+	f->num_trans--;
+}
+
+static void state_update_generic(struct _pkt *pkt,
+				 const struct tcpstream_dcb *tcp,
+				 struct smb_dcb *dcb)
+{
+	struct smb_flow *f;
+
+	f = tcp_sesh_get_flow(tcp->sesh);
+
+	if ( dcb->flags & SMB_DCB_RESPONSE ) {
+		struct smb_pend *pend;
+
+		pend = find_pending(f, dcb, 0);
+		if ( NULL == pend ) {
+			dbg(f, " FUCKED: should not happen (yet)\n");
+			return;
+		}
+
+		if ( pend->flags & SMB_PEND_CANCELLED ) {
+			dbg(f, " Reply to CANCELLED transaction\n");
+		}else{
+			dbg(f, " Reply to pending transaction\n");
+			delete_pending(f, pend);
+		}
+	}else{
+		add_pending(f, dcb);
+	}
+}
+
+static void smb_negproto(struct _pkt *pkt, 
+			 const struct tcpstream_dcb *tcp,
+			 struct smb_dcb *dcb)
+{
+	const uint8_t *buf, *end;
+	const struct smb_flow *f;
+	size_t sz;
+
+	state_update_generic(pkt, tcp, dcb);
+
+	if ( (dcb->flags & SMB_DCB_RESPONSE ) )
+		return;
+
+	f = tcp_sesh_get_flow(tcp->sesh);
+
+	buf = dcb->payload;
+	end = buf + dcb->payload_len;
+
+	for(buf += 4; buf < end; buf += sz + 1) {
+		buf += 1;
+		sz = strnlen((char *)buf, (end - buf));
+		dbg(f, " negproto: %.*s\n", sz, buf);
+	}
+}
+
+static void smb_nt_cancel(struct _pkt *pkt,
+			  const struct tcpstream_dcb *tcp,
+			  struct smb_dcb *dcb)
+{
+	struct smb_flow *f;
+	struct smb_pend *pend;
+
+	f = tcp_sesh_get_flow(tcp->sesh);
+
+	pend = find_pending(f, dcb, 1);
+	if ( NULL == pend ) {
+		dbg(f, " No transaction to cancel\n");
+	}else{
+		cancel_pending(f, pend);
+	}
+}
+
+static int is_oplock_break(const struct tcpstream_dcb *tcp,
+				  struct smb_dcb *dcb)
+{
+	const struct smb_locking_req *lck;
+
+	if ( dcb->smb->smb_cmd != SMB_LOCKING_ANDX )
+		return 0;
+	if ( dcb->payload_len < sizeof(*lck) )
+		return 0;
+
+	lck = (struct smb_locking_req *)dcb->payload;
+	if ( (lck->lock_type & SMB_LOCK_TYPE_BREAK) == 0 )
+		return 0;
+
+	return 1;
+}
+
+static void smb_lockingandx(struct _pkt *pkt,
+			  const struct tcpstream_dcb *tcp,
+			  struct smb_dcb *dcb)
+{
+	if ( is_oplock_break(tcp, dcb) ) {
+		struct smb_flow *f;
+
+		f = tcp_sesh_get_flow(tcp->sesh);
+		if ( tcp->chan == TCP_CHAN_TO_CLIENT ) {
+			f->num_oplock_break++;
+			dbg(f, " OPLOCK_BREAK: %u now outstanding\n",
+				f->num_oplock_break);
+		}else{
+			assert(f->num_oplock_break);
+			f->num_oplock_break--;
+			dbg(f, " ACK OPLOCK_BREAK: %u now outstanding\n",
+				f->num_oplock_break);
+		}
+	}else{
+		state_update_generic(pkt, tcp, dcb);
+	}
+}
+
 struct smb_cmd {
 	uint8_t id;
 	const char *label;
-	void (*req)(struct _pkt *pkt, struct smb_dcb *dcb);
-	void (*resp)(struct _pkt *pkt, struct smb_dcb *dcb);
+	void (*state_update)(struct _pkt *pkt,
+				const struct tcpstream_dcb *tcp,
+				struct smb_dcb *dcb);
+};
+
+static const struct smb_cmd cmd_unknown = {
+	.id = ~0,
+	.label = "UNKNOWN",
+	.state_update = state_update_generic,
 };
 
 static const struct smb_cmd cmds[] = {
@@ -115,7 +335,8 @@ static const struct smb_cmd cmds[] = {
 	{.id = SMB_WRITE_COMPLETE,	.label = "WriteComplete"},
 	{.id = SMB_SET_INFO2,		.label = "SetInfo2"},
 	{.id = SMB_GET_INFO2,		.label = "QueryInfo2"},
-	{.id = SMB_LOCKING_ANDX,	.label = "LockingAndX"},
+	{.id = SMB_LOCKING_ANDX,	.label = "LockingAndX",
+					.state_update = smb_lockingandx},
 	{.id = SMB_TRANS,		.label = "Trans"},
 	{.id = SMB_TRANS_S,		.label = "TransSecondary"},
 	{.id = SMB_IOCTL,		.label = "Ioctl"},
@@ -134,7 +355,8 @@ static const struct smb_cmd cmds[] = {
 	/* 0x60 - 0x6e: unix/xenix */
 	{.id = SMB_TREE_CONNECT,	.label = "TreeConnect"},
 	{.id = SMB_TREE_DISCONNECT,	.label = "TreeDisconnect"},
-	{.id = SMB_NEG_PROT,		.label = "NegotiateProtocol"},
+	{.id = SMB_NEG_PROT,		.label = "NegotiateProtocol",
+					.state_update = smb_negproto},
 	{.id = SMB_SESSION_SETUP_ANDX,	.label = "SessionSetupAndX"},
 	{.id = SMB_LOGOFF_ANDX,		.label = "LogoffAndX"},
 	{.id = SMB_TREE_CONNECT_ANDX,	.label = "TreeConnectAndX"},
@@ -146,7 +368,8 @@ static const struct smb_cmd cmds[] = {
 	{.id = SMB_NT_TRANS,		.label = "NT_Trans"},
 	{.id = SMB_NT_TRANS_S,		.label = "NT_TransSecondary"},
 	{.id = SMB_NT_CREATE_ANDX,	.label = "NT_CreateAndX"},
-	{.id = SMB_NT_CANCEL,		.label = "NT_CancelRequest"},
+	{.id = SMB_NT_CANCEL,		.label = "NT_CancelRequest",
+					.state_update = smb_nt_cancel},
 	{.id = SMB_NT_RENAME,		.label = "NT_Rename"},
 	{.id = SMB_SPOOL_OPEN,		.label = "SpoolOpen"},
 	{.id = SMB_SPOOL_LOCK,		.label = "SpoolLock"},
@@ -185,37 +408,49 @@ static const struct smb_cmd *find_cmd(uint8_t cmd)
 		}
 	}
 
-	return NULL;
+	return &cmd_unknown;
+}
+
+static void dump_smb(const struct smb_flow *f, const struct smb_dcb *dcb)
+{
+	const struct smb_cmd *cmd;
+
+	cmd = (dcb->cmd) ? dcb->cmd : find_cmd(dcb->smb->smb_cmd);
+	dbg(f, "smb_pkt: %s : %s%s\n", cmd->label,
+		(dcb->flags & SMB_DCB_DONT_TRACK) ? "STATELESS" : "",
+		(dcb->flags & SMB_DCB_RESPONSE) ? "Response" : "Request");
+	dbg(f, " PID/MID: %.4x / %.4x\n",
+		sys_be16(dcb->smb->smb_pid), sys_be16(dcb->smb->smb_mid));
+	dbg(f, " TID/UID: %.4x / %.4x\n",
+		sys_be16(dcb->smb->smb_tid), sys_be16(dcb->smb->smb_uid));
+	
 }
 
 static void smb_state_update(tcp_sesh_t sesh, tcp_chan_t chan, pkt_t pkt)
 {
 	const struct tcpstream_dcb *tcp;
-	const struct smb_dcb *dcb;
 	const struct smb_pkt *smb;
-	const struct smb_cmd *cmd;
-	const struct smb_flow *f;
+	struct smb_dcb *dcb;
+	struct smb_flow *f;
 
 	tcp = (struct tcpstream_dcb *)pkt->pkt_dcb;
 	dcb = (struct smb_dcb *)tcp->dcb.dcb_next;
 	f = tcp_sesh_get_flow(tcp->sesh);
 	smb = dcb->smb;
 
-	cmd = find_cmd(smb->smb_cmd);
-	if ( NULL == cmd ) {
-		mesg(M_WARN, "smb: unknown command 0x%.2x", smb->smb_cmd);
+	dcb->cmd = find_cmd(dcb->smb->smb_cmd);
+	dump_smb(f, dcb);
+	if ( dcb->flags & SMB_DCB_DONT_TRACK ) {
+		dbg(f, "\n");
 		return;
 	}
 
-	dbg(f, "smb_pkt: %s : %s\n", cmd->label,
-		(smb->smb_flags & SMB_FLAGS_RESPONSE) ? "Response" : "Request");
-	dbg(f, " TCP_CHAN_%s\n",
-		(tcp->chan == TCP_CHAN_TO_CLIENT) ? "TO_CLIENT" : "TO_SERVER");
-	dbg(f, " PID/MID: %.4x / %.4x\n",
-		sys_be16(smb->smb_pid), sys_be16(smb->smb_mid));
-	dbg(f, " TID/UID: %.4x / %.4x\n",
-		sys_be16(smb->smb_tid), sys_be16(smb->smb_uid));
-	
+	if ( dcb->cmd->state_update )
+		dcb->cmd->state_update(pkt, tcp, dcb);
+	else
+		state_update_generic(pkt, tcp, dcb);
+
+	dbg(f, "\n");
 }
 
 static void nbss_state_update(tcp_sesh_t sesh, tcp_chan_t chan, pkt_t pkt)
@@ -305,201 +540,58 @@ static void state_update(tcp_sesh_t sesh, tcp_chan_t chan, pkt_t pkt)
 	}
 }
 
-#if 0
-static void negproto_req(struct _pkt *pkt, const struct smb_pkt *smb,
-			const uint8_t *buf, size_t len)
+static int check_oplock_break(const struct tcpstream_dcb *tcp,
+					struct smb_dcb *dcb)
 {
-	const struct tcpstream_dcb *tcp;
-	const uint8_t *end = buf + len;
-	const struct smb_flow *f;
-	size_t sz;
+	struct smb_flow *f;
 
-	tcp = (const struct tcpstream_dcb *)pkt->pkt_dcb;
 	f = tcp_sesh_get_flow(tcp->sesh);
-
-	for(buf += 4; buf < end; buf += sz + 1) {
-		buf += 1;
-		sz = strnlen((char *)buf, (end - buf));
-		dbg(f, " negproto: %.*s\n", sz, buf);
-	}
-}
-
-static int is_oplock_break(const struct smb_pkt *smb,
-			const uint8_t *buf, size_t len)
-{
-	const struct smb_locking_req *lck = (const struct smb_locking_req *)buf;
-	if ( smb->smb_cmd != 0x24 )
+	if ( tcp->chan & TCP_CHAN_TO_CLIENT ) {
 		return 0;
-	if ( smb->smb_flags & SMB_FLAGS_RESPONSE )
+	}else if ( f->num_oplock_break ) {
 		return 0;
-	if ( len < sizeof(*lck) )
-		return 0;
-	return (0 != (lck->lock_type & SMB_LOCK_TYPE_BREAK));
-}
-
-static void cancel_transaction(struct smb_flow *f, const struct smb_pkt *smb)
-{
-	unsigned int i;
-
-	for(i = 0; i <= f->cur_trans; i++) {
-		struct smb_trans trans;
-		uint8_t j;
-		if ( f->trans[i].pid != smb->smb_pid )
-			continue;
-		if ( f->trans[i].mid != smb->smb_mid )
-			continue;
-		dbg(f, "smb: 0x%.2x transaction cancelled\n", f->trans[i].cmd);
-		trans = f->trans[i];
-		for(j = i + 1; j <= f->cur_trans; j++)
-			f->trans[j - 1] = f->trans[j];
-		f->trans[f->cur_trans] = trans;
-		return;
 	}
-	dbg(f, "smb: unknown transaction cancelled\n");
-}
-
-static int unexpected_response(struct smb_flow *f, const struct smb_pkt *smb)
-{
-	unsigned int i;
-
-	for(i = 0; i <= f->cur_trans; i++) {
-		struct smb_trans trans;
-		uint8_t j;
-		if ( f->trans[i].cmd != smb->smb_cmd )
-			continue;
-		if ( f->trans[i].pid != smb->smb_pid )
-			continue;
-		if ( f->trans[i].mid != smb->smb_mid )
-			continue;
-		dbg(f, "smb: nested transaction completed\n");
-		trans = f->trans[i];
-		for(j = i + 1; j <= f->cur_trans; j++)
-			f->trans[j - 1] = f->trans[j];
-		f->cur_trans--;
-		return 1;
-	}
-
-	f->cur_trans++;
-	assert(f->cur_trans < SMB_NUM_TRANS);
-	f->trans[f->cur_trans].flags = 0;
-	dbg(f, "smb: nested transaction (level %u)\n", f->cur_trans + 1);
-	return 0;
-}
-
-/* FIXME; this is fucked... should let multiple requests through because
- * some can be in flight for a long time... (shows in smbtorture)
- *
- * requires an sd_buffer_cleared() callback otherwise one bogus server
- * response could terminate reasm state machine...
- */
-static int state_update(struct smb_flow *f, schan_t chan,
-			const struct smb_pkt *smb,
-			const uint8_t *buf, size_t len)
-{
-	struct smb_trans *tx;
-
-	tx = &f->trans[f->cur_trans];
-
-	switch( tx->flags & (SMB_TRANS_REQ|SMB_TRANS_OPLOCK_BREAK) ) {
-	case SMB_TRANS_REQ|SMB_TRANS_OPLOCK_BREAK:
-		dbg(f, "smb: completed transaction through oplock break\n");
-	case SMB_TRANS_REQ:
-		if ( chan == TCP_CHAN_TO_SERVER )
-			return 0;
-		if ( is_oplock_break(smb, buf, len) ) {
-			f->cur_trans++;
-			tx = &f->trans[f->cur_trans];
-			tx->flags = SMB_TRANS_OPLOCK_BREAK;
-			dbg(f, "smb: oplock break initiated\n");
-			return 1;
-		}
-		if ( 0 == (smb->smb_flags & SMB_FLAGS_RESPONSE) )
-			return 0;
-		if ( tx->cmd != smb->smb_cmd ||
-				tx->pid != smb->smb_pid ||
-				tx->mid != smb->smb_mid ) {
-			return unexpected_response(f, smb);
-		}
-		tx->flags &= ~SMB_TRANS_REQ;
-		return 1;
-	case SMB_TRANS_OPLOCK_BREAK:
-		if ( chan == TCP_CHAN_TO_SERVER &&
-				is_oplock_break(smb, buf, len) ) {
-			dbg(f, "smb: oplock break resolved\n");
-			f->cur_trans--;
-			return 1;
-		}
-		dbg(f, "smb: nested transaction in oplock break\n");
-		/* fall through */
-	case 0:
-		if ( chan == TCP_CHAN_TO_CLIENT )
-			return 0;
-		if ( (smb->smb_flags & SMB_FLAGS_RESPONSE) )
-			return 0;
-		if ( smb->smb_cmd == 0xa4 ) {
-			cancel_transaction(f, smb);
-			return 1;
-		}
-		tx->cmd = smb->smb_cmd;
-		tx->pid = smb->smb_pid;
-		tx->mid = smb->smb_mid;
-		tx->flags |= SMB_TRANS_REQ;
-		return 1;
-	}
-
-	return 0;
-}
-
-static void stream_clear(const struct _dcb *dcb)
-{
-	const struct tcpstream_dcb *stream;
-	struct smb_flow *f;
-
-	stream = (const struct tcpstream_dcb *)dcb;
-	f = stream->s->flow;
-
-	dbg(f, "smb: %s stream_clear\n",
-		(stream->chan) ? "client" : "server");
-}
-
-static int smb_pkt(struct _pkt *pkt, const uint8_t *buf, size_t len)
-{
-	const struct tcpstream_dcb *dcb;
-	struct smb_flow *f;
-	const struct smb_pkt *smb;
-
-	smb = (const struct smb_pkt *)buf;
-	dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
-	f = dcb->s->flow;
-
-	if ( len < sizeof(*smb) ||
-		memcmp(smb->smb_magic, "\xffSMB", 4) ) {
-		mesg(M_ERR, "smb: malformed packet");
-		dbg(f, "malformed packet\n");
-		hex_dumpf(f->file, buf, len, 16);
-		return 1;
-	}
-
-	buf += sizeof(*smb);
-	len -= sizeof(*smb);
-
-	if ( !state_update(f, dcb->chan, smb, buf, len) )
-		return 0;
-
-
-	if ( (smb->smb_flags & SMB_FLAGS_RESPONSE) ) {
-		if ( cmd->resp )
-			cmd->resp(pkt, smb, buf, len);
-	}else{
-		if ( cmd->req )
-			cmd->req(pkt, smb, buf, len);
-	}
-	//hex_dumpf(f->file, buf, len, 16);
-	dbg(f, "\n");
 
 	return 1;
 }
-#endif
+
+static int check_regular_msgtype(const struct tcpstream_dcb *tcp,
+					struct smb_dcb *dcb)
+{
+	struct smb_flow *f;
+
+	f = tcp_sesh_get_flow(tcp->sesh);
+
+	if ( dcb->smb->smb_flags & SMB_FLAGS_RESPONSE ) {
+		if ( tcp->chan == TCP_CHAN_TO_SERVER ) {
+			dcb->flags |= SMB_DCB_DONT_TRACK;
+			return 0;
+		}
+		dcb->flags |= SMB_DCB_RESPONSE;
+	}else{
+		if ( tcp->chan == TCP_CHAN_TO_CLIENT ) {
+			dcb->flags |= SMB_DCB_DONT_TRACK;
+			return 0;
+		}
+		return 0;
+	}
+
+	dcb->pend = find_pending(f, dcb, 0);
+	if ( dcb->pend )
+		return 0;
+
+	return 1;
+}
+
+static int is_non_pending_response(const struct tcpstream_dcb *tcp,
+					struct smb_dcb *dcb)
+{
+	if ( is_oplock_break(tcp, dcb) ) {
+		return check_oplock_break(tcp, dcb);
+	}else{
+		return check_regular_msgtype(tcp, dcb);
+	}
+}
 
 static void smb_decode(struct _pkt *pkt)
 {
@@ -525,11 +617,7 @@ static void smb_decode(struct _pkt *pkt)
 	len -= sizeof(hlen);
 
 	smb = (struct smb_pkt *)(pkt->pkt_base + sizeof(hlen));
-	if ( len < hlen ) {
-		mesg(M_WARN, "smb: truncated packet, should not happen!");
-		pkt->pkt_len = 0;
-		return;
-	}
+	assert(len >= hlen);
 
 	assert(sizeof(smb->smb_magic) == strlen(SMB_MAGIC));
 	if ( memcmp(smb->smb_magic, SMB_MAGIC, sizeof(smb->smb_magic)) ) {
@@ -541,33 +629,25 @@ static void smb_decode(struct _pkt *pkt)
 	}
 
 	buf += sizeof(*smb);
-	len -= sizeof(smb);
+	len -= sizeof(*smb);
 
 	dcb = (struct smb_dcb *)decode_layer0(pkt, &p_smb);
-	if ( NULL == dcb ) {
-		pkt->pkt_len = 0;
-		return;
-	}
+	assert(NULL != dcb);
 
 	dcb->smb = smb;
 	dcb->payload = buf;
-	dcb->len = len;
+	dcb->payload_len = len;
 
-	/* If this message begins a new transaction, it's OK as long as
-	 * there is available slot in flow tracker of course.
-	 *
-	 * if it's a response to a pending transaction that's also cool
-	 *
-	 * problem arises if it's a response to an unknown transaction.
-	 * there could be one of two reasons for this.
-	 * firstly - the request part could just be sat in the other reasm buf
-	 * secondly - someone could be fucking with us...
-	 *
-	 * in first case want to return 0 here and look in other buffer for
-	 * that request...
-	 *
-	 * in second case, that's last thing we want to do...
-	 */
+	if ( f->decode_flags & SMB_DECODE_STATELESS ) {
+		dcb->flags = SMB_DCB_DONT_TRACK;
+	}else{
+		if ( is_non_pending_response(tcp, dcb) ) {
+			dbg(f, "EEK: response for non-pending transaction\n");
+			dump_smb(f, dcb);
+			pkt->pkt_len = 0;
+			return;
+		}
+	}
 }
 
 static void name_decode(const uint8_t *in, char *out, size_t nchar)
@@ -663,27 +743,42 @@ static size_t nbt_get_len(const struct ro_vec *vec, size_t numv, size_t bytes)
  *
  * there's a potential deadlock if the last pending transaction to fit in the
  * flow buffer is an oplock break... so we need to be careful to avoid this
+ *
+ * A note on cancellations. A response and a cancel can be in flight
+ * simultaneously. In this case the cancel myst take priority. How the fuck
+ * to ensure this/ IOW responses to cancelled messages must appear as
+ * stateless messages...
  * 
  * re-ordering some of the messages would be handy to get us out of a tight
  * squeeze if pending transaction buffer is full, would require more complex
  * stuff in tcp_reasm and more probably-ugly hackage here...  this is the case
  * where "need to allocate new queue entry to free up an old one". Only in this
- * case do we need to batch multiple messages up
+ * case do we need to batch multiple messages up. I am now thinking the logic
+ * here is going to be so hairy that the extra complication this entails will
+ * definitely not be worth it
  */
 static int do_push(tcp_sesh_t sesh, tcp_chan_t chan, int nbt)
 {
 	const struct ro_vec *vec;
-	const struct smb_flow *f;
-	size_t numv, bytes, b;
-	tcp_chan_t c;
+	size_t numv, bytes, b, inj;
+	struct smb_flow *f;
+	tcp_chan_t c, wchan;
+	int retry;
 
 	f = tcp_sesh_get_flow(sesh);
 	assert(f);
 
-	chan &= (TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT);
+	wchan = tcp_sesh_get_wait(sesh);
+	chan &= wchan;
+
+	f->decode_flags = 0;
 
 	while(chan) {
-		if ( 0 == f->num_trans && (chan & TCP_CHAN_TO_SERVER) ) {
+		if ( wchan != (TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT) ) {
+			assert(chan & wchan); /* htf? */
+			c = wchan;
+		}else if ( 0 == f->num_trans && (chan & TCP_CHAN_TO_SERVER) ) {
+			/* what about flip pend? */
 			c = TCP_CHAN_TO_SERVER;
 		}else if ( chan & TCP_CHAN_TO_CLIENT ) {
 			c = TCP_CHAN_TO_CLIENT;
@@ -691,23 +786,70 @@ static int do_push(tcp_sesh_t sesh, tcp_chan_t chan, int nbt)
 			c = TCP_CHAN_TO_SERVER;
 		}
 
+		retry = 0;
+
+retry:
 		vec = tcp_sesh_get_buf(sesh, c, &numv, &bytes);
-		if ( NULL == vec )
-			return 0;
+		if ( NULL == vec ) {
+			if ( retry ) {
+				tcp_sesh_wait(sesh, c);
+				return 0;
+			}else{
+				break;
+			}
+		}
 
 		if ( nbt )
 			b = nbt_get_len(vec, numv, bytes);
 		else
 			b = smb_get_len(vec, numv, bytes);
 
-		if ( b > bytes || 0 == b ) {
-			chan &= ~c;
-			continue;
+		if ( 0 == b || b > bytes ) {
+			if ( retry ) {
+				dbg(f, "push: no data in other chan\n");
+				tcp_sesh_wait(sesh, c);
+				return 0;
+			}else{
+				dbg(f, "push: no more data left in buffer\n");
+				chan &= ~c;
+				continue;
+			}
 		}
 
-		tcp_sesh_inject(sesh, c, b);
+retry_samechan:
+		inj = tcp_sesh_inject(sesh, c, b);
+		if ( 0 == inj ) {
+			if ( !retry ) {
+				c = (c == TCP_CHAN_TO_SERVER) ?
+						TCP_CHAN_TO_CLIENT :
+						TCP_CHAN_TO_SERVER;
+				if ( c & chan ) {
+					dbg(f, "push: retry other chan\n");
+					retry = 1;
+					goto retry;
+				}else{
+					dbg(f, "push: wait for other chan\n");
+					tcp_sesh_wait(sesh, c);
+					return 0;
+				}
+			}else if ( b < bytes ) {
+				goto ballsdeep;
+			}else{
+				dbg(f, "push: retrying same chan stateless\n");
+				f->decode_flags |= SMB_DECODE_STATELESS;
+				goto retry_samechan;
+			}
+		}
+
 	}
 
+	tcp_sesh_wait(sesh, TCP_CHAN_TO_CLIENT|TCP_CHAN_TO_SERVER);
+	return 0;
+
+	/* special case for batching all packets in reasm buffer */
+ballsdeep:
+	dbg(f, "balls deep %u/%u non-pending\n", b, bytes);
+	assert(0);
 	return 0;
 }
 
@@ -749,8 +891,10 @@ static int init(tcp_sesh_t sesh)
 		cip, sys_be16(sesh->c_port));
 
 	f->num_trans = 0;
+	f->num_trans_live = 0;
+	f->num_oplock_break = 0;
 	tcp_sesh_set_flow(sesh, f);
-	tcp_sesh_wait(sesh, TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT);
+	tcp_sesh_wait(sesh, TCP_CHAN_TO_SERVER);
 
 	return 1;
 }
