@@ -1,6 +1,6 @@
 /*
  * This file is part of Firestorm NIDS.
- * Copyright (c) 2008 Gianni Tedesco <gianni@scaramanga.co.uk>
+ * Copyright (c) 2009 Gianni Tedesco <gianni@scaramanga.co.uk>
  * Released under the terms of the GNU GPL version 3
 */
 #ifndef _P_TCP_HEADER_INCLUDED_
@@ -23,8 +23,15 @@ const struct ro_vec *tcp_sesh_get_buf(tcp_sesh_t sesh, tcp_chan_t chan,
 /* buffers invalidated by this call */
 size_t tcp_sesh_inject(tcp_sesh_t sesh, tcp_chan_t chan, size_t bytes);
 
+/* For decoders to set return code */
+size_t tcp_decode_ok(tcp_sesh_t sesh, tcp_chan_t chan, size_t bytes);
+size_t tcp_decode_err_abort(tcp_sesh_t sesh, tcp_chan_t chan, size_t bytes);
+size_t tcp_decode_err_recoverable(tcp_sesh_t sesh, tcp_chan_t chan,
+					size_t bytes);
+
 /* chan is bitwise OR of chans to wait for data on, 0 = desynch */
 void tcp_sesh_wait(tcp_sesh_t sesh, tcp_chan_t chan);
+tcp_chan_t tcp_sesh_get_wait(tcp_sesh_t sesh);
 
 struct tcp_app {
 	int (*a_push)(tcp_sesh_t sesh, tcp_chan_t chan);

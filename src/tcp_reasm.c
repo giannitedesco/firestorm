@@ -811,10 +811,17 @@ again:
 	 * unrecoverable. An example of recoverable would be binary protocol
 	 * with len field but msg type indicates len field insufficient for
 	 * expected data...
+	 *
+	 * XXX: sack off this business with decodes tweaking pkt_len, use
+	 * the tcp dcb for this type of thing. Theres other cases of, for
+	 * example, binary protocols with one message not conforming to
+	 * protocol but can be recovered.
 	 */
 	dmesg(M_DEBUG, "tcp_reasm: %s: injecting %u/%u bytes",
 		sesh->app->a_label, bytes, total_bytes);
 	sesh->app->a_decode->d_decode(&pkt);
+
+	/* FIXME: use pkt_nxthdr ffs... */
 	if ( pkt.pkt_len > bytes ) {
 		assert(pkt.pkt_caplen == total_bytes);
 		if ( pkt.pkt_len <= total_bytes ) {
@@ -1061,6 +1068,14 @@ void tcp_sesh_set_flow(tcp_sesh_t sesh, void *flow)
 void *tcp_sesh_get_flow(tcp_sesh_t sesh)
 {
 	return sesh->flow;
+}
+
+tcp_chan_t tcp_sesh_get_wait(tcp_sesh_t sesh)
+{
+	tcp_chan_t ret;
+	ret = sesh->reasm_flags;
+	assert(ret && 0 == (ret & ~(TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT)));
+	return ret;
 }
 
 void tcp_sesh_wait(tcp_sesh_t sesh, tcp_chan_t chan)
