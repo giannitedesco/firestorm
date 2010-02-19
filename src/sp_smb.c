@@ -131,9 +131,6 @@ again:
 		}
 		dbg(f, "MAX_PENDING exceeded %u/%u\n",
 			f->num_trans_live, f->num_trans);
-		/* FIXME: handle in similar way to response for non-pending
-		 * transaction, are these cases isomorphic?
-		 */
 		return;
 	}
 
@@ -417,7 +414,7 @@ static void dump_smb(const struct smb_flow *f, const struct smb_dcb *dcb)
 
 	cmd = (dcb->cmd) ? dcb->cmd : find_cmd(dcb->smb->smb_cmd);
 	dbg(f, "smb_pkt: %s : %s%s\n", cmd->label,
-		(dcb->flags & SMB_DCB_DONT_TRACK) ? "STATELESS" : "",
+		(dcb->flags & SMB_DCB_DONT_TRACK) ? "STATELESS " : "",
 		(dcb->flags & SMB_DCB_RESPONSE) ? "Response" : "Request");
 	dbg(f, " PID/MID: %.4x / %.4x\n",
 		sys_be16(dcb->smb->smb_pid), sys_be16(dcb->smb->smb_mid));
@@ -573,6 +570,12 @@ static int check_regular_msgtype(const struct tcpstream_dcb *tcp,
 			dcb->flags |= SMB_DCB_DONT_TRACK;
 			return 0;
 		}
+		if ( f->num_trans >= SMB_MAX_PENDING ) {
+			dbg(f, "MAX_PENDING EXCEEDED\n");
+			dcb->flags |= SMB_DCB_DONT_TRACK;
+			return 0;
+		}
+		return 0;
 		return 0;
 	}
 
@@ -757,99 +760,112 @@ static size_t nbt_get_len(const struct ro_vec *vec, size_t numv, size_t bytes)
  * here is going to be so hairy that the extra complication this entails will
  * definitely not be worth it
  */
-static int do_push(tcp_sesh_t sesh, tcp_chan_t chan, int nbt)
+static int pump_channel(tcp_sesh_t sesh, tcp_chan_t chan, int nbt)
 {
 	const struct ro_vec *vec;
 	size_t numv, bytes, b, inj;
+
+	assert(chan == TCP_CHAN_TO_SERVER || chan == TCP_CHAN_TO_CLIENT);
+	vec = tcp_sesh_get_buf(sesh, chan, &numv, &bytes);
+	if ( NULL == vec )
+		return 0;
+
+	if ( nbt )
+		b = nbt_get_len(vec, numv, bytes);
+	else
+		b = smb_get_len(vec, numv, bytes);
+
+	if ( 0 == b || b > bytes )
+		return 0;
+
+	inj = tcp_sesh_inject(sesh, chan, b);
+	if ( 0 == inj )
+		return -1;
+
+	return 1;
+}
+
+static tcp_chan_t get_pending_chan(const struct smb_flow *f)
+{
+	tcp_chan_t pchan = 0;
+	if ( f->num_trans )
+		pchan |= TCP_CHAN_TO_CLIENT;
+	if ( f->num_oplock_break )
+		pchan |= TCP_CHAN_TO_SERVER;
+	return pchan;
+}
+
+static int do_push(tcp_sesh_t sesh, tcp_chan_t chan, int nbt)
+{
+	tcp_chan_t wchan, pchan, pumped;
 	struct smb_flow *f;
-	tcp_chan_t c, wchan;
-	int retry;
+	int ret, retry = 0;
 
 	f = tcp_sesh_get_flow(sesh);
-	assert(f);
-
 	wchan = tcp_sesh_get_wait(sesh);
+
+	pchan = get_pending_chan(f);
+
+	dbg(f, "do_push: available chans %s\n", tcp_chan_str(chan));
+	dbg(f, "do_push: waiting chans %s\n", tcp_chan_str(wchan));
+	dbg(f, "do_push: pending chans %s\n", tcp_chan_str(pchan));
+
 	chan &= wchan;
 
 	f->decode_flags = 0;
 
-	while(chan) {
-		if ( wchan != (TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT) ) {
-			assert(chan & wchan); /* htf? */
-			c = wchan;
-		}else if ( 0 == f->num_trans && (chan & TCP_CHAN_TO_SERVER) ) {
-			/* what about flip pend? */
-			c = TCP_CHAN_TO_SERVER;
-		}else if ( chan & TCP_CHAN_TO_CLIENT ) {
-			c = TCP_CHAN_TO_CLIENT;
+	if ( (chan & pchan) == 0 ||
+			chan == (TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT) ) {
+		if ( chan == (TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT) ) {
+			pumped = TCP_CHAN_TO_SERVER;
+			dbg(f, "do_push: choices... %s is best bet...\n",
+				tcp_chan_str(pumped));
 		}else{
-			c = TCP_CHAN_TO_SERVER;
+			dbg(f, "do_push: the choice is obvious\n");
+			pumped = chan;
 		}
-
-		retry = 0;
-
-retry:
-		vec = tcp_sesh_get_buf(sesh, c, &numv, &bytes);
-		if ( NULL == vec ) {
-			if ( retry ) {
-				tcp_sesh_wait(sesh, c);
-				return 0;
-			}else{
-				break;
-			}
-		}
-
-		if ( nbt )
-			b = nbt_get_len(vec, numv, bytes);
-		else
-			b = smb_get_len(vec, numv, bytes);
-
-		if ( 0 == b || b > bytes ) {
-			if ( retry ) {
-				dbg(f, "push: no data in other chan\n");
-				tcp_sesh_wait(sesh, c);
-				return 0;
-			}else{
-				dbg(f, "push: no more data left in buffer\n");
-				chan &= ~c;
-				continue;
-			}
-		}
-
-retry_samechan:
-		inj = tcp_sesh_inject(sesh, c, b);
-		if ( 0 == inj ) {
-			if ( !retry ) {
-				c = (c == TCP_CHAN_TO_SERVER) ?
-						TCP_CHAN_TO_CLIENT :
-						TCP_CHAN_TO_SERVER;
-				if ( c & chan ) {
-					dbg(f, "push: retry other chan\n");
-					retry = 1;
-					goto retry;
-				}else{
-					dbg(f, "push: wait for other chan\n");
-					tcp_sesh_wait(sesh, c);
-					return 0;
-				}
-			}else if ( b < bytes ) {
-				goto ballsdeep;
-			}else{
-				dbg(f, "push: retrying same chan stateless\n");
-				f->decode_flags |= SMB_DECODE_STATELESS;
-				goto retry_samechan;
-			}
-		}
-
+	}else{
+		dbg(f, "do_push: no choice but to pump %s\n",
+			tcp_chan_str(chan & pchan));
+		pumped = chan & pchan;
 	}
 
-	tcp_sesh_wait(sesh, TCP_CHAN_TO_CLIENT|TCP_CHAN_TO_SERVER);
-	return 0;
-
-	/* special case for batching all packets in reasm buffer */
-ballsdeep:
-	dbg(f, "balls deep %u/%u non-pending\n", b, bytes);
-	assert(0);
+retry:
+	ret = pump_channel(sesh, pumped, nbt);
+	switch(ret) {
+	case 0:
+		dbg(f, "do_push: we're all done here...\n");
+		return 0;
+	case 1:
+		dbg(f, "do_push: go again...\n");
+		tcp_sesh_wait(sesh, TCP_CHAN_TO_CLIENT|TCP_CHAN_TO_SERVER);
+		return 1;
+	case -1:
+		dbg(f, "do_push: non-pending response on %s\n",
+			tcp_chan_str(pumped));
+		if ( retry ) {
+			dbg(f, "bad shit...\n");
+			f->decode_flags = SMB_DECODE_STATELESS;
+			goto retry;
+		}else{
+			pumped = (pumped == TCP_CHAN_TO_CLIENT) ?
+						TCP_CHAN_TO_SERVER :
+						TCP_CHAN_TO_CLIENT;
+			dbg(f, "do_push: retrying %s\n",
+				tcp_chan_str(pumped));
+			if ( chan & pumped ) {
+				retry = 1;
+				goto retry;
+			}else{
+				dbg(f, "wait for %s...\n",
+					tcp_chan_str(pumped));
+				tcp_sesh_wait(sesh, pumped);
+				return 0;
+			}
+		}
+	default:
+		assert(0);
+	}
 	return 0;
 }
 

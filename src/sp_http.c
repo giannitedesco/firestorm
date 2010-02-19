@@ -9,7 +9,6 @@
  *  - incorporate NADS :]
  *  - additional state tracking for connection: keep-alive
  *  - use htype for host header
- *  - parse content-type options (htype_content_type)
  *  - use BCD for protocol version 0xf for bad chars
 */
 

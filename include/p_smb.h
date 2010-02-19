@@ -5,11 +5,11 @@
 struct smb_pend {
 	uint8_t  flags;
 	uint8_t  cmd;
-	uint16_t pid;
 	uint16_t mid;
+	uint32_t pid;
 };
 
-#define SMB_MAX_PENDING		12
+#define SMB_MAX_PENDING		128
 struct smb_flow {
 	FILE *file;
 	uint8_t num_trans;
