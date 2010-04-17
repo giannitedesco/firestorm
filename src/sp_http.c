@@ -4,12 +4,11 @@
  * Released under the terms of the GNU GPL version 3
  *
  * TODO:
- *  - include partial content with req/resp if possible
+ *  - interpret session keep-alive/close for 1.0 vs 1.1 connections
  *  - support chunked transfer encoding
+ *  - include partial content with req/resp if possible
  *  - incorporate NADS :]
- *  - additional state tracking for connection: keep-alive
  *  - use htype for host header
- *  - use BCD for protocol version 0xf for bad chars
 */
 
 #include <firestorm.h>
@@ -21,23 +20,13 @@
 #include <limits.h>
 #include <ctype.h>
 
-#if 0
+#if 1
 #define dmesg mesg
 #define dhex_dump hex_dump
 #else
 #define dmesg(x...) do { } while(0);
 #define dhex_dump(x...) do { } while(0);
 #endif
-
-/* Accepted HTTP versions, must correspond with the  */
-static struct {
-	int maj, min;
-}http_proto_vers[HTTP_VER_MAX]={
-	[HTTP_VER_UNKNOWN] {-1, -1},
-	[HTTP_VER_0_9] {0, 9},
-	[HTTP_VER_1_0] {1, 0},
-	[HTTP_VER_1_1] {1, 1},
-};
 
 static struct _proto p_http_req = {
 	.p_label = "http_request",
@@ -65,26 +54,11 @@ struct http_hcb {
 	}u;
 };
 
-/* Get a version code for a given major and minor version */
-static inline unsigned int http_vers_idx(int maj, int min)
-{
-	int i;
-
-	for(i=1; i < HTTP_VER_MAX; i++) {
-		if ( http_proto_vers[i].maj == maj &&
-			http_proto_vers[i].min == min )
-		return i;
-	}
-
-	return HTTP_VER_UNKNOWN;
-}
-
 /* Parse and HTTP version string (eg: "HTTP/1.0") */
 static int http_proto_version(struct ro_vec *str)
 {
 	const uint8_t *s = str->v_ptr;
 	int maj, min;
-	int ret;
 
 	if ( str->v_ptr == NULL )
 		return HTTP_VER_UNKNOWN;
@@ -103,9 +77,8 @@ static int http_proto_version(struct ro_vec *str)
 
 	maj = s[5] - '0';
 	min = s[7] - '0';
-	ret = http_vers_idx(maj, min);
 
-	return ret;
+	return (min << 4) | maj;
 }
 
 static void htype_string(struct http_hcb *h, struct ro_vec *v)
@@ -375,30 +348,6 @@ done:
 	return hlen;
 }
 
-static int check_req(const struct ro_vec *vec, size_t vb, size_t b,
-					size_t v, size_t i)
-{
-	uint8_t pb;
-
-	if (b < vb)
-		return 0;
-
-	if ( 1 + vb == b )
-		return 1;
-
-	if ( b - vb > 2 )
-		return 0;
-
-	if ( i ) {
-		pb = vec[v].v_ptr[i - 1];
-	}else if ( v ) {
-		pb = vec[v - 1].v_ptr[vec[v - 1].v_len - 1];
-	}else
-		return 0;
-
-	return 1;
-}
-
 static size_t http_resp(struct http_response_dcb *dcb,
 				const uint8_t *ptr, size_t len)
 {
@@ -644,23 +593,80 @@ static void state_update(tcp_sesh_t sesh, tcp_chan_t chan, struct _pkt *pkt)
 	}
 }
 
+/* State machine for incremental HTTP request parse */
+#define RSTATE_INITIAL		0
+#define RSTATE_CR		1
+#define RSTATE_LF		2
+#define RSTATE_CRLF		3
+#define RSTATE_LFCR		4
+#define RSTATE_CRLFCR		5
+#define RSTATE_LFLF		6
+#define RSTATE_CRLFLF		7
+#define RSTATE_LFCRLF		8
+#define RSTATE_CRLFCRLF		9
+
+#define RSTATE_NR_NONTERMINAL	RSTATE_LFLF
+#define RSTATE_TERMINAL(x)	((x) >= RSTATE_LFLF)
+static inline int http_parse_incremental(uint8_t *state,
+					const uint8_t **rptr,
+					const uint8_t *end)
+{
+	static const uint8_t cr_map[RSTATE_NR_NONTERMINAL] = {
+			[RSTATE_INITIAL] = RSTATE_CR,
+			[RSTATE_CR] = RSTATE_CR,
+			[RSTATE_LF] = RSTATE_LFCR,
+			[RSTATE_CRLF] = RSTATE_CRLFCR,
+			[RSTATE_LFCR] = RSTATE_CR,
+			[RSTATE_CRLFCR] = RSTATE_CR};
+	static const uint8_t lf_map[RSTATE_NR_NONTERMINAL] = {
+			[RSTATE_INITIAL] = RSTATE_LF,
+			[RSTATE_CR] = RSTATE_CRLF,
+			[RSTATE_LF] = RSTATE_LFLF,
+			[RSTATE_CRLF] = RSTATE_CRLFLF,
+			[RSTATE_LFCR] = RSTATE_LFCRLF,
+			[RSTATE_CRLFCR] = RSTATE_CRLFCRLF};
+
+	assert(end >= *rptr);
+
+	for(; *rptr < end; (*rptr)++) {
+		switch((*rptr)[0]) {
+		case '\r':
+			assert((*state) < RSTATE_NR_NONTERMINAL);
+			(*state) = cr_map[(*state)];
+			break;
+		case '\n':
+			assert((*state) < RSTATE_NR_NONTERMINAL);
+			(*state) = lf_map[(*state)];
+			break;
+		default:
+			(*state) = RSTATE_INITIAL;
+			continue;
+		}
+		if ( RSTATE_TERMINAL((*state)) ) {
+			(*rptr)++;
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
 static ssize_t parse_req(const struct ro_vec *vec, size_t numv, size_t bytes)
 {
-	size_t vb = bytes;
-	size_t v, i, b;
+	uint8_t state = RSTATE_INITIAL;
+	size_t b, i;
 
-	/* FIXME: doesn't check for '\r' */
-	for(b = v = 0; v < numv; v++) {
-		for(i = 0; i < vec[v].v_len; i++) {
-			if ( vec[v].v_ptr[i] != '\n' )
-				continue;
-			if ( !check_req(vec, vb, b + i, v, i) ) {
-				vb = b + i;
-				continue;
-			}
-			return b + i + 1;
+	for(b = i = 0; i < numv; i++) {
+		const uint8_t *rptr, *end;
+
+		rptr = vec[i].v_ptr;
+		end = rptr + vec[i].v_len;
+		if ( !http_parse_incremental(&state, &rptr, end) ) {
+			b += vec[i].v_len;
+			continue;
 		}
-		b += vec[v].v_len;
+
+		return b + (rptr - vec[i].v_ptr);
 	}
 
 	return 0;

@@ -11,11 +11,10 @@
 /* The three version of the HTTP protocol we are expected to understand as
  * required by RFC 2616. Must be in order.
  */
-#define HTTP_VER_UNKNOWN	0
-#define HTTP_VER_0_9		1
-#define HTTP_VER_1_0		2
-#define HTTP_VER_1_1		3
-#define HTTP_VER_MAX		4
+#define HTTP_VER_UNKNOWN	0xff
+#define HTTP_VER_0_9		0x09
+#define HTTP_VER_1_0		0x10
+#define HTTP_VER_1_1		0x11
 
 #define HTTP_MAX_POST_DATA	1024
 #define HTTP_MAX_RESP_DATA	1024
