@@ -36,12 +36,25 @@ static void ipv6_decode(struct _pkt *p)
 		return;
 
 	len = sys_be16(iph->ip6_plen);
-	mesg(M_DEBUG, "len = %u", len);
 	p->pkt_nxthdr += len;
 	if ( p->pkt_nxthdr > p->pkt_end ) {
 		mesg(M_WARN, "truncated IP packet");
 		return;
 	}
 
-	mesg(M_DEBUG, "IPv6 proto = 0x%.2x", iph->ip6_proto);
+	switch(iph->ip6_proto) {
+	case IP6_PROTO_HOPBYHOP:
+		break;
+	case IP6_PROTO_TCP:
+		break;
+	case IP6_PROTO_UDP:
+		break;
+	case IP6_PROTO_ICMP:
+		break;
+	case IP6_PROTO_PIM:
+		break;
+	default:
+		mesg(M_DEBUG, "IPv6 proto = 0x%.2x, len = %u",
+			iph->ip6_proto, len);
+	}
 }

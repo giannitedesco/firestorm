@@ -8,12 +8,14 @@
 #include <f_capture.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_flow.h>
 #include <pkt/ip.h>
 #include <pkt/icmp.h>
 #include <pkt/tcp.h>
 #include <pkt/udp.h>
-#include "p_ipv4.h"
+#include <p_ipv4.h>
+#include <p_tcp.h>
+
+#include "tcpip.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -31,9 +33,31 @@ static void ipv4_decode(struct _pkt *p);
 static void ah_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 			const struct pkt_ahhdr *bogus);
 
+static int flow_track_ctor(void)
+{
+	if ( !_ipdefrag_ctor() )
+		goto err;
+	if ( !_tcpflow_ctor() )
+		goto err_free_ipfrag;
+
+	return 1;
+
+err_free_ipfrag:
+	_ipdefrag_dtor();
+err:
+	return 0;
+}
+
+static void flow_track_dtor(void)
+{
+	_ipdefrag_dtor();
+	_tcpflow_dtor();
+}
+
 static struct _proto p_fragment = {
 	.p_label = "ipfrag",
 	.p_dcb_sz = sizeof(struct ipfrag_dcb),
+	.p_flowtrack = _ipdefrag_track,
 };
 
 static struct _proto p_ipraw = {
@@ -70,6 +94,12 @@ static struct _proto p_esp = {
 static struct _proto p_tcp = {
 	.p_label = "tcp",
 	.p_dcb_sz = sizeof(struct tcp_dcb),
+	.p_flowtrack = _tcpflow_track,
+};
+
+struct _proto _p_tcpstream = {
+	.p_label = "tcpstream",
+	.p_dcb_sz = sizeof(struct tcpstream_dcb),
 };
 
 static struct _proto p_udp = {
@@ -80,6 +110,8 @@ static struct _proto p_udp = {
 struct _decoder _ipv4_decoder = {
 	.d_label = "IPv4",
 	.d_decode = ipv4_decode,
+	.d_flow_ctor = flow_track_ctor,
+	.d_flow_dtor = flow_track_dtor,
 };
 
 static void __attribute__((constructor)) _ctor(void)
@@ -95,10 +127,9 @@ static void __attribute__((constructor)) _ctor(void)
 	proto_add(&_ipv4_decoder, &p_sctp);
 	proto_add(&_ipv4_decoder, &p_dccp);
 	proto_add(&_ipv4_decoder, &p_tcp);
+	proto_add(&_ipv4_decoder, &_p_tcpstream);
 	proto_add(&_ipv4_decoder, &p_udp);
 	proto_add(&_ipv4_decoder, &p_esp);
-	flow_tracker_add(&p_fragment, &_ipv4_ipdefrag);
-	flow_tracker_add(&p_tcp, &_ipv4_tcpflow);
 }
 
 void iptostr(ipstr_t str, uint32_t ip)
@@ -130,7 +161,7 @@ static void raw_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 			const struct pkt_ahhdr *ah)
 {
 	struct ip_dcb *dcb;
-	dcb = (struct ip_dcb *)_decode_layer(p, &p_ipraw);
+	dcb = (struct ip_dcb *)decode_layer(p, &p_ipraw);
 	if ( dcb ) {
 		dcb->ip_iph = iph;
 		dcb->ip_ah = ah;
@@ -144,7 +175,7 @@ static void tunnel_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 {
 	struct ip_dcb *dcb;
 
-	dcb = (struct ip_dcb *)_decode_layer(p, &p_tunnel);
+	dcb = (struct ip_dcb *)decode_layer(p, &p_tunnel);
 	if ( dcb ) {
 		dcb->ip_iph = iph;
 		dcb->ip_ah = ah;
@@ -170,7 +201,7 @@ static const struct pkt_iphdr *icmp_try_inner(struct _pkt *p,
 	}
 
 	if ( _ip_csum(iph) ) {
-		mesg(M_WARN, "icmp: bad ip checksum in payload");
+		dmesg(M_WARN, "icmp: bad ip checksum in payload");
 		return NULL;
 	}
 
@@ -207,7 +238,7 @@ static void icmp_decode(struct _pkt *p, const struct pkt_iphdr *outer,
 		iph = NULL;
 	}
 
-	dcb = (struct icmp_dcb *)_decode_layer(p, &p_icmp);
+	dcb = (struct icmp_dcb *)decode_layer(p, &p_icmp);
 	if ( dcb == NULL )
 		return;
 
@@ -234,7 +265,7 @@ static void tcp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 	dmesg(M_DEBUG, "ipv4: tcp %u -> %u",
 		sys_be16(tcph->sport), sys_be16(tcph->dport));
 
-	dcb = (struct tcp_dcb *)_decode_layer(p, &p_tcp);
+	dcb = (struct tcp_dcb *)decode_layer(p, &p_tcp);
 	if ( dcb ) {
 		dcb->tcp_iph = iph;
 		dcb->tcp_ah = ah;
@@ -256,7 +287,7 @@ static void udp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 	dmesg(M_DEBUG, "ipv4: udp %u -> %u",
 		sys_be16(udph->sport), sys_be16(udph->dport));
 
-	dcb = (struct udp_dcb *)_decode_layer(p, &p_udp);
+	dcb = (struct udp_dcb *)decode_layer(p, &p_udp);
 	if ( dcb ) {
 		dcb->udp_iph = iph;
 		dcb->udp_ah = ah;
@@ -275,7 +306,7 @@ static void esp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 		return;
 
 	dmesg(M_DEBUG, "ipv4: ESP spi=0x%.8x", sys_be32(esp->spi));
-	_decode_layer(p, &p_esp);
+	decode_layer(p, &p_esp);
 }
 
 typedef void (*ipproto_t)(struct _pkt *p, const struct pkt_iphdr *iph,
@@ -376,7 +407,7 @@ static void ipv4_decode(struct _pkt *p)
 
 	if ( iph->frag_off & ipfmask ) {
 		struct ipfrag_dcb *dcb;
-		dcb = (struct ipfrag_dcb *)_decode_layer(p, &p_fragment);
+		dcb = (struct ipfrag_dcb *)decode_layer(p, &p_fragment);
 		if ( dcb ) {
 			dcb->ip_iph = iph;
 		}

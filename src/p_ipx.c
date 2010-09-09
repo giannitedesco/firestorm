@@ -34,6 +34,6 @@ void _ipx_decode(struct _pkt *p)
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 
-	_decode_layer(p, &p_ipx);
-	_decode_next(p, NS_IPX, ipxh->type);
+	decode_layer(p, &p_ipx);
+	decode_next(p, NS_IPX, ipxh->type);
 }

@@ -45,26 +45,22 @@ void eventloop_add(struct eventloop *e)
 
 int nbio_init(struct iothread *t, const char *plugin)
 {
-	if ( plugin == NULL ) {
-		t->plugin = ev_list;
-		if ( t->plugin == NULL ) {
+	if ( NULL == plugin ) {
+		if ( NULL == ev_list ) {
 			mesg(M_ERR, "nbio: No eventloop plugins\n");
 			return 0;
 		}
+		t->plugin = ev_list;
 	}else{
 		t->plugin = eventloop_find(plugin);
 	}
 
-	if ( t->plugin == NULL )
+	if ( NULL == t->plugin )
 		return 0;
 
-try_again:
-	if ( !t->plugin->init(t) ) {
-		if ( plugin == NULL && t->plugin->next ) {
-			t->plugin = t->plugin->next;
-			goto try_again;
-		}
-		return 0;
+	for ( ; !t->plugin->init(t); t->plugin = t->plugin->next ) {
+		if ( plugin || NULL == t->plugin->next )
+			return 0;
 	}
 
 	INIT_LIST_HEAD(&t->active);
@@ -100,8 +96,7 @@ void nbio_pump(struct iothread *t, int mto)
 
 	while ( !list_empty(&t->active) ) {
 		list_for_each_entry_safe(n, tmp, &t->active, list) {
-			if ( n->mask == NBIO_DELETED )
-				abort();
+			assert(NBIO_DELETED != n->mask);
 
 			if ( n->flags & NBIO_ERROR ) {
 				n->mask = NBIO_DELETED;

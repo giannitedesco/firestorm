@@ -25,9 +25,11 @@
 #include <firestorm.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_flow.h>
 #include <pkt/ip.h>
-#include "p_ipv4.h"
+#include <p_ipv4.h>
+#include <p_tcp.h> /* gah */
+
+#include "tcpip.h"
 
 #if 0
 #define dmesg mesg
@@ -37,19 +39,54 @@
 #define dhex_dump(x...) do{}while(0);
 #endif
 
-#define IPHASH 113 /* Must be a power of two */
-struct ipdefrag {
-	struct ipq *ipq_latest;
-	struct ipq *ipq_oldest;
-	size_t mem;
-	struct ipq *hash[IPHASH]; /* IP fragment hash table */
-	obj_cache_t ipq_cache;
-	obj_cache_t frag_cache;
+/* Keeps each individual fragment */
+struct ipfrag {
+	struct ipfrag		*next;
+	int			len;
+	int			offset;
+	void			*data;
+	unsigned int		free;
+	void			*fdata; /* Data to free */
+	unsigned int		flen;
 };
 
-/* config: high and low memory water marks */
-static const size_t mem_hi = 4 << 20;
-static const size_t mem_lo = 3 << 20;
+/* This is an IP session structure */
+struct ipq {
+	struct ipq *next;
+	struct ipq **pprev;
+	struct ipq *next_time;
+	struct ipq *prev_time;
+	
+	/* Identify the packet */
+	uint32_t saddr;
+	uint32_t daddr;
+	uint16_t id;
+	uint8_t protocol;
+
+#define FIRST_IN 0x2
+#define LAST_IN 0x1
+	uint8_t last_in;
+
+	/* Linked list of fragments */
+	struct ipfrag *fragments;
+
+	/* Total size of all the fragments we have */
+	int meat;
+
+	/* Total length of full packet */
+	int len;
+
+	/* Stuff we need for reassembly */
+	timestamp_t	time;
+};
+
+#define IPHASH 127 /* Mersenne prime */
+static struct ipq *ipq_latest;
+static struct ipq *ipq_oldest;
+static struct ipq *frag_hash[IPHASH]; /* IP fragment hash table */
+static mempool_t ipf_pool;
+static objcache_t ipq_cache;
+static objcache_t frag_cache;
 
 /* config: Timeout (in seconds) */
 static const timestamp_t timeout = 60 * TIMESTAMP_HZ;
@@ -63,24 +100,81 @@ static unsigned int err_mem;
 static unsigned int err_timeout;
 static unsigned int reassembled;
 
-static struct ipfrag *fragstruct_alloc(struct ipdefrag *ipd)
+static void fragstruct_free(struct ipfrag *x)
+{
+	objcache_free2(frag_cache, x);
+}
+
+static void ipq_kill(struct ipq *qp)
+{
+	struct ipfrag *foo, *bar;
+
+	/* Unlink from the list */
+	if ( qp->next )
+		qp->next->pprev = qp->pprev;
+	*qp->pprev = qp->next;
+
+	/* Free the fragments and descriptors */
+	for(foo = qp->fragments; foo;) {
+		bar = foo;
+		foo = foo->next;
+		if ( bar->free ) {
+			free(bar->fdata);
+		}
+		fragstruct_free(bar);
+	}
+
+	/* Remove from LRU queue */
+	if ( qp->next_time)
+		qp->next_time->prev_time = qp->prev_time;
+	if ( qp->prev_time)
+		qp->prev_time->next_time = qp->next_time;
+	if ( qp == ipq_oldest )
+		ipq_oldest = qp->prev_time;
+	if ( qp == ipq_latest )
+		ipq_latest = qp->next_time;
+
+	/* Free the ipq itself */
+	objcache_free2(ipq_cache, qp);
+}
+
+/* Trim down to low memory watermark */
+static int ip_evictor(struct ipq *cq)
+{
+	struct ipq *kill;
+
+	err_mem++;
+
+	if ( !ipq_oldest )
+		return 0;
+	if ( ipq_oldest == cq )
+		kill = ipq_oldest->next;
+	else
+		kill = ipq_oldest;
+
+	if ( kill ) {
+		ipq_kill(kill);
+		return 1;
+	}
+
+	return 0;
+}
+
+static struct ipfrag *fragstruct_alloc(struct ipq *qp)
 {
 	struct ipfrag *ret;
 
-	ret = objcache_alloc(ipd->frag_cache);
-	if ( ret )
-		ipd->mem += sizeof(*ret);
+again:
+	ret = objcache_alloc(frag_cache);
+	if ( NULL == ret ) {
+		if ( ip_evictor(qp) )
+			goto again;
+	}
 
 	return ret;
 }
 
-static void fragstruct_free(struct ipdefrag *ipd, struct ipfrag *x)
-{
-	objcache_free(ipd->frag_cache, x);
-	ipd->mem -= sizeof(*x);
-}
-
-/* Hash function for ipd->hash lookup */
+/* Hash function for hash lookup */
 static unsigned int ipq_hashfn(uint16_t id,
 				uint32_t saddr,
 				uint32_t daddr,
@@ -111,64 +205,20 @@ static void alert_boink(struct _pkt *p)
 {
 	mesg(M_WARN, "ipdefrag: boink");
 }
-static void alert_oom(struct _pkt *p)
-{
-	mesg(M_WARN, "ipdefrag: oom");
-}
 static void alert_timedout(struct _pkt *p)
 {
 	mesg(M_WARN, "ipdefrag: timeout");
 }
 
-static void ipq_kill(struct ipdefrag *ipd, struct ipq *qp)
-{
-	struct ipfrag *foo, *bar;
-
-	/* Unlink from the list */
-	if ( qp->next )
-		qp->next->pprev = qp->pprev;
-	*qp->pprev = qp->next;
-
-	/* Free the fragments and descriptors */
-	for(foo = qp->fragments; foo;) {
-		bar = foo;
-		foo = foo->next;
-		if ( bar->free ) {
-			free(bar->fdata);
-			ipd->mem -= bar->flen;
-		}
-		fragstruct_free(ipd, bar);
-	}
-
-	/* Remove from LRU queue */
-	if ( qp->next_time)
-		qp->next_time->prev_time = qp->prev_time;
-	if ( qp->prev_time)
-		qp->prev_time->next_time = qp->next_time;
-	if ( qp == ipd->ipq_oldest )
-		ipd->ipq_oldest = qp->prev_time;
-	if ( qp == ipd->ipq_latest )
-		ipd->ipq_latest = qp->next_time;
-
-	/* Free the ipq itself */
-	objcache_free(ipd->ipq_cache, qp);
-	ipd->mem -= sizeof(struct ipq);
-}
-
-static void frankenpkt_dtor(struct _pkt *pkt)
-{
-	decode_pkt_realloc(pkt, 0);
-	free((void *)pkt->pkt_base);
-}
-
 /* Reassemble a complete set of fragments */
-static struct _pkt *reassemble(struct ipdefrag *ipd, struct ipq *qp, source_t s)
+static void reassemble(struct ipq *qp,
+				struct _pkt *pkt)
 {
 	struct ipfrag *f;
 	struct pkt_iphdr *iph;
 	int len = 0;
 	uint8_t *buf, *ptr;
-	struct _pkt *ret = NULL;
+	struct _pkt new;
 
 	assert(qp->len <= 0xffff);
 
@@ -210,63 +260,60 @@ static struct _pkt *reassemble(struct ipdefrag *ipd, struct ipq *qp, source_t s)
 
 	dhex_dump(buf, qp->len, 16);
 
-	ret = pkt_alloc(s);
-	if ( ret == NULL )
-		goto err_free_buf;
+	new.pkt_source = pkt->pkt_source;
+	new.pkt_ts = qp->time;
+	new.pkt_base = buf;
+	new.pkt_len = new.pkt_caplen = qp->len;
+	new.pkt_end = new.pkt_base + new.pkt_len;
 
-	ret->pkt_ts = qp->time;
-	ret->pkt_base = buf;
-	ret->pkt_len = ret->pkt_caplen = qp->len;
-	ret->pkt_end = ret->pkt_base + ret->pkt_len;
+	new.pkt_dcb = NULL;
 
-	if ( !decode_pkt_realloc(ret, DECODE_DEFAULT_MIN_LAYERS) )
-		goto err_free_pkt;
+	if ( !decode_pkt_realloc(&new, DECODE_DEFAULT_MIN_LAYERS) )
+		goto err_free;
 
-	ret->pkt_dtor = frankenpkt_dtor;
-
-	/* TODO: Inject the packet back in to the flow */
-	decode(ret, &_ipv4_decoder);
 	reassembled++;
 
-	return ret;
+	decode(&new, &_ipv4_decoder);
+	pkt_inject(&new);
 
-err_free_pkt:
-	pkt_free(ret);
-err_free_buf:
+	decode_pkt_realloc(&new, 0);
+	free(buf);
+	return;
+
+err_free:
 	free(buf);
 err:
 	err_reasm++;
-	return ret;
 }
 
-static struct ipq *ip_frag_create(struct ipdefrag *ipd, unsigned int hash,
+static struct ipq *ip_frag_create(unsigned int hash,
 					const struct pkt_iphdr *iph)
 {
 	struct ipq *q;
 
-	q = objcache_alloc0(ipd->ipq_cache);
+again:
+	q = objcache_alloc0(ipq_cache);
 	if ( q == NULL ) {
-		err_mem++;
+		if ( ip_evictor(NULL) )
+			goto again;
 		return NULL;
 	}
-	ipd->mem += sizeof(struct ipq);
 
 	q->id = iph->id;
 	q->saddr = iph->saddr;
 	q->daddr = iph->daddr;
 	q->protocol = iph->protocol;
-	q->next = ipd->hash[hash];
+	q->next = frag_hash[hash];
 	if ( q->next )
 		q->next->pprev = &q->next;
-	ipd->hash[hash] = q;
-	q->pprev = &ipd->hash[hash];
+	frag_hash[hash] = q;
+	q->pprev = &frag_hash[hash];
 
 	return q;
 }
 
 /* Find (or create) the ipq for this IP fragment */
-static struct ipq *ip_find(struct ipdefrag *ipd,
-				const struct pkt_iphdr *iph,
+static struct ipq *ip_find(const struct pkt_iphdr *iph,
 				unsigned int *hash,
 				struct _pkt *pkt)
 {
@@ -275,7 +322,7 @@ static struct ipq *ip_find(struct ipdefrag *ipd,
 	*hash = ipq_hashfn(iph->id, iph->saddr,
 				iph->daddr, iph->protocol);
 
-	for(qp = ipd->hash[*hash]; qp; qp = qp->next) {
+	for(qp = frag_hash[*hash]; qp; qp = qp->next) {
 		if ( (qp->id == iph->id) &&
 			(qp->saddr == iph->saddr) &&
 			(qp->daddr == iph->daddr) &&
@@ -284,8 +331,9 @@ static struct ipq *ip_find(struct ipdefrag *ipd,
 		}
 	}
 
-	qp = ip_frag_create(ipd, *hash, iph);
-	qp->time = pkt->pkt_ts;
+	qp = ip_frag_create(*hash, iph);
+	if ( qp )
+		qp->time = pkt->pkt_ts;
 	return qp;
 }
 
@@ -300,23 +348,7 @@ static int expired(struct _pkt *pkt, struct ipq *qp)
 	return 1;
 }
 
-/* Trim down to low memory watermark */
-static void ip_evictor(struct ipdefrag *ipd, struct _pkt *pkt, struct ipq *cq)
-{
-	dmesg(M_DEBUG, "Running the ipdefrag evictor! %u(%i) %i",
-		ipd->mem, ipd->mem, sizeof(struct ipfrag));
-	alert_oom(pkt);
-	err_mem++;
-
-	while ( (ipd->mem > mem_lo) ) {
-		if ( !ipd->ipq_oldest || (ipd->ipq_oldest == cq) )
-			return;
-		ipq_kill(ipd, ipd->ipq_oldest);
-	}
-}
-
-static int check_timeouts(struct ipdefrag *ipd,
-				struct _pkt *pkt, struct ipq *qp)
+static int check_timeouts(struct _pkt *pkt, struct ipq *qp)
 {
 	/* Check our timeout */
 	if ( !expired(pkt, qp) ) {
@@ -325,7 +357,7 @@ static int check_timeouts(struct ipdefrag *ipd,
 		 * is suspicious (read: evasive)
 		*/
 		alert_timedout(pkt);
-		ipq_kill(ipd, qp);
+		ipq_kill(qp);
 		return 0;
 	}
 
@@ -334,26 +366,26 @@ static int check_timeouts(struct ipdefrag *ipd,
 		qp->next_time->prev_time = qp->prev_time;
 	if ( qp->prev_time)
 		qp->prev_time->next_time = qp->next_time;
-	if ( qp == ipd->ipq_oldest )
-		ipd->ipq_oldest = qp->prev_time;
-	if ( qp == ipd->ipq_latest )
-		ipd->ipq_latest = qp->next_time;
-	qp->next_time = ipd->ipq_latest;
+	if ( qp == ipq_oldest )
+		ipq_oldest = qp->prev_time;
+	if ( qp == ipq_latest )
+		ipq_latest = qp->next_time;
+	qp->next_time = ipq_latest;
 	qp->prev_time = NULL;
-	if ( !ipd->ipq_oldest )
-		ipd->ipq_oldest = qp;
-	if ( ipd->ipq_latest )
-		ipd->ipq_latest->prev_time = qp;
-	ipd->ipq_latest = qp;
+	if ( !ipq_oldest )
+		ipq_oldest = qp;
+	if ( ipq_latest )
+		ipq_latest->prev_time = qp;
+	ipq_latest = qp;
 
 	/* Check timeouts on other fragment queues */
-	while ( ipd->ipq_oldest ){
-		if ( expired(pkt, ipd->ipq_oldest) )
+	while ( ipq_oldest ){
+		if ( expired(pkt, ipq_oldest) )
 			break;
 
 		/* this can't kill qp from under us because
 		 * we already know we haven't timed out */
-		ipq_kill(ipd, ipd->ipq_oldest);
+		ipq_kill(ipq_oldest);
 		return 0;
 	}
 
@@ -367,20 +399,19 @@ static int check_timeouts(struct ipdefrag *ipd,
 	return 1;
 }
 
-static void hash_mtf(struct ipdefrag *ipd, unsigned int hash, struct ipq *qp)
+static void hash_mtf(unsigned int hash, struct ipq *qp)
 {
 	/* Move to front heuristic */
 	if ( qp->next )
 		qp->next->pprev = qp->pprev;
 	*qp->pprev = qp->next;
-	if ( (qp->next = ipd->hash[hash]) )
+	if ( (qp->next = frag_hash[hash]) )
 		qp->next->pprev = &qp->next;
-	ipd->hash[hash] = qp;
-	qp->pprev = &ipd->hash[hash];
+	frag_hash[hash] = qp;
+	qp->pprev = &frag_hash[hash];
 }
 
-static int queue_fragment(struct ipdefrag *ipd,
-				unsigned int hash,
+static int queue_fragment(unsigned int hash,
 				struct ipq *qp,
 				struct _pkt *pkt,
 				const struct pkt_iphdr *iph)
@@ -390,14 +421,10 @@ static int queue_fragment(struct ipdefrag *ipd,
 	int ihl, end, len;
 	int chop = 0;
 
-	if ( !check_timeouts(ipd, pkt, qp) )
+	if ( !check_timeouts(pkt, qp) )
 		return 0;
 
-	hash_mtf(ipd, hash, qp);
-
-	/* Kill off LRU ipqs, we are OOM */
-	if ( ipd->mem > mem_hi )
-		ip_evictor(ipd, pkt, qp);
+	hash_mtf(hash, qp);
 
 	/* Now we can get on with queueing the packet.. */
 	ihl = iph->ihl << 2;
@@ -447,13 +474,12 @@ static int queue_fragment(struct ipdefrag *ipd,
 	/* Don't bother wasting any more resources
 	 * when we know the packet is oversize (invalid) */
 	if ( qp->len > 0xffff ) {
-		/* FIXME: isn't this a bug? */
 		alert_oversize(pkt);
 		return 0;
 	}
 
 	/* Insert data into fragment chain */
-	me = fragstruct_alloc(ipd);
+	me = fragstruct_alloc(qp);
 	if ( me == NULL )
 		return 0;
 
@@ -505,7 +531,7 @@ static int queue_fragment(struct ipdefrag *ipd,
 			}
 
 			qp->meat -= free_it->len;
-			fragstruct_free(ipd, free_it);
+			fragstruct_free(free_it);
 		}
 	}
 
@@ -528,11 +554,10 @@ static int queue_fragment(struct ipdefrag *ipd,
 
 		me->fdata = malloc(alen);
 		if ( me->fdata == NULL ) {
-			fragstruct_free(ipd, me);
+			fragstruct_free(me);
 			return 0;
 		}
 
-		ipd->mem += alen;
 		memcpy(me->fdata, ((char *)iph) + chop, alen);
 		me->free = 1;
 		me->flen = alen;
@@ -574,68 +599,48 @@ static int queue_fragment(struct ipdefrag *ipd,
 	return 0;
 }
 
-static pkt_t ipdefrag_track(flow_state_t s, pkt_t pkt, dcb_t dcb_ptr)
+void _ipdefrag_track(pkt_t pkt, dcb_t dcb_ptr)
 {
-	struct ipdefrag *ipd = s;
 	const struct pkt_iphdr *iph;
 	struct ipfrag_dcb *dcb;
 	unsigned int hash;
 	struct ipq *q;
-	pkt_t ret = NULL;
 
 	dcb = (struct ipfrag_dcb *)dcb_ptr;
 	iph = dcb->ip_iph;
 
 	/* Ignore packets with ttl < min_ttl */
 	if ( iph->ttl < minttl )
-		return ret;
+		return;
 
-	q = ip_find(ipd, iph, &hash, pkt);
+	q = ip_find(iph, &hash, pkt);
 	if ( q == NULL )
-		return ret;
+		return;
 
-	if ( queue_fragment(ipd, hash, q, pkt, iph) ) {
-		ret = reassemble(ipd, q, pkt->pkt_source);
-		ipq_kill(ipd, q);
+	if ( queue_fragment(hash, q, pkt, iph) ) {
+		reassemble(q, pkt);
+		ipq_kill(q);
 	}
-
-	return ret;
 }
 
-static void ipdefrag_dtor(flow_state_t s)
+void _ipdefrag_dtor(void)
 {
-	struct ipdefrag *ipd = s;
-
 	mesg(M_INFO, "ipdefrag: %u reassembled packets, "
-		"%u reasm errors, %u timeouts",
-		reassembled, err_reasm, err_timeout);
-	mesg(M_INFO, "ipdefrag: %u times out of memory, %uKB still used",
-		err_mem, ipd->mem >> 10);
+		"%u reasm errors, %u timeouts, %u oom",
+		reassembled, err_reasm, err_timeout, err_mem);
 
-	/* FIXME: memory leak */
-	free(s);
+	mempool_free(ipf_pool);
 }
 
-static flow_state_t ipdefrag_ctor(memchunk_t mc)
+int _ipdefrag_ctor(void)
 {
-	struct ipdefrag *ipd;
-
-	if ( mem_hi <= mem_lo ) {
-		mesg(M_ERR, "ipdefrag: mem_hi must be bigger than mem_lo");
-		return NULL;
-	}
-
 	if ( minttl > 255 ) {
 		mesg(M_ERR, "ipdefrag: minttl must be < 256");
-		return NULL;
+		return 0;
 	}
 
-	ipd = calloc(1, sizeof(*ipd));
-	if ( ipd == NULL )
-		return NULL;
-
-	mesg(M_INFO, "ipdefrag: mem_hi=%uK mem_lo=%uK minttl=%u timeout=%llus",
-		mem_hi >> 10, mem_lo >> 10, minttl, timeout / TIMESTAMP_HZ);
+	mesg(M_INFO, "ipdefrag: minttl=%u timeout=%us",
+		minttl, timeout / TIMESTAMP_HZ);
 
 	if ( timeout < (10 * TIMESTAMP_HZ) ||
 		timeout > (120 * TIMESTAMP_HZ) ) {
@@ -643,20 +648,11 @@ static flow_state_t ipdefrag_ctor(memchunk_t mc)
 			"you will be vulnerable to evasion!");
 	}
 
-	ipd->ipq_cache = objcache_init(mc, "ipq", sizeof(struct ipq));
-	ipd->frag_cache = objcache_init(mc, "ipfrag", sizeof(struct ipfrag));
-	if ( ipd->ipq_cache == NULL || ipd->frag_cache == NULL ) {
-		free(ipd);
-		return NULL;
-	}
+	ipf_pool = mempool_new("ipdefrag", 2);
+	ipq_cache = objcache_init(ipf_pool, "ipq", sizeof(struct ipq));
+	frag_cache = objcache_init(ipf_pool, "ipfrag", sizeof(struct ipfrag));
+	if ( ipq_cache == NULL || frag_cache == NULL )
+		return 0;
 
-
-	return ipd;
+	return 1;
 }
-
-struct _flow_tracker _ipv4_ipdefrag = {
-	.ft_label = "ipdefrag",
-	.ft_ctor = ipdefrag_ctor,
-	.ft_dtor = ipdefrag_dtor,
-	.ft_track = ipdefrag_track,
-};

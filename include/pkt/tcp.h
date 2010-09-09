@@ -6,6 +6,15 @@
 #define TCP_MAXWIN		65535
 #define TCP_MAX_WINSHIFT	16
 
+/* TIMEOUTS */
+#define TCP_TMO_MSL  (30ULL * TIMESTAMP_HZ)
+#define TCP_TMO_2MSL  (2ULL * TCP_TMO_MSL)
+
+/* PAWS */
+#define TCP_PAWS_24DAYS (60 * 60 * 24 * 24)
+#define TCP_PAWS_MSL 60
+#define TCP_PAWS_WINDOW 60
+
 /* OPTIONS */
 #define TCPOPT_EOL 0
 #define TCPOPT_NOP 1
@@ -72,10 +81,10 @@ enum {
 	TCP_ESTABLISHED,
 	TCP_FIN_WAIT1,
 	TCP_FIN_WAIT2,
-	TCP_TIME_WAIT,
 	TCP_CLOSE_WAIT,
 	TCP_LAST_ACK,
 	TCP_CLOSING,
+	TCP_TIME_WAIT,
 	TCP_MAX_STATES /* Leave at the end! */
 };
 
@@ -89,11 +98,19 @@ struct tcp_phdr {
 /* Wrap-safe TCP seq number comparison */
 static inline int tcp_before(uint32_t s1, uint32_t s2)
 {
-	return (int32_t)(s1-s2) < 0;
+	return (int32_t)(s1 - s2) < 0;
 }
 
 static inline int tcp_after(uint32_t s1, uint32_t s2)
 {
-	return (int32_t)(s2-s1) < 0;
+	return (int32_t)(s2 - s1) < 0;
 }
+
+static inline uint32_t tcp_diff(uint32_t s1, uint32_t s2)
+{
+	if ( s2 < s1 )
+		return (0xffffffff - s1) + s2 + 1;
+	return (s2 - s1);
+}
+
 #endif /* _PKT_TCP_HEADER_INCLUDED_ */

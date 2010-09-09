@@ -1,6 +1,12 @@
 #ifndef __PKT_IPV6_HEADER_INCLUDED__
 #define __PKT_IPV6_HEADER_INCLUDED__
 
+#define IP6_PROTO_HOPBYHOP	0x00
+#define IP6_PROTO_TCP		0x06
+#define IP6_PROTO_UDP		0x11
+#define IP6_PROTO_ICMP		0x3a
+#define IP6_PROTO_PIM		0x67
+
 struct ip6_addr {
 	union {
 		uint8_t addr[16];

@@ -182,7 +182,7 @@ static void tcpd_free(struct _source *s)
 	free(s);
 }
 
-static struct _pkt *tcpd_dequeue(struct _source *s, struct iothread *io)
+static pkt_t tcpd_dequeue(struct _source *s, struct iothread *io)
 {
 	struct tcpd_priv *p = (struct tcpd_priv *)s;
 	struct pcap_pkthdr *h;

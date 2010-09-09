@@ -8,36 +8,70 @@
 #include <f_capture.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_flow.h>
 #include <nbio.h>
 
-struct per_proto {
-	struct _flow_tracker *pp_ft;
-	flow_state_t pp_flow;
-};
+#if 0
+#define dmesg mesg
+#define dhex_dump hex_dump
+#else
+#define dmesg(x...) do{}while(0);
+#define dhex_dump(x...) do{}while(0);
+#endif
 
 struct _pipeline {
+	struct iothread p_io;
 	struct list_head p_sources;
 	unsigned int p_async;
-	struct iothread p_io;
-	memchunk_t p_mem;
 	uint64_t p_num_pkt;
-	struct per_proto p_proto[0];
 };
 
-static int ft_init(struct _flow_tracker *ft, void *priv)
+static void analyze_packet(struct _pkt *pkt)
 {
-	struct _pipeline *p = priv;
-	struct per_proto *pp;
+	struct _dcb *cur;
 
-	pp = &p->p_proto[ft->ft_proto->p_idx];
-	if ( pp->pp_ft != NULL )
-		return 0;
+	for(cur = pkt->pkt_dcb;
+		cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
+		dmesg(M_DEBUG, " o %s layer", cur->dcb_proto->p_label);
+	}
+}
 
-	pp->pp_ft = ft;
-	if ( ft->ft_ctor ) {
-		pp->pp_flow = ft->ft_ctor(p->p_mem);
-		if ( pp->pp_flow == NULL )
+static void flowtrack_packet(struct _pkt *pkt)
+{
+	struct _dcb *cur;
+
+	for(cur = pkt->pkt_dcb; cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
+		if ( cur->dcb_proto->p_flowtrack ) {
+			dmesg(M_DEBUG, "FLOW TRACK: %s",
+				cur->dcb_proto->p_label);
+			cur->dcb_proto->p_flowtrack(pkt, cur);
+		}
+	}
+}
+
+static void do_pkt_inject(pkt_t pkt)
+{
+	dmesg(M_DEBUG, "pkt: len=%u/%u", pkt->pkt_caplen, pkt->pkt_len);
+	analyze_packet(pkt);
+	flowtrack_packet(pkt);
+	if ( pkt->pkt_nxthdr < pkt->pkt_end ) {
+		dhex_dump(pkt->pkt_nxthdr,
+			pkt->pkt_end - pkt->pkt_nxthdr, 16);
+	}else{
+		dmesg(M_DEBUG, ".\n");
+	}
+}
+
+void pkt_inject(pkt_t pkt)
+{
+	do_pkt_inject(pkt);
+}
+
+static int pd_init(struct _decoder *d, void *priv)
+{
+	//struct _pipeline *p = priv;
+
+	if ( d->d_flow_ctor ) {
+		if ( !d->d_flow_ctor() )
 			return 0;
 	}
 
@@ -49,25 +83,18 @@ pipeline_t pipeline_new(void)
 	struct _pipeline *p = NULL;
 	unsigned int num;
 
+	p = calloc(1, sizeof(*p));
+	if ( NULL == p )
+		return NULL;
 	num = decode_num_protocols();
-
-	p = calloc(1, sizeof(*p) + sizeof(*p->p_proto) * num);
-	if ( p == NULL )
-		goto out;
-
-	p->p_mem = memchunk_init(2048);
-	if ( p->p_mem == NULL )
-		goto out_free;
 
 	INIT_LIST_HEAD(&p->p_sources);
 
-	if ( !flow_tracker_foreach(ft_init, p) )
-		goto out_free_chunk;
+	if ( !decode_foreach_decoder(pd_init, p) )
+		goto out_free;
 
 	goto out;
 
-out_free_chunk:
-	memchunk_fini(p->p_mem);
 out_free:
 	free(p);
 	p = NULL;
@@ -75,25 +102,27 @@ out:
 	return p;
 }
 
+static int pd_fini(struct _decoder *d, void *priv)
+{
+	//struct _pipeline *p = priv;
+
+	if ( d->d_flow_dtor )
+		d->d_flow_dtor();
+
+	return 1;
+}
+
 void pipeline_free(pipeline_t p)
 {
 	struct _source *s, *tmp;
-	unsigned int i;
 
 	if ( p == NULL )
 		return;
 
-	list_for_each_entry_safe(s, tmp, &p->p_sources, s_list) {
+	decode_foreach_decoder(pd_fini, p);
+
+	list_for_each_entry_safe(s, tmp, &p->p_sources, s_list)
 		source_free(s);
-	}
-
-	for(i = 0; i < decode_num_protocols(); i++) {
-		if ( p->p_proto[i].pp_ft &&
-			p->p_proto[i].pp_ft->ft_dtor )
-			p->p_proto[i].pp_ft->ft_dtor(p->p_proto[i].pp_flow);
-	}
-
-	memchunk_fini(p->p_mem);
 
 	free(p);
 }
@@ -120,55 +149,22 @@ int pipeline_add_source(pipeline_t p, source_t s)
 	return 1;
 }
 
-#if 0
-#define dmesg mesg
-#define dhex_dump hex_dump
-#else
-#define dmesg(x...) do{}while(0);
-#define dhex_dump(x...) do{}while(0);
-#endif
-
-static void analyze_packet(struct _pipeline *p, struct _pkt *pkt)
-{
-	struct _pkt *reasm;
-	struct _dcb *cur;
-	struct per_proto *pp;
-
-	for(cur = pkt->pkt_dcb; cur < pkt->pkt_dcb_top; cur = cur->dcb_next) {
-		dmesg(M_DEBUG, "DECODED: %s", cur->dcb_proto->p_label);
-		pp = &p->p_proto[cur->dcb_proto->p_idx];
-		if ( pp->pp_ft && pp->pp_ft->ft_track ) {
-			reasm = pp->pp_ft->ft_track(pp->pp_flow, pkt, cur);
-			if ( reasm ) {
-				dmesg(M_DEBUG, "REASSEMBLYGRAM");
-				analyze_packet(p, reasm);
-				pkt_free(reasm);
-			}
-		}
-	}
-}
-
 static unsigned int do_dequeue(struct _pipeline *p, struct _source *s,
 				struct iothread *io)
 {
 	pkt_t pkt;
 
 	pkt = s->s_capdev->c_dequeue(s, io);
-	if ( pkt == NULL )
+	if ( NULL == pkt )
 		return 0;
 
 	p->p_num_pkt++;
 
-	dmesg(M_DEBUG, "packet %llu, len = %u/%u",
-		p->p_num_pkt, pkt->pkt_caplen, pkt->pkt_len);
+	dmesg(M_DEBUG, "Frame %llu:",
+		p->p_num_pkt);
+
 	decode(pkt, s->s_decoder);
-	analyze_packet(p, pkt);
-	if ( pkt->pkt_nxthdr < pkt->pkt_end ) {
-		dhex_dump(pkt->pkt_nxthdr,
-			pkt->pkt_end - pkt->pkt_nxthdr, 16);
-	}else{
-		dmesg(M_DEBUG, ".\n");
-	}
+	do_pkt_inject(pkt);
 
 	return 1;
 }
@@ -194,9 +190,9 @@ static int go_sync(struct _pipeline *p)
 
 static void a_rw(struct iothread *io, struct nbio *n)
 {
-	/* It suffices to get in to the active queue which is
-	 * manually processed in go_async()
-	 */
+	struct _pipeline *p = (struct _pipeline *)io;
+	while ( do_dequeue(p, (struct _source *)n, &p->p_io) )
+		/* nothing */;
 }
 
 static void a_dtor(struct iothread *io, struct nbio *n)
@@ -213,7 +209,6 @@ static const struct nbio_ops async_ops = {
 static int go_async(struct _pipeline *p)
 {
 	struct _source *s;
-	struct nbio *n, *tmp;
 
 	list_for_each_entry(s, &p->p_sources, s_list) {
 		mesg(M_INFO, "pipeline: starting async: %s[%s]",
@@ -223,17 +218,7 @@ static int go_async(struct _pipeline *p)
 	}
 	
 	do {
-		unsigned int tmo;
-
-		list_for_each_entry_safe(n, tmp, &p->p_io.active, list) {
-			while ( do_dequeue(p, (struct _source *)n, &p->p_io) )
-				/* nothing */;
-		}
-
-		/* No timers (yet) */
-		tmo = -1;
-
-		nbio_pump(&p->p_io, tmo);
+		nbio_pump(&p->p_io, -1);
 	}while( !list_empty(&p->p_io.active) ||
 		!list_empty(&p->p_io.inactive) );
 

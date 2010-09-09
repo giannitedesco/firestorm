@@ -43,7 +43,7 @@ static void sll_decode(struct _pkt *p)
 
 	proto = sys_be16(sll->sll_protocol);
 
-	_decode_layer(p, &p_sll);
+	decode_layer(p, &p_sll);
 
 	switch(proto) {
 	case const_be16(LINUX_SLL_P_802_3):
@@ -55,6 +55,6 @@ static void sll_decode(struct _pkt *p)
 	case const_be16(LINUX_SLL_P_PPPHDLC):
 		break;
 	default:
-		_decode_next(p, NS_ETHER, sll->sll_protocol);
+		decode_next(p, NS_ETHER, sll->sll_protocol);
 	}
 }

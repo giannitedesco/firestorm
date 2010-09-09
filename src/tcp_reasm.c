@@ -1,711 +1,1138 @@
-/* Copyright (c) Gianni Tedesco 2005,2006,2007,2008
- * Released under the terms of the GNU GPL v3
+/* Copyright (c) Gianni Tedesco 2009
+ * Author: Gianni Tedesco (gianni at scaramanga dot co dot uk)
  *
  * This is a fast tcp stream reassembly module which manages allocation of
- * contiguous chunks of memory (say 2 to the power of 7-9 bytes) but it also
- * use a red-black style interval encoding tree to manage the packet sized
- * areas within the chunks. This allows us to receive duplicate and out of
- * order packets and deal with them efficiently. It also handles sequence
- * overflows (even within 1 node).
+ * contiguous chunks of memory (say 2 to the power of 7-9 bytes).
 */
 #include <firestorm.h>
 #include <f_packet.h>
 #include <f_decode.h>
-#include <f_flow.h>
-#include <pkt/ip.h>
+#include <list.h>
+#include <p_tcp.h>
 #include <pkt/tcp.h>
-#include <pkt/icmp.h>
-#include "p_ipv4.h"
+#include "tcpip.h"
 
 #if 0
 #define dmesg mesg
 #else
-#define dmesg(...) do {} while(0);
+#define dmesg(x...) do { } while(0);
 #endif
 
-#define RBUF_SHIFT	9
+#define RBUF_SHIFT	8
 #define RBUF_SIZE	(1<<RBUF_SHIFT)
 #define RBUF_MASK	(RBUF_SIZE - 1)
 #define RBUF_BASE	(~RBUF_MASK)
 
-struct rbuf {
-	uint32_t seq_begin;
-	uint8_t buf[RBUF_SIZE];
+struct tcp_rbuf {
+	/** List entry */
+	struct list_head	r_list;
+	/** sequence number of first byte of buffer */
+	uint32_t		r_seq;
+	/** buffer base pointer */
+	uint8_t			*r_base;
 };
 
-/* This defines a node in the tree, each node represents a range of bytes
- * in the tcp stream.
- */
-struct tcpr_node {
-	struct tcpr_node *parent;
-#define CHILD_LEFT 0
-#define CHILD_RIGHT 1
-	struct tcpr_node *child[2];
-#define COLOR_RED 0 /* parent is black */
-#define COLOR_BLACK 1 /* root and NILs are black */
-	int color;
-#define VAL_BEGIN 0 /* begin sequence # */
-#define VAL_END 1 /* end sequence # */
-	uint32_t val[2];
-	struct rbuf *rbuf;
+struct tcp_gap {
+	uint32_t 		g_begin;
+	uint32_t 		g_end;
 };
 
-static uint32_t tcp_diff(uint32_t s1, uint32_t s2)
+/* Reassembly buffer */
+#define TCP_REASM_MAX_GAPS	8
+struct tcp_sbuf {
+	/** begin seq for buffer purposes */
+	uint32_t		s_begin;
+	/** Sequence of first byte not reassembled */
+	uint32_t		s_reasm_begin;
+	/** sequence number of last contig byte */
+	uint32_t 		s_contig_seq;
+	/** Sequence number of last byte */
+	uint32_t		s_end;
+	/** Buffer list */
+	struct list_head	s_bufs;
+	/** last contiguous buffer */
+	struct tcp_rbuf		*s_contig;
+	/** Number of allocated rbufs */
+	uint16_t		s_num_rbuf;
+	/** number of gaps in reassembly */
+	uint8_t			s_num_gaps;
+	uint8_t			_pad0;
+	/** array of gap descriptors */
+	struct tcp_gap		*s_gap[TCP_REASM_MAX_GAPS];
+};
+
+static objcache_t sbuf_cache;
+static objcache_t rbuf_cache;
+static objcache_t data_cache;
+static objcache_t gap_cache;
+static unsigned int max_gaps;
+static unsigned int num_push;
+static unsigned int num_reasm;
+static unsigned int num_inject;
+static uint64_t inject_bytes;
+
+static uint32_t seq_base(struct tcp_sbuf *s, uint32_t seq)
 {
-	if ( s2 < s1 )
-		return (0xffffffff - s1) + s2 + 1;
-	return (s2 - s1);
+	return s->s_begin + (tcp_diff(s->s_begin, seq) & RBUF_BASE);
 }
 
-/* in-line accessors for states, to hide the array uglyness */
-static uint32_t node_begin(struct tcpr_node *n)
+static uint32_t seq_ofs(struct tcp_sbuf *s, uint32_t seq)
 {
-	return n->val[VAL_BEGIN];
-}
-static uint32_t node_end(struct tcpr_node *n)
-{
-	return n->val[VAL_END];
-}
-static uint32_t node_len(struct tcpr_node *n)
-{
-	return tcp_diff(n->val[VAL_BEGIN], n->val[VAL_END]);
+	return tcp_diff(s->s_begin, seq) & RBUF_MASK;
 }
 
-/* Rbuf allocation
- * TODO: ditch malloc for a preallocated stack + eviction
- */
-static struct rbuf *rbuf_alloc(struct tcp_sbuf *s, uint32_t seq)
+static void gap_free(struct tcp_gap *g)
 {
-	struct rbuf *ret;
+	objcache_free2(gap_cache, g);
+}
 
-	ret = calloc(1, sizeof(*ret));
-	if ( ret ) {
-		ret->seq_begin = (seq - s->begin) & RBUF_BASE;
-		ret->seq_begin += s->begin;
-		/* XXX: Colour the space to catch bugs */
-		memset(ret->buf, '_', sizeof(ret->buf));
-		dmesg(M_DEBUG, "  rbuf_alloc: seq_begin=%u", ret->seq_begin);
+static inline uint32_t gap_len(struct tcp_gap *g)
+{
+	assert(tcp_after(g->g_end, g->g_begin));
+	return tcp_diff(g->g_begin, g->g_end);
+}
+
+static struct tcp_rbuf *rbuf_alloc(struct tcp_session *ss,
+					struct tcp_sbuf *s, uint32_t seq)
+{
+	struct tcp_rbuf *r;
+	assert(((seq - s->s_begin) & RBUF_MASK) == 0);
+	r = _tcp_alloc(ss, rbuf_cache, 1);
+	if ( r ) {
+		s->s_num_rbuf++;
+		INIT_LIST_HEAD(&r->r_list);
+		r->r_seq = seq;
+		r->r_base = _tcp_alloc(ss, data_cache, 1);
+		if ( NULL == r->r_base ) {
+			objcache_free2(rbuf_cache, r);
+			return NULL;
+		}
+		dmesg(M_DEBUG, " Allocated rbuf %u seq=%u",
+			s->s_num_rbuf, seq);
 	}
-
-	return ret;
+	return r;
 }
 
-static void rbuf_free(struct rbuf *r)
+static void rbuf_free(struct tcp_sbuf *s, struct tcp_rbuf *r)
 {
-	free(r);
+	list_del(&r->r_list);
+	objcache_free2(data_cache, r->r_base);
+	objcache_free2(rbuf_cache, r);
+	s->s_num_rbuf--;
 }
 
-/* Node allocation
- * TODO: ditch malloc for a preallocated stack + eviction
- */
-static struct tcpr_node *node_alloc(void)
+static struct tcp_rbuf *rbuf_next(struct tcp_sbuf *s, struct tcp_rbuf *r)
 {
-	struct tcpr_node *ret;
-	ret = calloc(1, sizeof(*ret));
-	return ret;
-}
-
-static void node_free(struct tcpr_node *n)
-{
-	free(n);
-}
-
-/* For any given node, find the previous or next node */
-static struct tcpr_node *node_prev_next(struct tcpr_node *n, int prev)
-{
-	if ( n == NULL )
+	if ( r->r_list.next == &s->s_bufs )
 		return NULL;
-
-	if ( n->child[prev ^ 1] ) {
-		n = n->child[prev ^ 1];
-		while( n->child[prev ^ 0] )
-			n = n->child[prev ^ 0];
-		return n;
-	}else{
-		while(n->parent && n != n->parent->child[prev ^ 0] )
-			n = n->parent;
-
-		return n->parent;
-	}
+	return list_entry(r->r_list.next, struct tcp_rbuf, r_list);
 }
-static struct tcpr_node *node_next(struct tcpr_node *n)
+
+static struct tcp_rbuf *rbuf_prev(struct tcp_sbuf *s, struct tcp_rbuf *r)
 {
-	return node_prev_next(n, 0);
-}
-static struct tcpr_node *node_prev(struct tcpr_node *n)
-{
-	return node_prev_next(n, 1);
+	if ( r->r_list.prev == &s->s_bufs )
+		return NULL;
+	return list_entry(r->r_list.prev, struct tcp_rbuf, r_list);
 }
 
-/* Here we handle left/right rotations (the 2 are symmetrical) which are
- * sometimes needed to rebalance the tree after modifications
-*/
-static void do_rotate(struct tcp_sbuf *s, struct tcpr_node *n, int side)
-{
-	struct tcpr_node *opp = n->child[1 ^ side];
-
-	if ( (n->child[1 ^ side] = opp->child[0 ^ side]) )
-		opp->child[0 ^ side]->parent = n;
-	opp->child[0 ^ side] = n;
-
-	if ( (opp->parent = n->parent) ) {
-		if ( n == n->parent->child[0 ^ side] ) {
-			n->parent->child[0 ^ side] = opp;
-		}else{
-			n->parent->child[1 ^ side] = opp;
-		}
-	}else{
-		s->root = opp;
-	}
-	n->parent = opp;
-}
-
-/* Re-balance the tree after an insertion */
-static void rebalance(struct tcp_sbuf *s, struct tcpr_node *n)
-{
-	struct tcpr_node *parent, *gparent, *uncle;
-	int side;
-
-	while ( (parent = n->parent) ) {
-
-		/* Recursion termination, the tree is balanced */
-		if ( parent->color == COLOR_BLACK )
-			break;
-
-		/* When your structures have symmetry, your code can
-		 * be half the size!
-		 */
-		gparent = parent->parent;
-		side = (parent == gparent->child[1]);
-		uncle = gparent->child[1 ^ side];
-
-		/* Check to see if we can live with just recoloring */
-		if ( uncle && (uncle->color == COLOR_RED) ) {
-			gparent->color = COLOR_RED;
-			parent->color = COLOR_BLACK;
-			uncle->color = COLOR_BLACK;
-			n = gparent;
-			continue;
-		}
-
-		/* Check to see if we need to do double rotation */
-		if ( n == parent->child[1 ^ side] ) {
-			struct tcpr_node *t;
-
-			do_rotate(s, parent, 0 ^ side);
-			t = parent;
-			parent = n;
-			n = t;
-		}
-
-		/* If not, we do a single rotation */
-		parent->color = COLOR_BLACK;
-		gparent->color = COLOR_RED;
-		do_rotate(s, gparent, 1 ^ side);
-	}
-
-	s->root->color = COLOR_BLACK;
-}
-
-/* Re-balance a tree after deletion, probably the most complex bit... */
-static void delete_rebalance(struct tcp_sbuf *s,
-				struct tcpr_node *n, struct tcpr_node *parent)
-{
-	struct tcpr_node *other;
-	int side;
-
-	while ( ((n == NULL) || n->color == COLOR_BLACK) ) {
-		if ( n == s->root)
-			break;
-
-		side = (parent->child[1] == n);
-		other = parent->child[1 ^ side];
-
-		if ( other->color == COLOR_RED ) {
-			other->color = COLOR_BLACK;
-			parent->color = COLOR_RED;
-			do_rotate(s, parent, 0 ^ side);
-			other = parent->child[1 ^ side];
-		}
-
-		if ( ((other->child[0 ^ side] == NULL) ||
-			(other->child[0 ^ side]->color == COLOR_BLACK)) &&
-			((other->child[1 ^ side] == NULL) ||
-			(other->child[1 ^ side]->color == COLOR_BLACK)) ) {
-			other->color = COLOR_RED;
-			n = parent;
-			parent = n->parent;
-		}else{
-			if ( (other->child[1 ^ side] == NULL) ||
-			(other->child[1 ^ side]->color == COLOR_BLACK) ) {
-				struct tcpr_node *opp;
-
-				if ( (opp = other->child[0 ^ side]) )
-					opp->color = COLOR_BLACK;
-
-				other->color = COLOR_RED;
-				do_rotate(s, other, 1 ^ side);
-				other = parent->child[1 ^ side];
-			}
-
-			other->color = parent->color;
-			parent->color = COLOR_BLACK;
-			if ( other->child[1 ^ side] )
-				other->child[1 ^ side]->color = COLOR_BLACK;
-			do_rotate(s, parent, 0 ^ side);
-			n = s->root;
-			break;
-		}
-	}
-
-	if ( n )
-		n->color = COLOR_BLACK;
-}
-
-static void delete_node(struct tcp_sbuf *s, struct tcpr_node *n)
-{
-	struct tcpr_node *child, *parent;
-	int color;
-
-	if ( n->child[0] && n->child[1] ) {
-		struct tcpr_node *old = n, *lm;
-
-		/* If we have 2 children, go right, and then find the leftmost
-		 * node in that subtree, this is the one to swap in to replace
-		 * our deleted node
-		 */
-		n = n->child[1];
-		while ( (lm = n->child[0]) != NULL )
-			n = lm;
-
-		child = n->child[1];
-		parent = n->parent;
-		color = n->color;
-
-		if ( child )
-			child->parent = parent;
-
-		if ( parent ) {
-			if ( parent->child[0] == n )
-				parent->child[0] = child;
-			else
-				parent->child[1] = child;
-		}else
-			s->root = child;
-
-		if ( n->parent == old )
-			parent = n;
-
-		n->parent = old->parent;
-		n->color = old->color;
-		n->child[0] = old->child[0];
-		n->child[1] = old->child[1];
-
-		if ( old->parent ) {
-			if ( old->parent->child[0] == old )
-				old->parent->child[0] = n;
-			else
-				old->parent->child[1] = n;
-		}else
-			s->root = n;
-
-		old->child[0]->parent = n;
-		if ( old->child[1] )
-			old->child[1]->parent = n;
-
-		goto rebalance;
-	}
-
-	/* ... or if a child is non-NULL then we can swap that in */
-	if ( n->child[0] == NULL ) {
-		child = n->child[1];
-	}else if ( n->child[1] == NULL ) {
-		child = n->child[0];
-	}
-
-	parent = n->parent;
-	color = n->color;
-
-	if ( child )
-		child->parent = parent;
-
-	if ( parent ) {
-		if ( parent->child[0] == n )
-			parent->child[0] = child;
-		else
-			parent->child[1] = child;
-	}else
-		s->root = child;
-
-rebalance:
-	if ( color == COLOR_BLACK )
-		delete_rebalance(s, child, parent);
-}
-
-/* Copy packet data in to the rbuf */
-static void copy_to_buffer(struct rbuf *rbuf, const void *buf,
-				uint32_t begin, uint32_t end)
-{
-	uint32_t ofs = tcp_diff(rbuf->seq_begin, begin);
-
-	assert(ofs < RBUF_SIZE);
-
-	dmesg(M_DEBUG, "  copying %u bytes at offset %u",
-		tcp_diff(begin, end), ofs);
-	memcpy(rbuf->buf + ofs, buf, end - begin);
-}
-
-/* Compare 2 sequence numbers to see if they are in the same rbuf for
- * a given stream
- */
-static int rbuf_cmp(struct tcp_sbuf *s, uint32_t a, uint32_t b)
-{
-	return ((a - s->begin) & RBUF_BASE) - ((b - s->begin) & RBUF_BASE);
-}
-
-
-/* Handle the case where a new packet is either merging with an existing node
- * (ie. not setting up a new discontig area) or fills the gap between 2
- * discontiguous nodes and we need to merge them all together.
-*/
-static struct tcpr_node *merge_node(struct tcp_sbuf *s, struct tcpr_node *prev,
-				struct tcpr_node *next, uint32_t begin,
-				uint32_t end)
-{
-	uint32_t newbegin, newend;
-	struct tcpr_node *first, *last, *t, *tmp;
-
-	/* Find first and last nodes to merge */
-	if ( !prev || rbuf_cmp(s, node_begin(prev), begin) ||
-		tcp_before(node_end(prev), begin) ) {
-		first = next;
-	}else{
-		for(first=t=prev; t && rbuf_cmp(s, node_begin(t), begin);
-			first=t, t=node_prev(t) )
-			if ( tcp_before(node_end(t), begin) )
-				break;
-	}
-
-	if ( !next || rbuf_cmp(s, node_begin(next), begin) ||
-		tcp_after(node_begin(next), end) ) {
-		last = prev;
-	}else{
-		for(last=t=next; t && rbuf_cmp(s, node_end(t), end);
-			last=t, t=node_next(t) ) {
-			if ( tcp_after(node_begin(t), end) )
-				break;
-		}
-	}
-
-	/* Figure out new buffer area */
-	newbegin = node_begin(first);
-	if ( tcp_before(begin, newbegin) )
-		newbegin = begin;
-
-	newend = node_end(last);
-	if ( tcp_after(end, newend) )
-		newend = end;
-
-	/* Delete the old nodes */
-	for(t=node_next(first); t && tcp_before(node_begin(t), newend); t=tmp) {
-		tmp = node_next(t);
-		delete_node(s, t);
-		node_free(t);
-	}
-
-	/* Finish up by replacing the old buffer with the new */
-	first->val[VAL_BEGIN] = newbegin;
-	first->val[VAL_END] = newend;
-
-	dmesg(M_DEBUG, "  merged to new area: %u-%u", newbegin, newend);
-
-	return first;
-}
-
-/* Allocates a new node ready for insertion in to the tree with the give
+/* Allocates a new gap ready for insertion in to the tree with the given
  * particulars.
  */
-static struct tcpr_node *new_node(struct tcp_sbuf *s, struct rbuf *rb,
-				uint32_t begin, uint32_t end,
-				const char *buf)
+static struct tcp_gap *gap_new(struct tcp_session *ss,
+				uint32_t begin, uint32_t end)
 {
-	struct tcpr_node *n;
-	size_t len;
+	struct tcp_gap *g;
 
-	if ( rb == NULL )
-		rb = rbuf_alloc(s, begin);
+	assert(!tcp_after(begin, end));
 
-	n = node_alloc();
-	if ( n == NULL ) {
-		rbuf_free(rb);
-		return NULL;
+	g = _tcp_alloc(ss, gap_cache, 1);
+	if ( NULL != g ) {
+		g->g_begin = begin;
+		g->g_end = end;
 	}
 
-	n->val[VAL_BEGIN] = begin;
-	n->val[VAL_END] = end;
-	n->color = COLOR_RED;
-	n->rbuf = rb;
-	len = node_len(n);
-
-	copy_to_buffer(n->rbuf, buf, begin, end);
-
-	return n;
+	return g;
 }
 
-/* Insert a node in to the tree */
-static void reasm_pkt(struct tcp_sbuf *s, uint32_t seq,
-			uint32_t len, const void *buf)
+static struct tcp_rbuf *first_buffer(struct tcp_sbuf *s)
 {
-	struct tcpr_node *n, *parent, **p, *prev, *next;
-	uint32_t begin = seq;
-	uint32_t end = seq + len;
-	struct rbuf *rb = NULL;
-	int side;
+	if ( list_empty(&s->s_bufs) )
+		return NULL;
+	return list_entry(s->s_bufs.next, struct tcp_rbuf, r_list);
+}
 
-	dmesg(M_DEBUG, " Split to %u-%u len=%u", seq, seq + len, len);
+static struct tcp_rbuf *last_buffer(struct tcp_sbuf *s)
+{
+	if ( list_empty(&s->s_bufs) )
+		return NULL;
+	return list_entry(s->s_bufs.prev, struct tcp_rbuf, r_list);
+}
 
-	for(p=&s->root, n = parent = NULL; *p; ) {
-		parent = *p;
+static struct tcp_rbuf *find_buf_fwd(struct tcp_session *ss,struct tcp_sbuf *s,
+					struct tcp_rbuf *r, uint32_t seq)
+{
+	struct tcp_rbuf *new;
 
-		if ( !tcp_before(begin, node_begin(parent)) &&
-			!tcp_after(end, node_end(parent)) ) {
-			dmesg(M_DEBUG, "  retransmitted segment "
-				"(discarded) (%u-%u)",
-				node_begin(parent), node_end(parent));
-			return;
-		}else if ( tcp_before(begin, node_begin(parent))) {
-			side = 0;
-		}else if ( tcp_after(begin, node_begin(parent))) {
-			side = 1;
-		}else{
+	for(; r; r = rbuf_next(s, r)) {
+		if ( r->r_seq == seq )
+			break;
+		if ( tcp_after(r->r_seq, seq) ) {
+			new = rbuf_alloc(ss, s, seq);
+			if ( NULL == new )
+				return NULL;
+			list_add_tail(&new->r_list, &r->r_list);
+			r = new;
 			break;
 		}
-
-		p = &(*p)->child[side];
 	}
 
-	if ( parent == NULL ) {
-		prev = next = NULL;
-		goto do_insert;
+	if ( NULL == r ) {
+		new = rbuf_alloc(ss, s, seq);
+		if ( NULL == new )
+			return NULL;
+		list_add_tail(&new->r_list, &s->s_bufs);
+		r = new;
 	}
 
-	if ( p == &parent->child[0] ) {
-		prev = node_prev(parent);
-		next = parent;
+	return r;
+}
+
+static struct tcp_rbuf *find_buf_rev(struct tcp_session *ss, struct tcp_sbuf *s,
+					struct tcp_rbuf *r, uint32_t seq)
+{
+	struct tcp_rbuf *new;
+
+	for(; r; r = rbuf_prev(s, r)) {
+		if ( r->r_seq == seq )
+			break;
+		if ( tcp_before(r->r_seq, seq) ) {
+			new = rbuf_alloc(ss, s, seq);
+			if ( NULL == new )
+				return NULL;
+			list_add(&new->r_list, &r->r_list);
+			r = new;
+			break;
+		}
+	}
+
+	if ( NULL == r ) {
+		new = rbuf_alloc(ss, s, seq);
+		if ( NULL == new )
+			return NULL;
+		list_add_tail(&new->r_list, &s->s_bufs);
+		r = new;
+	}
+
+	return r;
+}
+
+static struct tcp_rbuf *contig_buf(struct tcp_session *ss,
+					struct tcp_sbuf *s, uint32_t seq)
+{
+	struct tcp_rbuf *r;
+
+	r = (s->s_contig) ? s->s_contig : first_buffer(s);
+	return find_buf_fwd(ss, s, r, seq);
+}
+
+static struct tcp_rbuf *discontig_buf(struct tcp_session *ss,
+					struct tcp_sbuf *s, uint32_t seq)
+{
+	struct tcp_rbuf *r;
+	r = find_buf_rev(ss, s, last_buffer(s), seq);
+	return r;
+}
+
+static void swallow_gap(struct tcp_sbuf *s, unsigned int i)
+{
+	dmesg(M_DEBUG, "Swallow gap %u %u-%u", i,
+		s->s_gap[i]->g_begin, s->s_gap[i]->g_end);
+	gap_free(s->s_gap[i]);
+	for(--s->s_num_gaps; i < s->s_num_gaps; i++) {
+		dmesg(M_DEBUG, " Shuffle gap %u to %u", i + 1, i);
+		s->s_gap[i] = s->s_gap[i + 1];
+	}
+}
+
+static void contig_eat_gaps(struct tcp_sbuf *s,
+				uint32_t seq_end)
+{
+	unsigned int i = 0;
+	struct tcp_gap *g = NULL;
+
+	while(s->s_num_gaps) {
+		g = s->s_gap[0];
+
+		if ( tcp_before(seq_end, g->g_begin) )
+			break;
+		if ( tcp_before(seq_end, g->g_end) ) {
+			g->g_begin = seq_end;
+			break;
+		}
+		swallow_gap(s, i);
+		g = NULL;
+	}
+
+	if ( g ) {
+		dmesg(M_DEBUG, " new contig_seq: %u -> %u",
+			s->s_contig_seq, g->g_begin);
+		s->s_contig_seq = g->g_begin;
 	}else{
-		prev = parent;
-		next = node_next(parent);
+		dmesg(M_DEBUG, " new contig_seq: %u -> %u (buffer contig)",
+			s->s_contig_seq, seq_end);
+		if ( tcp_after(seq_end, s->s_end) )
+			s->s_contig_seq = seq_end;
+		else
+			s->s_contig_seq = s->s_end;
+	}
+}
+
+static int append_gap(struct tcp_session *ss, struct tcp_sbuf *s,
+			struct tcp_rbuf *r, uint32_t seq, uint32_t seq_end)
+{
+	dmesg(M_DEBUG, "Appending gap %u-%u", s->s_end, seq);
+	if (s->s_num_gaps >= TCP_REASM_MAX_GAPS) {
+		mesg(M_CRIT, "tcp_reasm: MAX_GAPS exceeded");
+		return 0;
+	}
+	s->s_gap[s->s_num_gaps] = gap_new(ss, s->s_end, seq);
+	if ( ++s->s_num_gaps > max_gaps )
+		max_gaps = s->s_num_gaps;
+	return 1;
+}
+
+static int split_gap(struct tcp_session *ss, struct tcp_sbuf *s,
+			int i, struct tcp_rbuf *r,
+			uint32_t seq, uint32_t seq_end)
+{
+	int n, j;
+
+	if (s->s_num_gaps >= TCP_REASM_MAX_GAPS) {
+		mesg(M_CRIT, "tcp_reasm: MAX_GAPS exceeded");
+		return 0;
 	}
 
-	if ( (next && !tcp_before(end, node_begin(next)) &&
-		!rbuf_cmp(s, begin, node_begin(next))) ||
-		(prev && !tcp_after(begin, node_end(prev)) &&
-		!rbuf_cmp(s, begin, node_begin(prev))) ) {
-		n = merge_node(s, prev, next, begin, end);
-		/* TODO: Need favour-old mode too */
-		copy_to_buffer(n->rbuf, buf, begin, end);
-		return;
+	dmesg(M_DEBUG, "Split gap");
+	for(n = i + 1, j = s->s_num_gaps; j > n; --j) {
+		dmesg(M_DEBUG, " Shuffle gap %d to %d", j - 1, j);
+		s->s_gap[j] = s->s_gap[j - 1];
 	}
 
-do_insert:
-	if ( prev && !rbuf_cmp(s, begin, node_begin(prev)) )
-		rb = prev->rbuf;
-	else if ( next && !rbuf_cmp(s, begin, node_begin(next)) )
-		rb = next->rbuf;
-	else
-		rb = NULL;
+	dmesg(M_DEBUG, " gap %d-%u: %u-%u -> (%u-%u, %u-%u)", i, n,
+		s->s_gap[i]->g_begin, s->s_gap[i]->g_end,
+		s->s_gap[i]->g_begin, seq,
+		seq_end, s->s_gap[i]->g_end);
 
-	n = new_node(s, rb, begin, end, buf);
-	if ( n == NULL )
-		return;
+	s->s_gap[n] = gap_new(ss, seq_end, s->s_gap[i]->g_end);
+	s->s_gap[i]->g_end = seq;
+	if ( ++s->s_num_gaps > max_gaps )
+		max_gaps = s->s_num_gaps;
+	return 1;
+}
 
-	n->parent = parent;
-	*p = n;
+static int frob_gaps(struct tcp_session *ss, struct tcp_sbuf *s,
+			struct tcp_rbuf *r, uint32_t seq, uint32_t seq_end)
+{
+	unsigned int i;
 
-	rebalance(s, n);
+	for(i = 0; i < s->s_num_gaps; i++) {
+		struct tcp_gap *g = s->s_gap[i];
+		if ( tcp_after(seq, g->g_begin) ) {
+			if ( tcp_after(seq, g->g_end) )
+				continue;
 
-	dmesg(M_DEBUG, "  inserted new area: %u-%u", begin, end);
+			/* There can be...only one */
+			if ( tcp_before(seq_end, g->g_end) ) {
+				if ( !split_gap(ss, s, i, r, seq, seq_end) )
+					return 0;
+				return 1;
+			}
+
+			dmesg(M_DEBUG, "Backward overlap");
+			dmesg(M_DEBUG, " %u-%u -> %u-%u",
+				g->g_begin, g->g_end,
+				g->g_begin, seq);
+			g->g_end = seq;
+		}else{
+			if ( tcp_after(g->g_begin, seq) )
+				break;
+
+			if ( !tcp_before(seq_end, g->g_end) ) {
+				swallow_gap(s, i);
+				i--;
+				continue;
+			}
+
+			dmesg(M_DEBUG, "Forward overlap");
+			dmesg(M_DEBUG, " %u-%u -> %u-%u",
+				g->g_begin, g->g_end,
+				seq_end, g->g_end);
+			g->g_begin = seq_end;
+		}
+	}
+	return 1;
 }
 
 /* input packet data in to the reassembly system */
-void _tcp_reasm_inject(struct tcp_sbuf *s, uint32_t seq,
-			uint32_t len, const void *buf)
+static int do_inject(struct tcp_session *ss, struct tcp_sbuf *s,
+			uint32_t seq, uint32_t len, const uint8_t *buf)
 {
-	uint32_t rbegin, rend;
+	uint32_t seq_end = seq + len;
+	uint32_t base, ofs, clen, sseq;
+	int is_contig;
+	struct tcp_rbuf *r, *lr;
 
-	dmesg(M_DEBUG, "Got packet: %x-%x: (%x-%x)",
-		seq, seq + len,
-		(seq & RBUF_BASE) >> RBUF_SHIFT,
-		((seq + len) & RBUF_BASE) >> RBUF_SHIFT);
+	if ( NULL == s )
+		return 1;
 
-	if ( tcp_before(seq + len, s->reasm_begin) )
+	dmesg(M_DEBUG, "Inject Packet: %u - %u",
+		seq, seq + len);
+
+	/* Discard everything before contig_seq */
+	if ( tcp_before(seq_end, s->s_contig_seq) )
+		return 1;
+	if ( tcp_before(seq, s->s_contig_seq) ) {
+		uint32_t d = tcp_diff(seq, s->s_contig_seq);
+		seq += d;
+		buf += d;
+		len -= d;
+	}
+	if ( len == 0 )
+		return 1;
+
+	dmesg(M_DEBUG, " Trimmed data: %u - %u",
+		seq, seq + len);
+
+	/* Find or allocate buffer for first byte */
+	base = seq_base(s, seq);
+	if ( seq == s->s_contig_seq ) {
+		r = contig_buf(ss, s, base);
+		if ( NULL == r )
+			return 0;
+		contig_eat_gaps(s, seq_end);
+		is_contig = 1;
+	}else{
+		assert(tcp_after(seq, s->s_contig_seq));
+		is_contig = 0;
+		r = discontig_buf(ss, s, base);
+		if ( NULL == r )
+			return 0;
+		if ( tcp_after(seq, s->s_end) ) {
+			if ( !append_gap(ss, s, r, seq, seq_end) )
+				return 0;
+		}else{
+			if ( !frob_gaps(ss, s, r, seq, seq_end) )
+				return 0;
+		}
+	}
+
+	/* Copy payload data, allocating new buffers as needed */
+	dmesg(M_DEBUG, "Copying data to buffers:");
+	for(sseq = seq; tcp_before(sseq, seq_end); r = rbuf_next(s, r)) {
+		struct tcp_rbuf *nr;
+
+		base = seq_base(s, sseq);
+		ofs = seq_ofs(s, sseq);
+		clen = ((ofs + len) > RBUF_SIZE) ? (RBUF_SIZE - ofs) : len;
+
+		if ( NULL == r ) {
+			nr = rbuf_alloc(ss, s, base);
+			if ( NULL == nr )
+				return 0;
+			list_add_tail(&nr->r_list, &s->s_bufs);
+			r = nr;
+		}else if ( tcp_after(base, r->r_seq) ) {
+			nr = rbuf_alloc(ss, s, base);
+			if ( NULL == nr )
+				return 0;
+			dmesg(M_DEBUG, " ... and put it after %u", r->r_seq);
+			list_add(&nr->r_list, &r->r_list);
+			r = nr;
+		}else if ( tcp_before(base, r->r_seq) ) {
+			nr = rbuf_alloc(ss, s, base);
+			if ( NULL == nr )
+				return 0;
+			dmesg(M_DEBUG, " ... and put it before %u", r->r_seq);
+			list_add_tail(&nr->r_list, &r->r_list);
+			r = nr;
+		}
+
+		dmesg(M_DEBUG, " Copy data: base=%u:%u ofs=%u len=%u",
+			r->r_seq, base, ofs, clen);
+		assert(r->r_seq == base);
+
+		memcpy(r->r_base + ofs, buf, clen);
+		lr = r;
+
+		if ( is_contig )
+			s->s_contig = r;
+
+		sseq += clen;
+		buf += clen;
+		len -= clen;
+
+		assert(!tcp_after(sseq, seq_end));
+	}
+
+	if ( tcp_after(seq_end, s->s_end) ) {
+		dmesg(M_DEBUG, " Setting seq_end to %u", seq_end);
+		s->s_end = seq_end;
+	}
+	return 1;
+}
+
+static void sbuf_free(struct tcp_session *ss, struct tcp_sbuf *s)
+{
+	struct tcp_rbuf *r, *tr;
+	unsigned int i;
+
+	if ( NULL == s )
 		return;
 
-	if ( tcp_before(seq, s->reasm_begin) ) {
-		seq = s->reasm_begin;
-		len -= tcp_diff(seq, s->reasm_begin);
-	}
-
-	assert(len);
-
-	/* Check if the packet must split accross multiple rbufs */
-	rbegin = ((seq - s->begin) & RBUF_BASE) >> RBUF_SHIFT;
-	rend = (((seq - s->begin) + len) & RBUF_BASE) >> RBUF_SHIFT;
-
-	for(; rbegin < rend; rbegin++) {
-		uint32_t nlen;
-
-		nlen = ~((seq - s->begin) & RBUF_MASK) & RBUF_MASK;
-		nlen++;
-
-		reasm_pkt(s, seq, nlen, buf);
-
-		len -= nlen;
-		buf += nlen;
-		seq += nlen;
-	}
-
-	reasm_pkt(s, seq, len, buf);
-}
-
-/* Find all contiguous nodes starting from the left-most node in the tree */
-static struct tcpr_node *get_contig_areas(struct tcp_sbuf *s,
-				void(*cbfn)(struct tcpr_node *n, void *ptr),
-				void *priv)
-{
-	struct tcpr_node *t, *n;
-
-	for(n=t=s->root; t; n=t, t=t->child[0])
-		/* nothing */;
-
-	while ( (t = n) ) {
-		if ( cbfn )
-			(*cbfn)(n, priv);
-		n = node_next(n);
-		if ( n == NULL )
-			return t;
-
-		if ( tcp_before(node_end(t), node_begin(n)) )
-			return t;
-	}
-
-	return NULL;
-}
-
-/* Reassemble a range in to a pre-existing buffer */
-static void do_reassemble(struct tcp_sbuf *s, uint32_t seq,
-				void *buf, size_t len)
-{
-	struct tcpr_node *t, *n;
-	uint32_t end = seq + len;
-
-	for(n = t = s->root; t; n = t, t = t->child[0])
-		/* nothing */;
-
-	for(; t = node_next(n), n ; n = t) {
-		size_t sz;
-		void *ptr;
-
-		if ( tcp_before(node_end(n), seq) )
-			continue;
-
-		if ( tcp_after(node_begin(n), end) )
-			return;
-
-		sz = tcp_diff(n->rbuf->seq_begin, node_begin(n));
-		ptr = n->rbuf->buf + sz;
-		sz = node_len(n);
-
-		if ( tcp_after(node_end(n), end) )
-			sz -= tcp_diff(end, node_end(n));
-
-		assert(len >= sz);
-		memcpy(buf, ptr, sz);
-		buf += sz;
-		len -= sz;
-	}
-}
-
-/* Get rid of all data from beginning of buffer up to seq_end */
-static void dump_buffer(struct tcp_sbuf *s, uint32_t seq_end)
-{
-	struct tcpr_node *t, *n;
-	struct rbuf *r;
-
-	for(n=t=s->root; t; n=t, t=t->child[0])
-		/* nothing */;
-
-	for(r = NULL; t = node_next(n), n ; n = t) {
-		if ( tcp_after(node_begin(n), seq_end) )
-			break;
-
-		s->begin = n->rbuf->seq_begin;
-		if ( r != n->rbuf ) {
-			r = n->rbuf;
-			rbuf_free(r);
+	if ( s->s_bufs.prev ) {
+		list_for_each_entry_safe(r, tr, &s->s_bufs, r_list) {
+			rbuf_free(s, r);
 		}
-		delete_node(s, n);
-		node_free(n);
 	}
 
-	s->reasm_begin = seq_end;
+	for(i = 0; i < s->s_num_gaps; i++)
+		gap_free(s->s_gap[i]);
 
-	assert(!tcp_after(s->begin, s->reasm_begin));
+	objcache_free2(sbuf_cache, s);
 }
 
-void _tcp_reasm_free(struct tcp_sbuf *s)
+static struct tcp_sbuf *sbuf_new(struct tcp_session *ss, uint32_t isn)
 {
-	struct tcpr_node *t, *n;
-	struct rbuf *r;
+	struct tcp_sbuf *s;
 
-	for(n = t = s->root; t; n = t, t = t->child[0])
-		/* nothing */;
+	s = _tcp_alloc(ss, sbuf_cache, 1);
+	if ( s ) {
+		s->s_begin = isn;
+		s->s_reasm_begin = isn;
+		s->s_end = isn;
+		INIT_LIST_HEAD(&s->s_bufs);
+		s->s_contig = NULL;
+		s->s_contig_seq = isn;
+		s->s_num_gaps = 0;
+		s->s_num_rbuf = 0;
+	}
 
-	for(r = NULL; t = node_next(n), n ; n = t) {
-		if ( r != n->rbuf ) {
-			r = n->rbuf;
-			rbuf_free(r);
-		}
-		delete_node(s, n);
-		node_free(n);
+	return s;
+}
+
+static void do_abort(struct tcp_session *s, int rst)
+{
+	dmesg(M_DEBUG, "Aborting seshion with%s RST packet",
+		(rst) ? "" : "out");
+	if ( s->c_wnd.reasm ) {
+		sbuf_free(s, s->c_wnd.reasm);
+		s->c_wnd.reasm = NULL;
+	}
+	if ( s->s_wnd && s->s_wnd->reasm ) {
+		sbuf_free(s, s->s_wnd->reasm);
+		s->s_wnd->reasm = NULL;
+	}
+	if ( s->app )
+		s->app->a_fini(s);
+	s->app = NULL;
+	s->flow = NULL;
+}
+
+static void do_data(struct tcp_session *s, uint8_t to_server,
+			uint32_t seq, uint32_t len, const uint8_t *buf)
+{
+	int ret;
+
+	if ( to_server ) {
+		ret = do_inject(s, s->c_wnd.reasm, seq, len, buf);
+	}else{
+		ret = do_inject(s, s->s_wnd->reasm, seq, len, buf);
+	}
+
+	if ( !ret )
+		do_abort(s, 0);
+}
+
+static int alloc_reasm_buffers(struct tcp_session *s)
+{
+	s->c_wnd.reasm = sbuf_new(s, s->c_wnd.snd_nxt);
+	if ( NULL == s->c_wnd.reasm )
+		return 0;
+
+	s->s_wnd->reasm = sbuf_new(s, s->s_wnd->snd_nxt);
+	if ( NULL == s->s_wnd->reasm ) {
+		sbuf_free(s, s->c_wnd.reasm);
+		s->c_wnd.reasm = NULL;
+		return 0;
+	}
+
+	return 1;
+}
+
+void _tcp_reasm_data(struct tcp_session *s, uint8_t to_server,
+			uint32_t seq, uint32_t len, const uint8_t *buf)
+{
+	if ( NULL == s->app )
+		return;
+	do_data(s, to_server, seq, len, buf);
+}
+
+void _tcp_reasm_init(struct tcp_session *s, uint8_t to_server,
+			uint32_t seq, uint32_t len, const uint8_t *buf)
+{
+	struct tcp_app *app;
+
+	s->reasm_flags = 0;
+	s->reasm_shutdown = 0;
+	s->reasm_fin_sent = 0;
+
+	app = _tcp_app_find_by_dport(s->s_port);
+	if ( NULL == app || !app->a_init(s) )
+		return;
+
+	if ( !alloc_reasm_buffers(s) ) {
+		app->a_fini(s);
+		return;
+	}
+
+	dmesg(M_DEBUG, "allocated reasm buffers for %s", app->a_label);
+	s->app = app;
+	do_data(s, to_server, seq, len, buf);
+}
+
+static const char *chan_str(tcp_chan_t chan)
+{
+	switch(chan) {
+	case TCP_CHAN_TO_SERVER:
+		return "TO_SERVER";
+	case TCP_CHAN_TO_CLIENT:
+		return "TO_CLIENT";
+	case TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT:
+		return "TO_SERVER|TO_CLIENT";
+	case 0:
+		return "NONE";
+	default:
+		return "FUCKED";
 	}
 }
 
-uint8_t *_tcp_reassemble(struct tcp_sbuf *s, uint32_t ack, size_t *len)
+const char *tcp_chan_str(tcp_chan_t chan)
 {
-	struct tcpr_node *last;
+	return chan_str(chan);
+}
+
+static size_t contig_bytes(struct tcp_session *sesh, tcp_chan_t chan)
+{
+	struct tcp_state *s;
+	uint32_t seq;
+
+	assert(chan == TCP_CHAN_TO_CLIENT || chan == TCP_CHAN_TO_SERVER);
+
+	if ( chan == TCP_CHAN_TO_CLIENT )
+		s = sesh->s_wnd;
+	else
+		s = &sesh->c_wnd;
+
+	if ( NULL == s->reasm )
+		return 0;
+
+	seq = s->snd_una;
+	if ( chan & sesh->reasm_fin_sent && seq == s->snd_nxt )
+		seq--;
+
+	assert(!tcp_before(s->reasm->s_contig_seq, s->reasm->s_reasm_begin));
+	if ( tcp_before(seq, s->reasm->s_reasm_begin) ) {
+		dmesg(M_CRIT, "wierd? %u %u", seq, s->reasm->s_reasm_begin);
+		return 0;
+	}
+
+	if ( unlikely(tcp_after(seq, s->reasm->s_contig_seq)) ) {
+		dmesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
+			sesh->app->a_label, s->reasm->s_contig_seq,
+			seq, s->reasm->s_num_rbuf);
+		seq = s->reasm->s_contig_seq;
+	}
+
+	return tcp_diff(s->reasm->s_reasm_begin, seq);
+}
+
+static tcp_chan_t tcp_chan_data(struct tcp_session *s)
+{
+	tcp_chan_t ret = 0;
+
+	ret |= (contig_bytes(s, TCP_CHAN_TO_SERVER)) ? TCP_CHAN_TO_SERVER : 0;
+	ret |= (contig_bytes(s, TCP_CHAN_TO_CLIENT)) ? TCP_CHAN_TO_CLIENT : 0;
+
+	return ret;
+}
+
+static const uint8_t *do_reasm(struct tcp_sbuf *s, size_t sz)
+{
+	static uint8_t *buf;
+	static size_t buf_sz;
+	struct tcp_rbuf *r;
+	size_t left = sz;
 	uint8_t *ptr;
 
-	last = get_contig_areas(s, NULL, NULL);
-	if ( last == NULL )
+	if ( 0 == sz )
 		return NULL;
 
-	if ( tcp_after(ack, node_end(last)) ) {
-		mesg(M_CRIT, "tcp_reasm: missed %x-%x segment (%u bytes)",
-			node_end(last), ack,
-			tcp_diff(node_end(last), ack));
+	/* FIXME: avoid buffer copy if buffer is contained in first rbuf */
+
+	if ( tcp_after(s->s_reasm_begin + sz, s->s_contig_seq) )
+		return NULL;
+
+	if ( sz > buf_sz ) {
+		uint8_t *new;
+
+		new = realloc(buf, sz);
+		dmesg(M_INFO, "tcp_stream: realloc to %u bytes %p", sz, new);
+		if ( NULL == new )
+			return NULL;
+
+		buf = new;
+		buf_sz = sz;
 	}
 
-	assert(tcp_before(s->reasm_begin, ack));
+	ptr = buf;
 
-	*len = tcp_diff(s->reasm_begin, ack);
-	if ( *len == 0 )
-		return NULL;
+	list_for_each_entry(r, &s->s_bufs, r_list) {
+		uint8_t *cp = r->r_base;
+		size_t csz = RBUF_SIZE;
 
-	dmesg(M_DEBUG, "Ack %x-%x (%u bytes)",
-		s->reasm_begin, ack, *len);
+		if ( tcp_before(r->r_seq, s->s_reasm_begin) ) {
+			cp += tcp_diff(r->r_seq, s->s_reasm_begin);
+			csz -= tcp_diff(r->r_seq, s->s_reasm_begin);
+		}
 
-	ptr = malloc(*len);
-	if ( ptr == NULL ) {
-		mesg(M_CRIT, "tcp_reasm: OOM on %u byte reassemblygram %x-%x",
-			*len, s->reasm_begin, ack);
+		if ( left < csz )
+			csz = left;
+
+		memcpy(ptr, cp, csz);
+		ptr += csz;
+		left -= csz;
+		if ( 0 == left )
+			break;
+	}
+
+	num_reasm++;
+	return buf;
+}
+
+size_t tcp_sesh_get_bytes(tcp_sesh_t sesh, tcp_chan_t chan)
+{
+	return contig_bytes(sesh, chan);
+}
+
+static void munch_bytes(struct tcp_sbuf *s, size_t bytes)
+{
+	struct tcp_rbuf *buf, *tmp;
+	uint32_t seq_end;
+
+	seq_end = s->s_reasm_begin + bytes;
+	assert(!tcp_after(seq_end, s->s_contig_seq));
+
+	list_for_each_entry_safe(buf, tmp, &s->s_bufs, r_list) {
+		uint32_t buf_end;
+
+		buf_end = buf->r_seq + RBUF_SIZE;
+		if ( tcp_after(seq_end, buf_end) ) {
+			if ( buf == s->s_contig )
+				s->s_contig = NULL;
+			rbuf_free(s, buf);
+		}else
+			break;
+
+	}
+
+	s->s_reasm_begin = seq_end;
+	if ( list_empty(&s->s_bufs) ) {
+		dmesg(M_DEBUG, "re-basing from %u to %u",
+			s->s_begin, s->s_reasm_begin);
+		s->s_begin = s->s_reasm_begin;
+	}else{
+		buf = first_buffer(s);
+		s->s_begin = buf->r_seq;
+	}
+	assert(!tcp_after(s->s_begin, s->s_reasm_begin));
+}
+
+static void *reasm_dcb;
+static size_t reasm_dcb_sz;
+
+size_t tcp_sesh_inject(tcp_sesh_t sesh, tcp_chan_t chan, size_t bytes)
+{
+	struct tcpstream_dcb *dcb;
+	struct _pkt pkt;
+	struct tcp_state *s;
+	const uint8_t *buf;
+	size_t total_bytes;
+
+	if ( 0 == bytes )
+		return 0;
+
+	switch(chan) {
+	case TCP_CHAN_TO_SERVER:
+		s = &sesh->c_wnd;
+		break;
+	case TCP_CHAN_TO_CLIENT:
+		s = sesh->s_wnd;
+		break;
+	default:
+		mesg(M_WARN, "%s: attempted to get bad buf: %s",
+			sesh->app->a_label, chan_str(chan));
+		return bytes;
+	}
+
+again:
+	total_bytes = contig_bytes(sesh, chan);
+	assert(bytes <= total_bytes);
+	buf = do_reasm(s->reasm, bytes);
+	if ( NULL == buf )
+		return 0;
+
+	pkt.pkt_dcb = reasm_dcb;
+	pkt.pkt_dcb_end = pkt.pkt_dcb + reasm_dcb_sz;
+	pkt.pkt_dcb_top = pkt.pkt_dcb;
+	dcb = (struct tcpstream_dcb *)decode_layerv(&pkt,
+							&_p_tcpstream,
+							sizeof(*dcb));
+	assert(NULL != dcb);
+
+	dcb->sesh = sesh;
+	dcb->chan = chan;
+
+	pkt.pkt_caplen = total_bytes;
+	pkt.pkt_len = bytes;
+	pkt.pkt_base = buf;
+	pkt.pkt_end = buf + pkt.pkt_len;
+	pkt.pkt_nxthdr = pkt.pkt_base;
+
+	/* TODO: provide mechanism to detach protocols when encountering
+	 * an invalid message. In the case of heuristically discovered
+	 * protocols this will give us a chance to re-synchronize
+	 *
+	 * Actually there can be two types of error, recoverable and
+	 * unrecoverable. An example of recoverable would be binary protocol
+	 * with len field but msg type indicates len field insufficient for
+	 * expected data...
+	 *
+	 * XXX: sack off this business with decodes tweaking pkt_len, use
+	 * the tcp dcb for this type of thing. Theres other cases of, for
+	 * example, binary protocols with one message not conforming to
+	 * protocol but can be recovered.
+	 */
+	dmesg(M_DEBUG, "tcp_reasm: %s: injecting %u/%u bytes",
+		sesh->app->a_label, bytes, total_bytes);
+	sesh->app->a_decode->d_decode(&pkt);
+
+	/* FIXME: use pkt_nxthdr ffs... */
+	if ( pkt.pkt_len > bytes ) {
+		assert(pkt.pkt_caplen == total_bytes);
+		if ( pkt.pkt_len <= total_bytes ) {
+			dmesg(M_DEBUG, "tcp_reasm: trying again for %u bytes",
+				pkt.pkt_len);
+			bytes = pkt.pkt_len;
+			goto again;
+		}
+		pkt.pkt_len = 0;
+	}
+
+	if ( pkt.pkt_len ) {
+		dmesg(M_DEBUG, "tcp_reasm: injecting %u byte packet",
+			pkt.pkt_len);
+		munch_bytes(s->reasm, pkt.pkt_len);
+		pkt_inject(&pkt);
+		num_inject++;
+		inject_bytes += pkt.pkt_len;
+		sesh->app->a_state_update(sesh, chan, &pkt);
+	}
+
+	return pkt.pkt_len;
+}
+
+static size_t fill_vectors(struct tcp_sbuf *s, size_t bytes,
+			struct ro_vec *vec)
+{
+	struct tcp_rbuf *r;
+	size_t i = 0;
+	size_t left = bytes;
+
+	list_for_each_entry(r, &s->s_bufs, r_list) {
+		uint8_t *cp = r->r_base;
+		size_t sz = RBUF_SIZE;
+
+		if ( tcp_before(r->r_seq, s->s_reasm_begin) ) {
+			cp += tcp_diff(r->r_seq, s->s_reasm_begin);
+			sz -= tcp_diff(r->r_seq, s->s_reasm_begin);
+		}
+
+		if ( left < sz )
+			sz = left;
+
+		dmesg(M_DEBUG, " vec[%u] is %u bytes", i, sz);
+		vec[i].v_ptr = cp;
+		vec[i].v_len = sz;
+		i++;
+		left -= sz;
+		if ( 0 == left )
+			break;
+	}
+
+	return i;
+}
+
+static int assure_vbuf(struct tcp_sbuf *s, struct ro_vec **vec, size_t *numvec)
+{
+	struct tcp_rbuf *r;
+	struct ro_vec *new;
+	size_t n;
+
+	r = first_buffer(s);
+	n = tcp_diff(r->r_seq, s->s_contig->r_seq + RBUF_SIZE) / RBUF_SIZE;
+	dmesg(M_DEBUG, "assuring %u vectors", n);
+
+	if ( *numvec >= n )
+		return 1;
+
+	new = realloc(*vec, sizeof(*new) * n);
+	if ( NULL == new )
+		return 0;
+
+	*vec = new;
+	*numvec = n;
+	return 1;
+}
+
+const struct ro_vec *tcp_sesh_get_buf(tcp_sesh_t sesh, tcp_chan_t chan,
+				size_t *numv, size_t *bytes)
+{
+	static struct ro_vec *vbuf;
+	static size_t vbuf_sz;
+	struct tcp_state *s;
+	struct ro_vec *vec;
+	size_t n, b;
+
+	switch(chan) {
+	case TCP_CHAN_TO_SERVER:
+		s = &sesh->c_wnd;
+		break;
+	case TCP_CHAN_TO_CLIENT:
+		s = sesh->s_wnd;
+		break;
+	default:
+		mesg(M_WARN, "%s: attempted to get bad buf: %s",
+			sesh->app->a_label, chan_str(chan));
 		return NULL;
 	}
 
-	/* Put acked data in to a contiguous buffer */
-	do_reassemble(s, s->reasm_begin, ptr, *len);
+	assert(NULL != s);
 
-	dump_buffer(s, s->reasm_begin);
+	/* fuck me, this is clever */
+	if ( !assure_vbuf(s->reasm, &vbuf, &vbuf_sz) )
+		return NULL;
 
-	return ptr;
+	b = contig_bytes(sesh, chan);
+	if ( 0 == b )
+		return NULL;
+
+	vec = vbuf;
+	n = fill_vectors(s->reasm, b, vec);
+	dmesg(M_DEBUG, "tcp_reasm(%s): alloc %u bytes in %u vectors",
+			chan_str(chan), b, n);
+
+	*numv = n;
+	*bytes = b;
+	return vec;
+}
+
+static void do_push(struct tcp_session *s, tcp_chan_t chan)
+{
+	tcp_chan_t achan;
+	int ret;
+
+	assert(s->reasm_flags);
+
+	achan = tcp_chan_data(s);
+
+	dmesg(M_ERR, "stream_push: %s", chan_str(chan));
+	dmesg(M_ERR, "available chans: %s", chan_str(achan));
+
+	for(; achan & s->reasm_flags; achan = tcp_chan_data(s) ) {
+		dmesg(M_ERR, "%s_push: %s waiting for %s", s->app->a_label,
+			chan_str(achan), chan_str(s->reasm_flags));
+		ret = s->app->a_push(s, achan);
+		num_push++;
+		if ( ret < 0 )
+			mesg(M_CRIT, "%s: desynchronised", s->app->a_label);
+		if ( ret <= 0 )
+			break;
+	}
+}
+
+void _tcp_reasm_ack(struct tcp_session *s, uint8_t to_server)
+{
+	if ( NULL == s->app )
+		return;
+
+	do_push(s, (to_server) ?
+			TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT);
+}
+
+void _tcp_reasm_abort(struct tcp_session *s, int rst)
+{
+	if ( NULL == s->app )	
+		return;
+	do_abort(s, rst);
+}
+
+size_t _tcp_reasm_buffer_size(struct tcp_session *s)
+{
+	size_t ret = 0;
+
+	if ( NULL == s->app )
+		return ret;
+
+	if ( s->c_wnd.reasm )
+		ret += s->c_wnd.reasm->s_num_rbuf << RBUF_SHIFT;
+	if ( s->s_wnd && s->s_wnd->reasm )
+		ret += s->s_wnd->reasm->s_num_rbuf << RBUF_SHIFT;
+
+	return ret;
+}
+
+void _tcp_reasm_fin_sent(struct tcp_session *s, uint8_t to_server)
+{
+	tcp_chan_t chan;
+	chan = (to_server) ? TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT;
+	s->reasm_fin_sent |= chan;
+}
+
+static void do_shutdown(struct tcp_session *s, tcp_chan_t chan)
+{
+	struct tcp_sbuf **pptr;
+	size_t bytes;
+
+	switch(chan) {
+	case TCP_CHAN_TO_SERVER:
+		pptr = &s->c_wnd.reasm;
+		break;
+	case TCP_CHAN_TO_CLIENT:
+		pptr = &s->s_wnd->reasm;
+		break;
+	default:
+		assert(0);
+		break;
+	}
+
+	bytes = contig_bytes(s, chan);
+	if ( bytes ) {
+		const uint8_t *buf;
+		mesg(M_WARN, "%s: TO_CLIENT %u bytes left on shutdown",
+			s->app->a_label, bytes);
+		buf = do_reasm(*pptr, bytes);
+		if ( NULL != buf )
+			hex_dump(buf, (bytes > 0x100) ? 0x100 : bytes, 16);
+	}
+
+
+	sbuf_free(s, *pptr);
+	*pptr = NULL;
+}
+void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
+{
+	tcp_chan_t chan;
+
+	if ( NULL == s->app )
+		return;
+
+	chan = (to_server) ? TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT;
+
+	do_push(s, tcp_chan_data(s));
+
+	s->reasm_shutdown |= chan;
+
+	dmesg(M_ERR, "stream_shutdown: %s", chan_str(chan));
+	s->app->a_shutdown(s, chan);
+
+	do_shutdown(s, (to_server) ? TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT);
+
+	if ( s->reasm_shutdown & (TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT) ) {
+		s->app->a_fini(s);
+		s->app = NULL;
+		s->flow = NULL;
+	}
+}
+
+
+void tcp_sesh_set_flow(tcp_sesh_t sesh, void *flow)
+{
+	sesh->flow = flow;
+}
+
+void *tcp_sesh_get_flow(tcp_sesh_t sesh)
+{
+	return sesh->flow;
+}
+
+tcp_chan_t tcp_sesh_get_wait(tcp_sesh_t sesh)
+{
+	tcp_chan_t ret;
+	ret = sesh->reasm_flags;
+	assert(ret && 0 == (ret & ~(TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT)));
+	return ret;
+}
+
+void tcp_sesh_wait(tcp_sesh_t sesh, tcp_chan_t chan)
+{
+	assert(chan);
+
+	if ( chan & sesh->reasm_shutdown ) {
+		mesg(M_WARN, "%s: attempted to wait on shutdown chan: %s",
+			sesh->app->a_label,
+			chan_str(chan & sesh->reasm_shutdown));
+		asm volatile ("int $0x3\n");
+		chan &= ~sesh->reasm_shutdown;
+	}
+
+	sesh->reasm_flags = chan;
+}
+
+int _tcp_reasm_ctor(mempool_t pool)
+{
+	sbuf_cache = objcache_init(pool, "tcp_sbuf", sizeof(struct tcp_sbuf));
+	if ( sbuf_cache == NULL )
+		return 0;
+
+	rbuf_cache = objcache_init(pool, "tcp_rbuf", sizeof(struct tcp_rbuf));
+	if ( rbuf_cache == NULL )
+		return 0;
+
+	data_cache = objcache_init(pool, "tcp_data", RBUF_SIZE);
+	if ( data_cache == NULL )
+		return 0;
+
+	gap_cache = objcache_init(pool, "tcp_gap", sizeof(struct tcp_gap));
+	if ( gap_cache == NULL )
+		return 0;
+
+	reasm_dcb_sz = _tcp_app_max_dcb();
+	reasm_dcb = malloc(reasm_dcb_sz);
+	if ( NULL == reasm_dcb )
+		return 0;
+
+	return 1;
+}
+
+void _tcp_reasm_dtor(void)
+{
+	unsigned int avg;
+
+	avg = inject_bytes / ((num_inject) ? num_inject : 1);
+
+	mesg(M_INFO, "tcp_reasm: push=%u reasm=%u "
+		"inject=%u avg_bytes=%u max_gaps=%u",
+		num_push, num_reasm, num_inject, avg, max_gaps);
+
+	free(reasm_dcb);
 }

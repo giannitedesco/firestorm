@@ -7,6 +7,7 @@
 #define _FIRESTORM_PACKET_HEADER_INCLUDED_
 
 struct _pkt {
+	source_t	pkt_source;
 	timestamp_t 	pkt_ts;
 
 	size_t		pkt_caplen;
@@ -16,14 +17,9 @@ struct _pkt {
 
 	const uint8_t	*pkt_nxthdr;
 
-	source_t	pkt_source;
-
 	struct _dcb	*pkt_dcb_top;
 	struct _dcb	*pkt_dcb;
 	struct _dcb	*pkt_dcb_end;
-
-	/** Destructor function. Responsible for freeing up dcb and payload. */
-	void (*pkt_dtor)(struct _pkt *pkt);
 };
 
 #endif /* _FIRESTORM_PACKET_HEADER_INCLUDED_ */

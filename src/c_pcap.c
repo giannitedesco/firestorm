@@ -77,12 +77,12 @@ static void lpf_callback(u_char *user, struct pcap_pkthdr *header, u_char *data)
 	p->pkt.pkt_end = data + header->caplen;
 }
 
-static struct _pkt *live_dequeue(struct _source *s, struct iothread *io)
+static pkt_t live_dequeue(struct _source *s, struct iothread *io)
 {
 	struct fpcap_priv *p = (struct fpcap_priv *)s;
 	int ret;
 	
-	ret = pcap_dispatch(p->pcap_desc, -1,
+	ret = pcap_dispatch(p->pcap_desc, 1,
 		(pcap_handler)lpf_callback, (u_char *)p);
 
 	if ( ret < 0 ) {
@@ -99,7 +99,7 @@ static struct _pkt *live_dequeue(struct _source *s, struct iothread *io)
 	return &p->pkt;
 }
 
-static struct _pkt *file_dequeue(struct _source *s, struct iothread *io)
+static pkt_t file_dequeue(struct _source *s, struct iothread *io)
 {
 	struct fpcap_priv *p = (struct fpcap_priv *)s;
 	int ret;

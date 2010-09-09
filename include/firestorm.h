@@ -24,7 +24,22 @@
 #include <f_time.h>
 #include <f_os.h>
 
+struct vec {
+	uint8_t *v_ptr;
+	size_t v_len;
+};
+
+struct ro_vec {
+	const uint8_t *v_ptr;
+	size_t v_len;
+};
+
+typedef struct _memchunk *memchunk_t;
+typedef struct _mempool *mempool_t;
+typedef struct _objcache *objcache_t;
+
 typedef struct _pkt *pkt_t;
+typedef struct _frame *frame_t;
 
 typedef struct _source *source_t;
 typedef struct _capdev *capdev_t;
@@ -34,14 +49,8 @@ typedef struct _pipeline *pipeline_t;
 typedef struct _decoder *decoder_t;
 typedef struct _proto *proto_t;
 typedef struct _dcb *dcb_t;
-typedef unsigned int proto_ns_t;
-typedef unsigned int proto_id_t;
-
-typedef struct _memchunk *memchunk_t;
-typedef struct _obj_cache *obj_cache_t;
-
-typedef struct _flow_tracker *flow_tracker_t;
-typedef void *flow_state_t;
+typedef uint8_t proto_ns_t;
+typedef uint16_t proto_id_t;
 
 typedef uint8_t mesg_code_t;
 
@@ -60,20 +69,24 @@ void *_firestorm_unimplemented(void);
 void mesg(mesg_code_t code, const char *fmt, ...) _printf(2,3);
 void hex_dump(const uint8_t *tmp, size_t len, size_t llen);
 
-/* --- Packet routines */
-pkt_t pkt_alloc(source_t source) _malloc;
-void pkt_free(pkt_t pkt);
+int vcasecmp(const struct ro_vec *v1, const struct ro_vec *v2);
+int vcmp(const struct ro_vec *v1, const struct ro_vec *v2);
+int vstrcmp(const struct ro_vec *v1, const char *str);
+size_t vtouint(struct ro_vec *v, unsigned int *u);
 
 /* -- Memchunk routines */
-memchunk_t memchunk_init(size_t numchunks) _malloc;
-void memchunk_fini(memchunk_t m);
+int memchunk_init(size_t numchunks);
+void memchunk_fini(void);
 
-obj_cache_t objcache_init(memchunk_t m, const char *l, size_t obj_sz) _malloc;
-void objcache_fini(obj_cache_t o);
-void *objcache_alloc(obj_cache_t o) _malloc;
-void *objcache_alloc0(obj_cache_t o) _malloc;
-void objcache_free(obj_cache_t o, void *obj);
-void memchunk_free_obj(memchunk_t m, void *chunk);
+mempool_t mempool_new(const char *label, size_t numchunks);
+void mempool_free(mempool_t m);
+
+objcache_t objcache_init(mempool_t p, const char *l, size_t obj_sz) _malloc;
+void objcache_fini(objcache_t o);
+void *objcache_alloc(objcache_t o) _malloc;
+void *objcache_alloc0(objcache_t o) _malloc;
+void objcache_free(void *obj);
+void objcache_free2(objcache_t o, void *obj);
 
 /* --- Data-source plugins */
 source_t capture_tcpdump_open(const char *fn);
@@ -93,10 +106,16 @@ const char *decoder_label(decoder_t l);
 void decode(pkt_t p, decoder_t d) _nonull(1, 2);
 int decode_pkt_realloc(pkt_t p, unsigned int min_layers) _nonull(1);
 
+/* Stream decode */
+void stream_init(void);
+
 /* --- Pipelines: the capture / decode / analyze mainloop */
 pipeline_t pipeline_new(void) _malloc;
 void pipeline_free(pipeline_t p);
 int pipeline_add_source(pipeline_t p, source_t s);
 int pipeline_go(pipeline_t p);
+
+/* Callback events */
+void pkt_inject(pkt_t pkt);
 
 #endif /* _FIRESTORM_HEADER_INCLUDED_ */

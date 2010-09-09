@@ -38,7 +38,7 @@ timestamp_t time_getvtime(void)
 
 static inline time_t do_time_to_time_t(timestamp_t t)
 {
-	return (time_t)(t / TIMESTAMP_HZ);
+	return (time_t)t;
 }
 
 time_t time_to_time_t(timestamp_t t)
@@ -60,8 +60,8 @@ void time_to_gmt(timestamp_t t, struct tm *tm)
 
 void time_to_timeval(timestamp_t t, struct timeval *tv)
 {
-	tv->tv_sec = t / TIMESTAMP_HZ;
-	tv->tv_usec = (t % TIMESTAMP_HZ) / TIMESTAMP_MHZ;
+	tv->tv_sec = t;
+	tv->tv_usec = 0;
 }
 
 /* Using euclids greatest common divisor */
