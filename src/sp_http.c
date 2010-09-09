@@ -4,12 +4,10 @@
  * Released under the terms of the GNU GPL version 3
  *
  * TODO:
- *  - include partial content with req/resp if possible
  *  - support chunked transfer encoding
+ *  - include partial content with req/resp if possible
  *  - incorporate NADS :]
- *  - additional state tracking for connection: keep-alive
  *  - use htype for host header
- *  - use BCD for protocol version 0xf for bad chars
 */
 
 #include <firestorm.h>
@@ -28,16 +26,6 @@
 #define dmesg(x...) do { } while(0);
 #define dhex_dump(x...) do { } while(0);
 #endif
-
-/* Accepted HTTP versions, must correspond with the  */
-static struct {
-	int maj, min;
-}http_proto_vers[HTTP_VER_MAX]={
-	[HTTP_VER_UNKNOWN] {-1, -1},
-	[HTTP_VER_0_9] {0, 9},
-	[HTTP_VER_1_0] {1, 0},
-	[HTTP_VER_1_1] {1, 1},
-};
 
 static struct _proto p_http_req = {
 	.p_label = "http_request",
@@ -65,26 +53,11 @@ struct http_hcb {
 	}u;
 };
 
-/* Get a version code for a given major and minor version */
-static inline unsigned int http_vers_idx(int maj, int min)
-{
-	int i;
-
-	for(i=1; i < HTTP_VER_MAX; i++) {
-		if ( http_proto_vers[i].maj == maj &&
-			http_proto_vers[i].min == min )
-		return i;
-	}
-
-	return HTTP_VER_UNKNOWN;
-}
-
 /* Parse and HTTP version string (eg: "HTTP/1.0") */
-static int http_proto_version(struct ro_vec *str)
+static http_vers_t http_proto_version(struct ro_vec *str)
 {
 	const uint8_t *s = str->v_ptr;
 	int maj, min;
-	int ret;
 
 	if ( str->v_ptr == NULL )
 		return HTTP_VER_UNKNOWN;
@@ -103,9 +76,8 @@ static int http_proto_version(struct ro_vec *str)
 
 	maj = s[5] - '0';
 	min = s[7] - '0';
-	ret = http_vers_idx(maj, min);
 
-	return ret;
+	return (min << 4) | maj;
 }
 
 static void htype_string(struct http_hcb *h, struct ro_vec *v)
@@ -261,6 +233,22 @@ static size_t http_decode_buf(struct http_hcb *d, size_t num_dcb,
 	return ret;
 }
 
+static http_conn_t http_connection(struct ro_vec *vec)
+{
+	static const struct ro_vec close_token = {
+		.v_ptr = (uint8_t *)"Close",
+		.v_len = 5,
+	};
+
+	if ( !vec->v_len )
+		return HTTP_CONN_NONE;
+
+	if ( !vcasecmp(vec, &close_token) )
+		return HTTP_CONN_CLOSE;
+	
+	return HTTP_CONN_KEEPALIVE;
+}
+
 /* Parse an HTTP request header and fill in the http response structure */
 static size_t http_req(struct http_request_dcb *dcb,
 			const uint8_t *ptr, size_t len)
@@ -269,7 +257,7 @@ static size_t http_req(struct http_request_dcb *dcb,
 	const uint8_t *end = ptr + len;
 	int clen = -1;
 	size_t hlen;
-	struct ro_vec pv = {0,};
+	struct ro_vec pv = {0,}, conn = {0, };
 	int prox = 0;
 	size_t i;
 	int state, do_host;
@@ -278,6 +266,8 @@ static size_t http_req(struct http_request_dcb *dcb,
 		{"uri", htype_string, {.vec = &r->uri}},
 		{"protocol", htype_string, {.vec = &pv}},
 		{"Host", htype_string , {.vec = &r->host}},
+		{"Connection", htype_string, {.vec = &conn}},
+		{"User-Agent", htype_string, {.vec = &r->user_agent}},
 		{"Content-Type", htype_string,
 					{.vec = &r->http.content_type}},
 		{"Content-Length", htype_int, {.val = &clen}},
@@ -293,7 +283,8 @@ static size_t http_req(struct http_request_dcb *dcb,
 	if ( !hlen )
 		return 0;
 
-	r->proto_vers = http_proto_version(&pv);
+	r->http.proto_vers = http_proto_version(&pv);
+	r->http.conn_close = http_connection(&conn);
 
 	if ( clen > 0 )
 		r->http.content.v_len = clen;
@@ -339,7 +330,7 @@ static size_t http_req(struct http_request_dcb *dcb,
 
 done:
 	/* Extract the port from the host header */
-	r->port = HTTP_DEFAULT_PORT;
+	r->http.u.port = HTTP_DEFAULT_PORT;
 	if ( r->host.v_ptr ) {
 		size_t i;
 		struct ro_vec port = { .v_ptr = NULL };
@@ -360,7 +351,7 @@ done:
 					/* TODO */
 					//alert_tag(p, &a_invalid_port, -1);
 				}else{
-					r->port = prt;
+					r->http.u.port = prt;
 				}
 			}
 		}
@@ -375,30 +366,6 @@ done:
 	return hlen;
 }
 
-static int check_req(const struct ro_vec *vec, size_t vb, size_t b,
-					size_t v, size_t i)
-{
-	uint8_t pb;
-
-	if (b < vb)
-		return 0;
-
-	if ( 1 + vb == b )
-		return 1;
-
-	if ( b - vb > 2 )
-		return 0;
-
-	if ( i ) {
-		pb = vec[v].v_ptr[i - 1];
-	}else if ( v ) {
-		pb = vec[v - 1].v_ptr[vec[v - 1].v_len - 1];
-	}else
-		return 0;
-
-	return 1;
-}
-
 static size_t http_resp(struct http_response_dcb *dcb,
 				const uint8_t *ptr, size_t len)
 {
@@ -406,11 +373,13 @@ static size_t http_resp(struct http_response_dcb *dcb,
 	const uint8_t *end = ptr + len;
 	int clen = -1;
 	size_t hlen;
-	struct ro_vec pv = {0,};
+	struct ro_vec pv = {0,}, conn = {0,};
 	struct http_hcb hcb[] = {
 		{"protocol", htype_string, {.vec = &pv}},
-		{"code", htype_code, {.u16 = &r->code}},
+		{"code", htype_code, {.u16 = &r->http.u.code}},
 		{"msg", htype_string, {.vec = NULL}},
+		{"Server", htype_string, {.vec = &r->server}},
+		{"Connection", htype_string, {.vec = &conn}},
 		{"Content-Type", htype_string, {.vec = &r->http.content_type}},
 		{"Content-Length", htype_int, {.val = &clen}},
 		{"Content-Encoding", htype_string,
@@ -426,7 +395,8 @@ static size_t http_resp(struct http_response_dcb *dcb,
 	if ( clen > 0 )
 		r->http.content.v_len = clen;
 
-	r->proto_vers = http_proto_version(&pv);
+	r->http.proto_vers = http_proto_version(&pv);
+	r->http.conn_close = http_connection(&conn);
 
 	return hlen;
 }
@@ -477,14 +447,12 @@ static void decode_content(const struct http_flow *f,
 	const struct tcpstream_dcb *tcp_dcb;
 	struct http_cont_dcb *dcb;
 
-	assert(pkt->pkt_len <= fs->content_len);
-
 	tcp_dcb = (const struct tcpstream_dcb *)pkt->pkt_dcb;
 	dcb = (struct http_cont_dcb *)decode_layer0(pkt, &p_http_cont);
 
-	dmesg(M_DEBUG, "http: %s %u/%u bytes of content",
-		((tcp_dcb->chan) == TCP_CHAN_TO_SERVER) ? ">>>" : "<<<",
-		pkt->pkt_len, fs->content_len);
+	if ( fs->state != HTTP_STATE_CLOSING ) {
+		assert(pkt->pkt_len <= fs->content_len);
+	}
 }
 
 static void http_decode(struct _pkt *pkt)
@@ -512,10 +480,10 @@ static void http_decode(struct _pkt *pkt)
 		decode_hdr(f, fs, pkt);
 		break;
 	case HTTP_STATE_CONTENT:
+	case HTTP_STATE_CLOSING:
 		decode_content(f, fs, pkt);
 		break;
 	case HTTP_STATE_CHUNKED:
-	case HTTP_STATE_CLOSING:
 		dmesg(M_WARN, "TODO");
 		pkt->pkt_len = 0;
 		break;
@@ -534,6 +502,19 @@ static void http_update_seq(tcp_sesh_t sesh, struct http_flow *f)
 		tcp_sesh_wait(sesh, TCP_CHAN_TO_SERVER);
 }
 
+static int connection_closing(struct http_flow *f, const struct http_dcb *dcb)
+{
+	if ( dcb->dcb.dcb_proto == &p_http_req )
+		return 0;
+	if ( f->client.ver >= HTTP_VER_1_1 &&
+		dcb->conn_close == HTTP_CONN_CLOSE )
+		return 1;
+	if ( f->client.ver < HTTP_VER_1_1 &&
+		dcb->conn_close != HTTP_CONN_KEEPALIVE )
+		return 1;
+	return 0;
+}
+
 static void state_update_hdr(struct http_flow *f, struct http_fside *fs,
 					struct _pkt *pkt)
 {
@@ -546,21 +527,13 @@ static void state_update_hdr(struct http_flow *f, struct http_fside *fs,
 	assert(dcb->dcb.dcb_proto == &p_http_req ||
 		dcb->dcb.dcb_proto == &p_http_resp);
 
-	if ( dcb->content.v_len && NULL == dcb->content.v_ptr ) {
-		fs->state = HTTP_STATE_CONTENT;
-		fs->content_len = dcb->content.v_len;
-	}else{
-		fs->state = HTTP_STATE_HEADER;
-		http_update_seq(tcp_dcb->sesh, f);
-	}
-
 	if ( dcb->dcb.dcb_proto == &p_http_req) {
 		const struct http_request_dcb *r;
 
 		r = (struct http_request_dcb *)dcb;
 		dmesg(M_DEBUG, "http: >>> %.*s %.*s:%u %.*s",
 			r->method.v_len, r->method.v_ptr,
-			r->host.v_len, r->host.v_ptr, r->port,
+			r->host.v_len, r->host.v_ptr, r->http.u.port,
 			r->uri.v_len, r->uri.v_ptr);
 		if ( r->http.content.v_len )
 			dmesg(M_DEBUG, "http: >>> %u bytes of %.*s",
@@ -569,7 +542,7 @@ static void state_update_hdr(struct http_flow *f, struct http_fside *fs,
 				r->http.content_type.v_ptr);
 		if ( !r->http.content_enc.v_len &&
 				!r->http.transfer_enc.v_len )
-			return;
+			goto out;
 		dmesg(M_DEBUG, "http: >>>  encoding content=%.*s transfer=%.*s",
 			r->http.content_enc.v_len,
 			r->http.content_enc.v_ptr,
@@ -580,20 +553,36 @@ static void state_update_hdr(struct http_flow *f, struct http_fside *fs,
 
 		r = (struct http_response_dcb *)dcb;
 		dmesg(M_DEBUG, "http: <<< HTTP/%u - %u bytes %.*s",
-			r->code, r->http.content.v_len,
+			r->http.u.code, r->http.content.v_len,
 			r->http.content_type.v_len,
 			r->http.content_type.v_ptr);
 		if ( !r->http.content_enc.v_len &&
 				!r->http.transfer_enc.v_len )
-			return;
+			goto out;
 		dmesg(M_DEBUG, "http: <<<  encoding content=%.*s transfer=%.*s",
 			r->http.content_enc.v_len,
 			r->http.content_enc.v_ptr,
 			r->http.transfer_enc.v_len,
 			r->http.transfer_enc.v_ptr);
 	}
+
+out:
 	if ( dcb->content.v_ptr )
-		hex_dump(dcb->content.v_ptr, dcb->content.v_len, 16);
+		dhex_dump(dcb->content.v_ptr, dcb->content.v_len, 16);
+
+	fs->ver = dcb->proto_vers;
+
+	if ( dcb->content.v_len && NULL == dcb->content.v_ptr ) {
+		fs->state = HTTP_STATE_CONTENT;
+		fs->content_len = dcb->content.v_len;
+	}else if ( !dcb->content.v_len && connection_closing(f, dcb) ) {
+		f->client.state = HTTP_STATE_CLOSING;
+		f->server.state = HTTP_STATE_CLOSING;
+	}else{
+		fs->state = HTTP_STATE_HEADER;
+		http_update_seq(tcp_dcb->sesh, f);
+	}
+
 }
 
 static void state_update_content(struct http_flow *f, struct http_fside *fs,
@@ -606,6 +595,9 @@ static void state_update_content(struct http_flow *f, struct http_fside *fs,
 	dcb = (const struct http_cont_dcb *)tcp_dcb->dcb.dcb_next;
 
 	assert(dcb->dcb.dcb_proto == &p_http_cont);
+
+	if ( fs->state == HTTP_STATE_CLOSING )
+		return;
 
 	fs->content_len -= pkt->pkt_len;
 	if ( 0 == fs->content_len ) {
@@ -635,32 +627,89 @@ static void state_update(tcp_sesh_t sesh, tcp_chan_t chan, struct _pkt *pkt)
 		state_update_hdr(f, fs, pkt);
 		break;
 	case HTTP_STATE_CONTENT:
+	case HTTP_STATE_CLOSING:
 		state_update_content(f, fs, pkt);
 		break;
 	case HTTP_STATE_CHUNKED:
-	case HTTP_STATE_CLOSING:
 		dmesg(M_WARN, "TODO");
 		break;
 	}
 }
 
+/* State machine for incremental HTTP request parse */
+#define RSTATE_INITIAL		0
+#define RSTATE_CR		1
+#define RSTATE_LF		2
+#define RSTATE_CRLF		3
+#define RSTATE_LFCR		4
+#define RSTATE_CRLFCR		5
+#define RSTATE_LFLF		6
+#define RSTATE_CRLFLF		7
+#define RSTATE_LFCRLF		8
+#define RSTATE_CRLFCRLF		9
+
+#define RSTATE_NR_NONTERMINAL	RSTATE_LFLF
+#define RSTATE_TERMINAL(x)	((x) >= RSTATE_LFLF)
+static inline int http_parse_incremental(uint8_t *state,
+					const uint8_t **rptr,
+					const uint8_t *end)
+{
+	static const uint8_t cr_map[RSTATE_NR_NONTERMINAL] = {
+			[RSTATE_INITIAL] = RSTATE_CR,
+			[RSTATE_CR] = RSTATE_CR,
+			[RSTATE_LF] = RSTATE_LFCR,
+			[RSTATE_CRLF] = RSTATE_CRLFCR,
+			[RSTATE_LFCR] = RSTATE_CR,
+			[RSTATE_CRLFCR] = RSTATE_CR};
+	static const uint8_t lf_map[RSTATE_NR_NONTERMINAL] = {
+			[RSTATE_INITIAL] = RSTATE_LF,
+			[RSTATE_CR] = RSTATE_CRLF,
+			[RSTATE_LF] = RSTATE_LFLF,
+			[RSTATE_CRLF] = RSTATE_CRLFLF,
+			[RSTATE_LFCR] = RSTATE_LFCRLF,
+			[RSTATE_CRLFCR] = RSTATE_CRLFCRLF};
+
+	assert(end >= *rptr);
+
+	for(; *rptr < end; (*rptr)++) {
+		switch((*rptr)[0]) {
+		case '\r':
+			assert((*state) < RSTATE_NR_NONTERMINAL);
+			(*state) = cr_map[(*state)];
+			break;
+		case '\n':
+			assert((*state) < RSTATE_NR_NONTERMINAL);
+			(*state) = lf_map[(*state)];
+			break;
+		default:
+			(*state) = RSTATE_INITIAL;
+			continue;
+		}
+		if ( RSTATE_TERMINAL((*state)) ) {
+			(*rptr)++;
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
 static ssize_t parse_req(const struct ro_vec *vec, size_t numv, size_t bytes)
 {
-	size_t vb = bytes;
-	size_t v, i, b;
+	uint8_t state = RSTATE_INITIAL;
+	size_t b, i;
 
-	/* FIXME: doesn't check for '\r' */
-	for(b = v = 0; v < numv; v++) {
-		for(i = 0; i < vec[v].v_len; i++) {
-			if ( vec[v].v_ptr[i] != '\n' )
-				continue;
-			if ( !check_req(vec, vb, b + i, v, i) ) {
-				vb = b + i;
-				continue;
-			}
-			return b + i + 1;
+	for(b = i = 0; i < numv; i++) {
+		const uint8_t *rptr, *end;
+
+		rptr = vec[i].v_ptr;
+		end = rptr + vec[i].v_len;
+		if ( !http_parse_incremental(&state, &rptr, end) ) {
+			b += vec[i].v_len;
+			continue;
 		}
-		b += vec[v].v_len;
+
+		return b + (rptr - vec[i].v_ptr);
 	}
 
 	return 0;
@@ -716,6 +765,30 @@ static int do_push_content(tcp_sesh_t sesh, tcp_chan_t chan)
 	return 1;
 }
 
+static int do_push_final_content(tcp_sesh_t sesh, tcp_chan_t chan)
+{
+	const struct http_flow *f;
+	const struct http_fside *fs;
+	size_t bytes;
+
+	f = tcp_sesh_get_flow(sesh);
+	if ( f->seq & 0x1 ) {
+		assert(chan == TCP_CHAN_TO_CLIENT);
+		fs = &f->server;
+	}else{
+		assert(chan == TCP_CHAN_TO_SERVER);
+		fs = &f->client;
+	}
+
+	bytes = tcp_sesh_get_bytes(sesh, chan);
+	bytes = tcp_sesh_inject(sesh, chan, bytes);
+
+	if ( !bytes )
+		return 0;
+
+	return 1;
+}
+
 static int push(tcp_sesh_t sesh, tcp_chan_t chan)
 {
 	const struct http_flow *f;
@@ -739,9 +812,10 @@ static int push(tcp_sesh_t sesh, tcp_chan_t chan)
 	case HTTP_STATE_CONTENT:
 		return do_push_content(sesh, chan);
 	case HTTP_STATE_CHUNKED:
-	case HTTP_STATE_CLOSING:
 		dmesg(M_WARN, "TODO");
 		return 0;
+	case HTTP_STATE_CLOSING:
+		return do_push_final_content(sesh, chan);
 	default:
 		dmesg(M_CRIT, "http: corrupt flow");
 		return -1;
