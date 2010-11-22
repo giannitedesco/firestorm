@@ -392,6 +392,8 @@ again:
 	if ( ret )
 		return ret;
 
+#if 0
+	/* Free stuff we're not reassembling for first */
 	list_for_each_entry_safe(ss, tmp, &lru, lru) {
 		if ( s == ss )
 			continue;
@@ -401,6 +403,7 @@ again:
 		num_oom++;
 		goto again;
 	}
+#endif
 
 	list_for_each_entry_safe(ss, tmp, &lru, lru) {
 		if ( s == ss )
@@ -464,8 +467,7 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 	INIT_LIST_HEAD(&s->lru);
 	set_lru(cur, s);
 
-	s->app = NULL;
-	s->flow = NULL;
+	/* XXX: init */
 
 	return s;
 }

@@ -532,25 +532,7 @@ static void do_abort(struct tcp_session *s, int rst)
 		sbuf_free(s, s->s_wnd->reasm);
 		s->s_wnd->reasm = NULL;
 	}
-	if ( s->app )
-		s->app->a_fini(s);
-	s->app = NULL;
-	s->flow = NULL;
-}
-
-static void do_data(struct tcp_session *s, uint8_t to_server,
-			uint32_t seq, uint32_t len, const uint8_t *buf)
-{
-	int ret;
-
-	if ( to_server ) {
-		ret = do_inject(s, s->c_wnd.reasm, seq, len, buf);
-	}else{
-		ret = do_inject(s, s->s_wnd->reasm, seq, len, buf);
-	}
-
-	if ( !ret )
-		do_abort(s, 0);
+	/* XXX: flow dtor */
 }
 
 static int alloc_reasm_buffers(struct tcp_session *s)
@@ -572,53 +554,11 @@ static int alloc_reasm_buffers(struct tcp_session *s)
 void _tcp_reasm_data(struct tcp_session *s, uint8_t to_server,
 			uint32_t seq, uint32_t len, const uint8_t *buf)
 {
-	if ( NULL == s->app )
-		return;
-	do_data(s, to_server, seq, len, buf);
 }
 
 void _tcp_reasm_init(struct tcp_session *s, uint8_t to_server,
 			uint32_t seq, uint32_t len, const uint8_t *buf)
 {
-	struct tcp_app *app;
-
-	s->reasm_flags = 0;
-	s->reasm_shutdown = 0;
-	s->reasm_fin_sent = 0;
-
-	app = _tcp_app_find_by_dport(s->s_port);
-	if ( NULL == app || !app->a_init(s) )
-		return;
-
-	if ( !alloc_reasm_buffers(s) ) {
-		app->a_fini(s);
-		return;
-	}
-
-	dmesg(M_DEBUG, "allocated reasm buffers for %s", app->a_label);
-	s->app = app;
-	do_data(s, to_server, seq, len, buf);
-}
-
-static const char *chan_str(tcp_chan_t chan)
-{
-	switch(chan) {
-	case TCP_CHAN_TO_SERVER:
-		return "TO_SERVER";
-	case TCP_CHAN_TO_CLIENT:
-		return "TO_CLIENT";
-	case TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT:
-		return "TO_SERVER|TO_CLIENT";
-	case 0:
-		return "NONE";
-	default:
-		return "FUCKED";
-	}
-}
-
-const char *tcp_chan_str(tcp_chan_t chan)
-{
-	return chan_str(chan);
 }
 
 static size_t contig_bytes(struct tcp_session *sesh, tcp_chan_t chan)
@@ -647,9 +587,10 @@ static size_t contig_bytes(struct tcp_session *sesh, tcp_chan_t chan)
 	}
 
 	if ( unlikely(tcp_after(seq, s->reasm->s_contig_seq)) ) {
-		dmesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
-			sesh->app->a_label, s->reasm->s_contig_seq,
-			seq, s->reasm->s_num_rbuf);
+		/* XXX: blame */
+		//dmesg(M_CRIT, "missing segment in %s stream %u-%u, %u rbufs",
+		//	sesh->app->a_label, s->reasm->s_contig_seq,
+		//	seq, s->reasm->s_num_rbuf);
 		seq = s->reasm->s_contig_seq;
 	}
 
@@ -719,11 +660,6 @@ static const uint8_t *do_reasm(struct tcp_sbuf *s, size_t sz)
 	return buf;
 }
 
-size_t tcp_sesh_get_bytes(tcp_sesh_t sesh, tcp_chan_t chan)
-{
-	return contig_bytes(sesh, chan);
-}
-
 static void munch_bytes(struct tcp_sbuf *s, size_t bytes)
 {
 	struct tcp_rbuf *buf, *tmp;
@@ -759,97 +695,6 @@ static void munch_bytes(struct tcp_sbuf *s, size_t bytes)
 
 static void *reasm_dcb;
 static size_t reasm_dcb_sz;
-
-size_t tcp_sesh_inject(tcp_sesh_t sesh, tcp_chan_t chan, size_t bytes)
-{
-	struct tcpstream_dcb *dcb;
-	struct _pkt pkt;
-	struct tcp_state *s;
-	const uint8_t *buf;
-	size_t total_bytes;
-
-	if ( 0 == bytes )
-		return 0;
-
-	switch(chan) {
-	case TCP_CHAN_TO_SERVER:
-		s = &sesh->c_wnd;
-		break;
-	case TCP_CHAN_TO_CLIENT:
-		s = sesh->s_wnd;
-		break;
-	default:
-		mesg(M_WARN, "%s: attempted to get bad buf: %s",
-			sesh->app->a_label, chan_str(chan));
-		return bytes;
-	}
-
-again:
-	total_bytes = contig_bytes(sesh, chan);
-	assert(bytes <= total_bytes);
-	buf = do_reasm(s->reasm, bytes);
-	if ( NULL == buf )
-		return 0;
-
-	pkt.pkt_dcb = reasm_dcb;
-	pkt.pkt_dcb_end = pkt.pkt_dcb + reasm_dcb_sz;
-	pkt.pkt_dcb_top = pkt.pkt_dcb;
-	dcb = (struct tcpstream_dcb *)decode_layerv(&pkt,
-							&_p_tcpstream,
-							sizeof(*dcb));
-	assert(NULL != dcb);
-
-	dcb->sesh = sesh;
-	dcb->chan = chan;
-
-	pkt.pkt_caplen = total_bytes;
-	pkt.pkt_len = bytes;
-	pkt.pkt_base = buf;
-	pkt.pkt_end = buf + pkt.pkt_len;
-	pkt.pkt_nxthdr = pkt.pkt_base;
-
-	/* TODO: provide mechanism to detach protocols when encountering
-	 * an invalid message. In the case of heuristically discovered
-	 * protocols this will give us a chance to re-synchronize
-	 *
-	 * Actually there can be two types of error, recoverable and
-	 * unrecoverable. An example of recoverable would be binary protocol
-	 * with len field but msg type indicates len field insufficient for
-	 * expected data...
-	 *
-	 * XXX: sack off this business with decodes tweaking pkt_len, use
-	 * the tcp dcb for this type of thing. Theres other cases of, for
-	 * example, binary protocols with one message not conforming to
-	 * protocol but can be recovered.
-	 */
-	dmesg(M_DEBUG, "tcp_reasm: %s: injecting %u/%u bytes",
-		sesh->app->a_label, bytes, total_bytes);
-	sesh->app->a_decode->d_decode(&pkt);
-
-	/* FIXME: use pkt_nxthdr ffs... */
-	if ( pkt.pkt_len > bytes ) {
-		assert(pkt.pkt_caplen == total_bytes);
-		if ( pkt.pkt_len <= total_bytes ) {
-			dmesg(M_DEBUG, "tcp_reasm: trying again for %u bytes",
-				pkt.pkt_len);
-			bytes = pkt.pkt_len;
-			goto again;
-		}
-		pkt.pkt_len = 0;
-	}
-
-	if ( pkt.pkt_len ) {
-		dmesg(M_DEBUG, "tcp_reasm: injecting %u byte packet",
-			pkt.pkt_len);
-		munch_bytes(s->reasm, pkt.pkt_len);
-		pkt_inject(&pkt);
-		num_inject++;
-		inject_bytes += pkt.pkt_len;
-		sesh->app->a_state_update(sesh, chan, &pkt);
-	}
-
-	return pkt.pkt_len;
-}
 
 static size_t fill_vectors(struct tcp_sbuf *s, size_t bytes,
 			struct ro_vec *vec)
@@ -904,101 +749,14 @@ static int assure_vbuf(struct tcp_sbuf *s, struct ro_vec **vec, size_t *numvec)
 	return 1;
 }
 
-const struct ro_vec *tcp_sesh_get_buf(tcp_sesh_t sesh, tcp_chan_t chan,
-				size_t *numv, size_t *bytes)
-{
-	static struct ro_vec *vbuf;
-	static size_t vbuf_sz;
-	struct tcp_state *s;
-	struct ro_vec *vec;
-	size_t n, b;
-
-	switch(chan) {
-	case TCP_CHAN_TO_SERVER:
-		s = &sesh->c_wnd;
-		break;
-	case TCP_CHAN_TO_CLIENT:
-		s = sesh->s_wnd;
-		break;
-	default:
-		mesg(M_WARN, "%s: attempted to get bad buf: %s",
-			sesh->app->a_label, chan_str(chan));
-		return NULL;
-	}
-
-	assert(NULL != s);
-
-	/* fuck me, this is clever */
-	if ( !assure_vbuf(s->reasm, &vbuf, &vbuf_sz) )
-		return NULL;
-
-	b = contig_bytes(sesh, chan);
-	if ( 0 == b )
-		return NULL;
-
-	vec = vbuf;
-	n = fill_vectors(s->reasm, b, vec);
-	dmesg(M_DEBUG, "tcp_reasm(%s): alloc %u bytes in %u vectors",
-			chan_str(chan), b, n);
-
-	*numv = n;
-	*bytes = b;
-	return vec;
-}
-
-static void do_push(struct tcp_session *s, tcp_chan_t chan)
-{
-	tcp_chan_t achan;
-	int ret;
-
-	assert(s->reasm_flags);
-
-	achan = tcp_chan_data(s);
-
-	dmesg(M_ERR, "stream_push: %s", chan_str(chan));
-	dmesg(M_ERR, "available chans: %s", chan_str(achan));
-
-	for(; achan & s->reasm_flags; achan = tcp_chan_data(s) ) {
-		dmesg(M_ERR, "%s_push: %s waiting for %s", s->app->a_label,
-			chan_str(achan), chan_str(s->reasm_flags));
-		ret = s->app->a_push(s, achan);
-		num_push++;
-		if ( ret < 0 )
-			mesg(M_CRIT, "%s: desynchronised", s->app->a_label);
-		if ( ret <= 0 )
-			break;
-	}
-}
-
 void _tcp_reasm_ack(struct tcp_session *s, uint8_t to_server)
 {
-	if ( NULL == s->app )
-		return;
-
-	do_push(s, (to_server) ?
-			TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT);
+	/* XXX: push point */
 }
 
 void _tcp_reasm_abort(struct tcp_session *s, int rst)
 {
-	if ( NULL == s->app )	
-		return;
-	do_abort(s, rst);
-}
-
-size_t _tcp_reasm_buffer_size(struct tcp_session *s)
-{
-	size_t ret = 0;
-
-	if ( NULL == s->app )
-		return ret;
-
-	if ( s->c_wnd.reasm )
-		ret += s->c_wnd.reasm->s_num_rbuf << RBUF_SHIFT;
-	if ( s->s_wnd && s->s_wnd->reasm )
-		ret += s->s_wnd->reasm->s_num_rbuf << RBUF_SHIFT;
-
-	return ret;
+	/* XXX: abort */
 }
 
 void _tcp_reasm_fin_sent(struct tcp_session *s, uint8_t to_server)
@@ -1008,95 +766,11 @@ void _tcp_reasm_fin_sent(struct tcp_session *s, uint8_t to_server)
 	s->reasm_fin_sent |= chan;
 }
 
-static void do_shutdown(struct tcp_session *s, tcp_chan_t chan)
-{
-	struct tcp_sbuf **pptr;
-	size_t bytes;
-
-	switch(chan) {
-	case TCP_CHAN_TO_SERVER:
-		pptr = &s->c_wnd.reasm;
-		break;
-	case TCP_CHAN_TO_CLIENT:
-		pptr = &s->s_wnd->reasm;
-		break;
-	default:
-		assert(0);
-		break;
-	}
-
-	bytes = contig_bytes(s, chan);
-	if ( bytes ) {
-		const uint8_t *buf;
-		mesg(M_WARN, "%s: TO_CLIENT %u bytes left on shutdown",
-			s->app->a_label, bytes);
-		buf = do_reasm(*pptr, bytes);
-		if ( NULL != buf )
-			hex_dump(buf, (bytes > 0x100) ? 0x100 : bytes, 16);
-	}
-
-
-	sbuf_free(s, *pptr);
-	*pptr = NULL;
-}
 void _tcp_reasm_shutdown(struct tcp_session *s, uint8_t to_server)
 {
-	tcp_chan_t chan;
-
-	if ( NULL == s->app )
-		return;
-
-	chan = (to_server) ? TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT;
-
-	do_push(s, tcp_chan_data(s));
-
-	s->reasm_shutdown |= chan;
-
-	dmesg(M_ERR, "stream_shutdown: %s", chan_str(chan));
-	s->app->a_shutdown(s, chan);
-
-	do_shutdown(s, (to_server) ? TCP_CHAN_TO_SERVER : TCP_CHAN_TO_CLIENT);
-
-	if ( s->reasm_shutdown & (TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT) ) {
-		s->app->a_fini(s);
-		s->app = NULL;
-		s->flow = NULL;
-	}
+	/* XXX: final push, possibly dtor */
 }
 
-
-void tcp_sesh_set_flow(tcp_sesh_t sesh, void *flow)
-{
-	sesh->flow = flow;
-}
-
-void *tcp_sesh_get_flow(tcp_sesh_t sesh)
-{
-	return sesh->flow;
-}
-
-tcp_chan_t tcp_sesh_get_wait(tcp_sesh_t sesh)
-{
-	tcp_chan_t ret;
-	ret = sesh->reasm_flags;
-	assert(ret && 0 == (ret & ~(TCP_CHAN_TO_SERVER|TCP_CHAN_TO_CLIENT)));
-	return ret;
-}
-
-void tcp_sesh_wait(tcp_sesh_t sesh, tcp_chan_t chan)
-{
-	assert(chan);
-
-	if ( chan & sesh->reasm_shutdown ) {
-		mesg(M_WARN, "%s: attempted to wait on shutdown chan: %s",
-			sesh->app->a_label,
-			chan_str(chan & sesh->reasm_shutdown));
-		asm volatile ("int $0x3\n");
-		chan &= ~sesh->reasm_shutdown;
-	}
-
-	sesh->reasm_flags = chan;
-}
 
 int _tcp_reasm_ctor(mempool_t pool)
 {
@@ -1116,10 +790,12 @@ int _tcp_reasm_ctor(mempool_t pool)
 	if ( gap_cache == NULL )
 		return 0;
 
+#if 0
 	reasm_dcb_sz = _tcp_app_max_dcb();
 	reasm_dcb = malloc(reasm_dcb_sz);
 	if ( NULL == reasm_dcb )
 		return 0;
+#endif
 
 	return 1;
 }

@@ -67,9 +67,6 @@ struct tcp_session {
 	struct tcp_state c_wnd;
 	struct tcp_state *s_wnd;
 
-	const struct tcp_app *app;
-	void *flow;
-
 	struct list_head lru;
 };
 
