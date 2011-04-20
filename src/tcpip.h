@@ -45,6 +45,7 @@ struct tcp_state {
 #define TCP_SESSION_SF2	8
 #define TCP_SESSION_SF3	9
 #define TCP_SESSION_C	10
+#define TCP_SESSION_R	11
 
 struct tcp_session {
 	/* Timeout list */
@@ -59,9 +60,11 @@ struct tcp_session {
 	uint16_t c_port, s_port;
 
 	uint8_t state;
-	uint8_t reasm_flags;
+
+	/* fast state for TCP reassembly */
 	uint8_t reasm_shutdown;
 	uint8_t reasm_fin_sent;
+	uint8_t _pad0;
 
 	/* TCP state: host byte order */
 	struct tcp_state c_wnd;

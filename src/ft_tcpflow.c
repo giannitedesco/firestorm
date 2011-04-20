@@ -203,6 +203,7 @@ static struct tcp_session *tcp_collide(struct tcp_session *s,
 }
 
 /* Parse TCP options just for timestamps */
+#if 0
 static int tcp_fast_options(struct tcpseg *cur)
 {
 	const struct pkt_tcphdr *t = cur->tcph;
@@ -250,6 +251,7 @@ static int tcp_fast_options(struct tcpseg *cur)
 
 	return 0;
 }
+#endif
 
 /* This will parse TCP options for SYN packets */
 static void tcp_syn_options(struct tcp_state *s,
@@ -448,8 +450,6 @@ static struct tcp_session *new_session(struct tcpseg *cur)
 	s->s_port = cur->tcph->dport;
 
 	s->state = TCP_SESSION_S1;
-	s->reasm_flags = 0;
-	s->reasm_shutdown = 0;
 
 	/* stats */
 	num_active++;
@@ -696,7 +696,7 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 	/* Second, check the RST bit */
 	if ( cur->tcph->flags & TCP_RST ) {
 		dmesg(M_DEBUG, "connection reset by peer");
-		s->state = TCP_SESSION_C;
+		s->state = TCP_SESSION_R;
 		return;
 	}
 
@@ -741,6 +741,7 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 		dmesg(M_DEBUG, "%u bytes data %.8x - %.8x",
 			cur->len, cur->seq, cur->seq_end);
 		//dhex_dump(cur->payload, cur->len, 16);
+		/* FIXME: Truncate to transmit window */
 		_tcp_reasm_data(s, cur->to_server, cur->seq,
 				cur->len, cur->payload);
 	}
@@ -825,7 +826,7 @@ void _tcpflow_track(pkt_t pkt, dcb_t dcb_ptr)
 {
 	struct tcp_session *s;
 	struct tcpseg cur;
-	int free = 0;
+	unsigned int do_free = 0, rst;
 
 	seg_init(&cur, pkt, (struct tcp_dcb *)dcb_ptr);
 
@@ -861,14 +862,19 @@ void _tcpflow_track(pkt_t pkt, dcb_t dcb_ptr)
 		tcp_hash_mtf(s, cur.hash);
 
 		state_track(&cur, s);
-		if ( s->state == TCP_SESSION_C )
-			free = 1;
+		if ( s->state == TCP_SESSION_C ) {
+			do_free = 1;
+			rst = 0;
+		}else if ( s->state == TCP_SESSION_R ) {
+			do_free = 1;
+			rst = 1;
+		}
 	}
 
 	dbg_stream("client", &s->c_wnd);
 	dbg_stream("server", s->s_wnd);
-	if ( free ) {
-		tcp_free(s, 1);
+	if ( do_free ) {
+		tcp_free(s, rst);
 		dmesg(M_DEBUG, "freed session state");
 
 	}
