@@ -23,26 +23,27 @@
 
 #define pcap_file_header tcpd_file_header
 struct tcpd_file_header {
-	unsigned int		magic;
-	unsigned short		version_major;
-	unsigned short		version_minor;
-	int			thiszone;
-	unsigned int		sigfigs;
-	unsigned int		snaplen;
-	unsigned int		proto;
+	uint32_t		magic;
+	uint16_t		version_major;
+	uint16_t		version_minor;
+	int32_t			thiszone;
+	uint32_t		sigfigs;
+	uint32_t		snaplen;
+	uint32_t		proto;
 };
 
 #define pcap_pkthdr tcpd_pkthdr
 struct tcpd_pkthdr {
-	struct timeval		ts;
-	unsigned int		caplen;
-	unsigned int		len;
+	uint32_t		tv_sec;
+	uint32_t		tv_usec;
+	uint32_t		caplen;
+	uint32_t		len;
 };
 #endif /* lib_pcap_h */
 
 static const struct {
 	char * const name;
-	unsigned int magic;
+	uint32_t magic;
 	size_t size;
 	int swap;
 }magics[]={
@@ -202,8 +203,8 @@ static pkt_t tcpd_dequeue(struct _source *s, struct iothread *io)
 		return NULL;
 
 	/* Fill in the struct packet stuff */
-	tmp.tv_sec = p->r32(h->ts.tv_sec);
-	tmp.tv_usec = p->r32(h->ts.tv_usec);
+	tmp.tv_sec = p->r32(h->tv_sec);
+	tmp.tv_usec = p->r32(h->tv_usec);
 	p->pkt.pkt_ts = time_from_timeval(&tmp);
 	p->pkt.pkt_len = p->r32(h->len);
 	p->pkt.pkt_caplen = p->r32(h->caplen);
