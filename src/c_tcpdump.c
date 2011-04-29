@@ -133,7 +133,7 @@ static int open_file(struct tcpd_priv *p, const char *fn)
 
 			p->phsiz = magics[i].size;
 			p->snaplen = p->r32(fh->snaplen);
-			mesg(M_INFO,"tcpdump: %s: %s: snaplen=%u",
+			mesg(M_INFO,"tcpdump: %s: %s: snaplen=%zu",
 				fn, magics[i].name, p->snaplen);
 			break;
 		}

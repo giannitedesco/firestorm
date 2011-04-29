@@ -52,6 +52,7 @@ struct tcp_ptr {
 #define TCP_REASM_MAX_GAPS	8
 struct tcp_sbuf {
 	struct tcp_ptr		s_contig;
+	struct tcp_ptr		s_eaten;
 	/** begin seq for buffer purposes */
 	uint32_t		s_begin;
 	/** Sequence of first byte not reassembled */

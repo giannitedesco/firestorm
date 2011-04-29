@@ -253,9 +253,9 @@ void decode_init(void)
 	fclose(f);
 
 	mesg(M_INFO, "decode: %s: dumped protocol graph", fn);
-	mesg(M_INFO, "decode: %u decoders, %u protocols, max dcb = %u bytes",
+	mesg(M_INFO, "decode: %u decoders, %u protocols, max dcb = %zu bytes",
 		num_decoders, num_protos, max_dcb);
-	mesg(M_INFO, "packet = %u + %u bytes", sizeof(struct _pkt),
+	mesg(M_INFO, "packet = %zu + %zu bytes", sizeof(struct _pkt),
 		max_dcb * DECODE_DEFAULT_MIN_LAYERS);
 }
 

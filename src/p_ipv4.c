@@ -353,7 +353,7 @@ static void ah_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 		return;
 
 	if ( ah->ahl < 4 ) {
-		mesg(M_WARN, "ipv4(ah): header length %u < %u",
+		mesg(M_WARN, "ipv4(ah): header length %u < %zu",
 			ah->ahl << 2, sizeof(*ah));
 		return;
 	}
@@ -380,7 +380,7 @@ static void ipv4_decode(struct _pkt *p)
 		return;
 
 	if ( iph->ihl < 5 ) {
-		mesg(M_WARN, "ipv4: header length %u < %u",
+		mesg(M_WARN, "ipv4: header length %u < %zu",
 			iph->ihl << 2, sizeof(*iph));
 		return;
 	}

@@ -13,6 +13,7 @@
 /* Standard C99 stuff */
 #include <string.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #if HAVE_ASSERT_H
 #include <assert.h>

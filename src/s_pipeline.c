@@ -238,6 +238,6 @@ int pipeline_go(pipeline_t p)
 		ret = go_sync(p);
 	}
 
-	mesg(M_INFO, "pipeline: %llu packets in total", p->p_num_pkt);
+	mesg(M_INFO, "pipeline: %"PRIu64" packets in total", p->p_num_pkt);
 	return ret;
 }

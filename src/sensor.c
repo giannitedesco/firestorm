@@ -17,13 +17,14 @@ int main(int argc, char **argv)
 	mesg(M_INFO,"This program is free software; released under "
 		"the GNU GPL v3 (see: COPYING)");
 
-	if ( !memchunk_init(2048) )
+	if ( !memchunk_init(4096) )
 		return EXIT_FAILURE;
 
 	decode_init();
 
 	if ( argc > 1 ) {
 		src = capture_tcpdump_open(argv[1]);
+		//src = capture_pcap_open_offline(argv[1]);
 		//src = capture_pcap_open_live(argv[1], 0xffff, 1);
 	}else{
 		src = capture_tcpdump_open("./test.cap");

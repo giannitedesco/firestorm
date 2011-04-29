@@ -26,7 +26,7 @@ void hex_dump(const uint8_t *tmp, size_t len, size_t llen)
 			line = llen;
 		}
 
-		printf("%05x : ", j);
+		printf("%05zx : ", j);
 
 		for(i = 0; i < line; i++) {
 			if ( isprint(tmp[i]) ) {

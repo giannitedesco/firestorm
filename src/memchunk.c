@@ -113,7 +113,7 @@ static void do_cache_init(struct _mempool *p, struct _objcache *o,
 	o->o_pool = p;
 	o->o_label = label;
 
-	mesg(M_INFO, "objcache: new: %s/%s (%u byte)",
+	mesg(M_INFO, "objcache: new: %s/%s (%zu byte)",
 		p->p_label, o->o_label, o->o_sz);
 }
 
@@ -132,10 +132,10 @@ int memchunk_init(size_t numchunks)
 	msz = round_up(sizeof(*m->m_hdr) * numchunks);
 	m->m_size = msz + numchunks * MEMCHUNK_SIZE;
 
-	mesg(M_INFO, "memchunk: %uK requested (%u chunks), %uK total",
+	mesg(M_INFO, "memchunk: %zuK requested (%zu chunks), %zuK total",
 		(numchunks * MEMCHUNK_SIZE) >> 10,
 		numchunks, m->m_size >> 10);
-	mesg(M_INFO, "memchunk: %uK metadata %u chunks: %u.%.2u%% of total",
+	mesg(M_INFO, "memchunk: %zuK metadata %zu chunks: %zu.%.2zu%% of total",
 		msz >> 10, msz >> MEMCHUNK_SHIFT,
 		((msz >> 10) * 100) / (m->m_size >> 10),
 		(((msz >> 10) * 10000) / (m->m_size >> 10)) % 100);
@@ -181,7 +181,7 @@ void memchunk_fini(void)
 {
 	struct _memchunk *m = &mc;
 	chunk_free(m->m_hdr, m->m_size);
-	mesg(M_INFO, "memchunk: %uK released", m->m_size >> 10);
+	mesg(M_INFO, "memchunk: %zuK released", m->m_size >> 10);
 
 #if 0
 		"%u.%.2u%% was still in use in %u chunks",
