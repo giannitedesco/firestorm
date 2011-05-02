@@ -32,10 +32,10 @@
 struct tcp_rbuf {
 	/** List entry */
 	struct list_head	r_list;
-	/** sequence number of first byte of buffer */
-	uint32_t		r_seq;
 	/** buffer base pointer */
 	uint8_t			*r_base;
+	/** sequence number of first byte of buffer */
+	uint32_t		r_seq;
 };
 
 struct tcp_gap {
@@ -51,23 +51,23 @@ struct tcp_ptr {
 /* Reassembly buffer */
 #define TCP_REASM_MAX_GAPS	8
 struct tcp_sbuf {
+	/** Buffer list */
+	struct list_head	s_bufs;
 	struct tcp_ptr		s_contig;
 	struct tcp_ptr		s_eaten;
+	/** array of gap descriptors */
+	struct tcp_gap		*s_gap[TCP_REASM_MAX_GAPS];
 	/** begin seq for buffer purposes */
 	uint32_t		s_begin;
 	/** Sequence of first byte not reassembled */
 	uint32_t		s_reasm_begin;
 	/** Sequence number of last byte */
 	uint32_t		s_end;
-	/** Buffer list */
-	struct list_head	s_bufs;
 	/** Number of allocated rbufs */
 	uint16_t		s_num_rbuf;
 	/** number of gaps in reassembly */
 	uint8_t			s_num_gaps;
 	uint8_t			_pad0;
-	/** array of gap descriptors */
-	struct tcp_gap		*s_gap[TCP_REASM_MAX_GAPS];
 };
 
 static objcache_t sbuf_cache;

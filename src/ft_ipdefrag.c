@@ -42,11 +42,11 @@
 /* Keeps each individual fragment */
 struct ipfrag {
 	struct ipfrag		*next;
+	void			*data;
+	void			*fdata; /* Data to free */
 	int			len;
 	int			offset;
-	void			*data;
 	unsigned int		free;
-	void			*fdata; /* Data to free */
 	unsigned int		flen;
 };
 
@@ -56,7 +56,19 @@ struct ipq {
 	struct ipq **pprev;
 	struct ipq *next_time;
 	struct ipq *prev_time;
-	
+
+	/* Linked list of fragments */
+	struct ipfrag *fragments;
+
+	/* Stuff we need for reassembly */
+	timestamp_t	time;
+
+	/* Total size of all the fragments we have */
+	int meat;
+
+	/* Total length of full packet */
+	int len;
+
 	/* Identify the packet */
 	uint32_t saddr;
 	uint32_t daddr;
@@ -66,18 +78,6 @@ struct ipq {
 #define FIRST_IN 0x2
 #define LAST_IN 0x1
 	uint8_t last_in;
-
-	/* Linked list of fragments */
-	struct ipfrag *fragments;
-
-	/* Total size of all the fragments we have */
-	int meat;
-
-	/* Total length of full packet */
-	int len;
-
-	/* Stuff we need for reassembly */
-	timestamp_t	time;
 };
 
 #define IPHASH 127 /* Mersenne prime */

@@ -13,13 +13,7 @@ extern struct _flow_tracker _ipv4_tcpflow;
 
 /* A simplex tcp stream */
 struct tcp_state {
-#define TF_SACK_OK	(1<<0)
-#define TF_WSCALE_OK	(1<<1)
-#define TF_TSTAMP_OK	(1<<2)
-	uint8_t		flags; /* optional features */
-	uint8_t		scale; /* scaling factor */
-	uint8_t		_pad0;
-	uint8_t		_pad1;
+	struct tcp_sbuf *reasm;
 
 	uint32_t	snd_una; /* first byte we want ack for */
 	uint32_t	snd_nxt; /* next sequence to send */
@@ -30,7 +24,11 @@ struct tcp_state {
 	uint32_t	ts_recent; /* a recent timestamp */
 	uint32_t	ts_recent_stamp; /* local time on it */
 
-	struct tcp_sbuf *reasm;
+#define TF_SACK_OK	(1<<0)
+#define TF_WSCALE_OK	(1<<1)
+#define TF_TSTAMP_OK	(1<<2)
+	uint8_t		flags; /* optional features */
+	uint8_t		scale; /* scaling factor */
 };
 
 /* A duplex tcp session */
@@ -48,29 +46,28 @@ struct tcp_state {
 #define TCP_SESSION_R	11
 
 struct tcp_session {
-	/* Timeout list */
-	struct list_head tmo;
-	uint32_t expire;
-
 	/* Hash table collision chaining */
 	struct tcp_session **hash_pprev, *hash_next;
 
-	/* TCP state: network byte order */
-	uint32_t c_addr, s_addr;
-	uint16_t c_port, s_port;
+	struct list_head lru;
 
-	uint8_t state;
-
-	/* fast state for TCP reassembly */
-	uint8_t reasm_shutdown;
-	uint8_t reasm_fin_sent;
-	uint8_t _pad0;
+	/* Timeout list */
+	struct list_head tmo;
 
 	/* TCP state: host byte order */
 	struct tcp_state c_wnd;
 	struct tcp_state *s_wnd;
 
-	struct list_head lru;
+	uint32_t expire;
+
+	/* TCP state: network byte order */
+	uint32_t c_addr, s_addr;
+	uint16_t c_port, s_port;
+
+	/* fast state for TCP reassembly */
+	uint8_t state:4;
+	uint8_t reasm_shutdown:1;
+	uint8_t reasm_fin_sent:1;
 };
 
 int _ipdefrag_ctor(void);
