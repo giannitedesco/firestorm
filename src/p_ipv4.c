@@ -263,7 +263,7 @@ static void tcp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 		return;
 
 	dmesg(M_DEBUG, "ipv4: tcp %u -> %u",
-		sys_be16(tcph->sport), sys_be16(tcph->dport));
+		be16toh(tcph->sport), be16toh(tcph->dport));
 
 	dcb = (struct tcp_dcb *)decode_layer(p, &p_tcp);
 	if ( dcb ) {
@@ -285,7 +285,7 @@ static void udp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 		return;
 
 	dmesg(M_DEBUG, "ipv4: udp %u -> %u",
-		sys_be16(udph->sport), sys_be16(udph->dport));
+		be16toh(udph->sport), be16toh(udph->dport));
 
 	dcb = (struct udp_dcb *)decode_layer(p, &p_udp);
 	if ( dcb ) {
@@ -305,7 +305,7 @@ static void esp_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 
-	dmesg(M_DEBUG, "ipv4: ESP spi=0x%.8x", sys_be32(esp->spi));
+	dmesg(M_DEBUG, "ipv4: ESP spi=0x%.8x", be32toh(esp->spi));
 	decode_layer(p, &p_esp);
 }
 
@@ -364,7 +364,7 @@ static void ah_decode(struct _pkt *p, const struct pkt_iphdr *iph,
 		return;
 	}
 
-	dmesg(M_DEBUG, "AH spi=0x%.8x", sys_be32(ah->spi));
+	dmesg(M_DEBUG, "AH spi=0x%.8x", be32toh(ah->spi));
 
 	(*subproto[pmap[ah->protocol]])(p, iph, ah);
 }
@@ -394,7 +394,7 @@ static void ipv4_decode(struct _pkt *p)
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 
-	len = sys_be16(iph->tot_len);
+	len = be16toh(iph->tot_len);
 	if ( p->pkt_nxthdr > p->pkt_end ) {
 		mesg(M_WARN, "ipv4: truncated IP packet");
 		return;

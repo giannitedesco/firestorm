@@ -61,23 +61,23 @@ static void snap_decode(struct _pkt *p, const struct pkt_ethhdr *eth,
 	switch(org) {
 	case SNAP_ORG_ETHER:
 		dmesg(M_DEBUG, "802.3: SNAP: Ethernet 0x%.4x",
-			sys_be16(snap->proto));
+			be16toh(snap->proto));
 		/* XXX: Don't look for a length instead of a protocol */
 		decode_next(p, NS_ETHER, snap->proto);
 		break;
 	case SNAP_ORG_APPLE:
 		dmesg(M_DEBUG, "802.3: SNAP: Apple 0x%.4x",
-			sys_be16(snap->proto));
+			be16toh(snap->proto));
 		decode_next(p, NS_APPLE, snap->proto);
 		break;
 	case SNAP_ORG_CISCO:
 		dmesg(M_DEBUG, "802.3: SNAP: Cisco 0x%.4x",
-			sys_be16(snap->proto));
+			be16toh(snap->proto));
 		decode_next(p, NS_CISCO, snap->proto);
 		break;
 	default:
 		dmesg(M_WARN, "802.3: SNAP: unknown org=0x%x (0x%.4x)",
-			org, sys_be16(snap->proto));
+			org, be16toh(snap->proto));
 		break;
 	}
 }
@@ -120,7 +120,7 @@ static void vlan_decode(struct _pkt *p, const struct pkt_ethhdr *eth)
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 
-	proto = sys_be16(vlan->proto);
+	proto = be16toh(vlan->proto);
 	/* protocols can still be lengths with 802.1q */
 	switch(proto) {
 	case 0 ... 1500:
@@ -144,7 +144,7 @@ void _eth_decode(struct _pkt *p)
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 
-	proto = sys_be16(eth->proto);
+	proto = be16toh(eth->proto);
 
 	/* Check if it's a length or a protocol */
 	switch(proto) {

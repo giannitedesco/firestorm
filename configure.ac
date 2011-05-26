@@ -36,6 +36,7 @@ AC_SYS_LARGEFILE
 AC_CHECK_HEADERS([arpa/inet.h errno.h fcntl.h netinet/in.h sys/uio.h])
 AC_CHECK_HEADERS([stdlib.h string.h sys/socket.h sys/time.h unistd.h assert.h])
 AC_CHECK_HEADERS([sys/resource.h getopt.h pwd.h sys/poll.h sys/epoll.h])
+AC_CHECK_HEADERS([sys/endian.h endian.h])
 
 dnl Checks for typedefs, structures, and compiler characteristics.
 AC_C_CONST

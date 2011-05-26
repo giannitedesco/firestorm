@@ -64,7 +64,7 @@ static void arp_decode(struct _pkt *p)
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 
-	switch(sys_be16(arp->op)) {
+	switch(be16toh(arp->op)) {
 	case ARP_OP_REQUEST:
 		dmesg(M_DEBUG, "ARP request");
 		break;
@@ -73,7 +73,7 @@ static void arp_decode(struct _pkt *p)
 		break;
 	default:
 		dmesg(M_WARN, "Unknown ARP op (0x%.4x)",
-			sys_be16(arp->op));
+			be16toh(arp->op));
 		break;
 	}
 

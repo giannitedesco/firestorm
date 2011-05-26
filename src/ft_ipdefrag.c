@@ -254,7 +254,7 @@ static void reassemble(struct ipq *qp,
 	/* Fixup the IP header */
 	iph = (void *)buf;
 	iph->frag_off = 0;
-	iph->tot_len = sys_be16(len);
+	iph->tot_len = be16toh(len);
 	iph->csum = 0;
 	iph->csum = _ip_csum(iph);
 
@@ -428,9 +428,9 @@ static int queue_fragment(unsigned int hash,
 
 	/* Now we can get on with queueing the packet.. */
 	ihl = iph->ihl << 2;
-	len = sys_be16(iph->tot_len);
+	len = be16toh(iph->tot_len);
 
-	offset = sys_be16(iph->frag_off);
+	offset = be16toh(iph->frag_off);
 	flags = offset & ~IP_OFFMASK;
 	offset &= IP_OFFMASK;
 	offset <<= 3; /* 8 byte granularity */

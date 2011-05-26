@@ -19,6 +19,12 @@
 #include <assert.h>
 #endif
 
+#if HAVE_ENDIAN_H
+#include <endian.h>
+#elif HAVE_SYS_ENDIAN_H
+#include <sys/endian.h>
+#endif
+
 #include <list.h>
 
 #include <f_compiler.h>

@@ -41,7 +41,7 @@ static void sll_decode(struct _pkt *p)
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 
-	proto = sys_be16(sll->sll_protocol);
+	proto = sll->sll_protocol;
 
 	decode_layer(p, &p_sll);
 

@@ -6,10 +6,6 @@
 #ifndef _FIRESTORM_OS_HEADER_INCLUDED_
 #define _FIRESTORM_OS_HEADER_INCLUDED_
 
-#define DSE_NATIVE_ENDIAN	0
-#define DSE_BIG_ENDIAN		1
-#define DSE_LITTLE_ENDIAN	2
-
 int os_errno(void);
 const char *os_error(int);
 const char *os_err(void);
@@ -31,34 +27,20 @@ const char *os_err2(const char *);
 		(((uint32_t)(x) & (uint32_t)0x00ff0000UL) >>  8) | \
 		(((uint32_t)(x) & (uint32_t)0xff000000UL) >> 24)))
 
-static inline uint16_t _constfn sys_bswap16(uint16_t x)
-{
-	return const_bswap16(x);
-}
-
-static inline uint32_t _constfn sys_bswap32(uint32_t x)
-{
-	return const_bswap32(x);
-}
-
 #if __BYTE_ORDER == __BIG_ENDIAN
-#define sys_le32(x) sys_bswap32(x)
-#define sys_le16(x) sys_bswap16(x)
-#define sys_be32(x) (x)
-#define sys_be16(x) (x)
 #define const_le32(x) const_bswap32(x)
 #define const_le16(x) const_bswap16(x)
 #define const_be32(x) (x)
 #define const_be16(x) (x)
+#define sys_bswap16(x) le16toh(x)
+#define sys_bswap32(x) le32toh(x)
 #elif __BYTE_ORDER == __LITTLE_ENDIAN
-#define sys_le32(x) (x)
-#define sys_le16(x) (x)
-#define sys_be32(x) sys_bswap32(x)
-#define sys_be16(x) sys_bswap16(x)
 #define const_le32(x) (x)
 #define const_le16(x) (x)
 #define const_be32(x) const_bswap32(x)
 #define const_be16(x) const_bswap16(x)
+#define sys_bswap16(x) be16toh(x)
+#define sys_bswap32(x) be32toh(x)
 #else
 #error "What in hells name?!"
 #endif

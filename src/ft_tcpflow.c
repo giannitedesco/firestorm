@@ -101,8 +101,8 @@ static void dbg_segment(struct tcpseg *cur)
 	}
 
 	mesg(M_DEBUG, "\033[36m[%s] %s:%u %s:%u s:%x%s w:%u l:%u\033[0m", fstr,
-		sip, sys_be16(cur->tcph->sport),
-		dip, sys_be16(cur->tcph->dport),
+		sip, be16toh(cur->tcph->sport),
+		dip, be16toh(cur->tcph->dport),
 		cur->seq, ackbuf, cur->win, cur->len);
 #endif
 }
@@ -238,7 +238,7 @@ static int tcp_fast_options(struct tcpseg *cur)
 		case TCPOPT_TIMESTAMP:
 			if ( tmp + 10 >= end )
 				break;
-			cur->tsval = sys_be32(*((uint32_t *)(tmp + 2)));
+			cur->tsval = be32toh(*((uint32_t *)(tmp + 2)));
 			return 1;
 		}
 
@@ -297,7 +297,7 @@ static void tcp_syn_options(struct tcp_state *s,
 			if ( tmp + 10 >= end )
 				break;
 
-			s->ts_recent = sys_be32(*((uint32_t *)(tmp + 2)));
+			s->ts_recent = be32toh(*((uint32_t *)(tmp + 2)));
 			s->ts_recent_stamp = sec;
 
 			break;
@@ -724,7 +724,7 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 
 	/* Sixth Check URG field */
 	if ( cur->tcph->flags & TCP_URG ) {
-		mesg(M_DEBUG, "URG urgp=%u", sys_be16(cur->tcph->urp));
+		mesg(M_DEBUG, "URG urgp=%u", be16toh(cur->tcph->urp));
 	}
 
 	/* seventh process the segment text */
@@ -760,14 +760,14 @@ static int do_csum(struct tcpseg *cur)
 	uint16_t csum, len;
 	int i;
 
-	len = sys_be16(cur->iph->tot_len) - (cur->iph->ihl << 2);
+	len = be16toh(cur->iph->tot_len) - (cur->iph->ihl << 2);
 
 	/* Make pseudo-header */
 	ph.sip = cur->iph->saddr;
 	ph.dip = cur->iph->daddr;
 	ph.zero = 0;
 	ph.proto = cur->iph->protocol;
-	ph.tcp_len = sys_be16(len);
+	ph.tcp_len = be16toh(len);
 
 	/* Checksum the pseudo-header */
 	tmp = (uint16_t *)&ph;
@@ -803,12 +803,12 @@ static void seg_init(struct tcpseg *cur, pkt_t pkt, struct tcp_dcb *dcb)
 	cur->ts = pkt->pkt_ts;
 	cur->iph = dcb->tcp_iph;
 	cur->tcph = dcb->tcp_hdr;
-	cur->ack = sys_be32(cur->tcph->ack);
-	cur->seq = sys_be32(cur->tcph->seq);
-	cur->win = sys_be16(cur->tcph->win);
+	cur->ack = be32toh(cur->tcph->ack);
+	cur->seq = be32toh(cur->tcph->seq);
+	cur->win = be16toh(cur->tcph->win);
 	cur->hash = tcp_hashfn(cur->iph->saddr, cur->iph->daddr,
 				cur->tcph->sport, cur->tcph->dport);
-	cur->len = sys_be16(cur->iph->tot_len) -
+	cur->len = be16toh(cur->iph->tot_len) -
 			(cur->iph->ihl << 2) -
 			(cur->tcph->doff << 2);
 	cur->seq_end = cur->seq + cur->len;

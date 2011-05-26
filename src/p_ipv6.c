@@ -35,7 +35,7 @@ static void ipv6_decode(struct _pkt *p)
 	if ( p->pkt_nxthdr > p->pkt_end )
 		return;
 
-	len = sys_be16(iph->ip6_plen);
+	len = be16toh(iph->ip6_plen);
 	p->pkt_nxthdr += len;
 	if ( p->pkt_nxthdr > p->pkt_end ) {
 		mesg(M_WARN, "truncated IP packet");
