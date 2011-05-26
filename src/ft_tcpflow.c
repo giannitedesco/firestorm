@@ -38,6 +38,7 @@
 /* configuration options */
 static const uint8_t minttl = 1;
 static const uint8_t reassemble = 1;
+static const uint8_t do_tcp_csum = 1;
 
 /* flow hash */
 #define TCPHASH 509 /* prime */
@@ -751,7 +752,7 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 		fin_processing(cur, s);
 }
 
-static int tcp_csum(struct tcpseg *cur)
+static int do_csum(struct tcpseg *cur)
 {
 	struct tcp_phdr ph;
 	uint16_t *tmp;
@@ -836,9 +837,9 @@ void _tcpflow_track(pkt_t pkt, dcb_t dcb_ptr)
 		return;
 	}
 
-	if ( !tcp_csum(&cur) ) {
+	if ( do_tcp_csum && !do_csum(&cur) ) {
 		num_csum_errs++;
-		dmesg(M_DEBUG, "bad checksum");
+		mesg(M_DEBUG, "bad checksum");
 		dhex_dump(cur.payload, cur.len, 16);
 		return;
 	}
