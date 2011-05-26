@@ -15,6 +15,7 @@
 #include <pkt/tcp.h>
 #include <pkt/icmp.h>
 #include <p_ipv4.h>
+#include <csum.h>
 
 #include "tcpip.h"
 
@@ -754,48 +755,11 @@ static void state_track(struct tcpseg *cur, struct tcp_session *s)
 
 static int do_csum(struct tcpseg *cur)
 {
-	struct tcp_phdr ph;
-	uint16_t *tmp;
-	uint32_t sum = 0;
-	uint16_t csum, len;
-	int i;
-
+	uint16_t len;
 	len = be16toh(cur->iph->tot_len) - (cur->iph->ihl << 2);
-
-	/* Make pseudo-header */
-	ph.sip = cur->iph->saddr;
-	ph.dip = cur->iph->daddr;
-	ph.zero = 0;
-	ph.proto = cur->iph->protocol;
-	ph.tcp_len = be16toh(len);
-
-	/* Checksum the pseudo-header */
-	tmp = (uint16_t *)&ph;
-	for(i = 0; i < 6; i++)
-		sum += tmp[i];
-
-	/* Checksum the header+data */
-	tmp = (uint16_t *)cur->tcph;
-	for(i = 0; i < (len >> 1); i++)
-		sum += tmp[i];
-
-	/* Deal with last byte (if odd number of bytes) */
-	if ( len & 1 ) {
-		union {
-			uint8_t b[2];
-			uint16_t s;
-		}f;
-
-		f.b[0] = ((uint8_t *)cur->tcph)[len - 1];
-		f.b[1] = 0;
-		sum += f.s;
-	}
-
-	sum = (sum & 0xffff) + (sum >> 16);
-
-	csum = ~sum & 0xffff;
-
-	return (csum == 0);
+	return tcpudp_csum(cur->iph->saddr, cur->iph->daddr,
+				len, cur->iph->protocol,
+				(uint8_t *)cur->tcph);
 }
 
 static void seg_init(struct tcpseg *cur, pkt_t pkt, struct tcp_dcb *dcb)
@@ -839,8 +803,8 @@ void _tcpflow_track(pkt_t pkt, dcb_t dcb_ptr)
 
 	if ( do_tcp_csum && !do_csum(&cur) ) {
 		num_csum_errs++;
-		mesg(M_DEBUG, "bad checksum");
-		dhex_dump(cur.payload, cur.len, 16);
+		//mesg(M_DEBUG, "bad checksum");
+		//dhex_dump(cur.payload, cur.len, 16);
 		return;
 	}
 
