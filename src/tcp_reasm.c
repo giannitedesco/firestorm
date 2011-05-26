@@ -49,7 +49,7 @@ struct tcp_ptr {
 };
 
 /* Reassembly buffer */
-#define TCP_REASM_MAX_GAPS	8
+#define TCP_REASM_MAX_GAPS	20
 struct tcp_sbuf {
 	/** Buffer list */
 	struct list_head	s_bufs;
