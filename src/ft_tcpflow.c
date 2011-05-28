@@ -19,9 +19,9 @@
 
 #include "tcpip.h"
 
-#define STATE_DEBUG 0
-#define SEGMENT_DEBUG 0
-#define STREAM_DEBUG 0
+#define STATE_DEBUG 1
+#define SEGMENT_DEBUG 1
+#define STREAM_DEBUG 1
 
 #if STATE_DEBUG
 #define dmesg mesg
@@ -803,8 +803,8 @@ void _tcpflow_track(pkt_t pkt, dcb_t dcb_ptr)
 
 	if ( do_tcp_csum && !do_csum(&cur) ) {
 		num_csum_errs++;
-		//mesg(M_DEBUG, "bad checksum");
-		//dhex_dump(cur.payload, cur.len, 16);
+		mesg(M_DEBUG, "bad checksum");
+		dhex_dump(cur.payload, cur.len, 16);
 		return;
 	}
 

@@ -79,7 +79,7 @@ void tcp_app_register_dport(struct tcp_app *app, uint16_t dport)
 		return;
 	}
 
-	dports[num_dports].dport = sys_be16(dport);
+	dports[num_dports].dport = htobe16(dport);
 	dports[num_dports].app = app;
 	num_dports++;
 
@@ -107,31 +107,3 @@ struct tcp_app *_tcp_app_find_by_dport(uint16_t dport)
 
 	return NULL;
 }
-
-size_t tcp_app_single_line(const struct ro_vec *vec, size_t numv, size_t bytes,
-				size_t *bufsz)
-{
-	size_t v, i, b;
-
-	for(b = v = 0; v < numv; b += vec[v].v_len, v++) {
-		for(i = 0; i < vec[v].v_len; i++) {
-			if ( vec[v].v_ptr[i] != '\n' )
-				continue;
-			*bufsz = b + i;
-			if ( 0 != i ) {
-				if ( vec[v].v_ptr[i - 1] == '\r' )
-					*bufsz = b + i - 1;
-			}
-			if ( 0 != v ) {
-				if ( '\r' == 
-					vec[v - 1].v_ptr[vec[v - 1].v_len - 1] )
-					*bufsz = b + i - 1;
-
-			}
-			return b + i + 1;
-		}
-	}
-
-	return 0;
-}
-

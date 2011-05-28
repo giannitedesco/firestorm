@@ -18,6 +18,22 @@ struct tcpstream_dcb {
 	tcp_chan_t chan;
 };
 
+struct tcp_app {
+	int (*a_push)(tcp_sesh_t sesh, tcp_chan_t chan);
+	void (*a_state_update)(tcp_sesh_t sesh, tcp_chan_t chan, pkt_t pkt);
+	int (*a_shutdown)(tcp_sesh_t sesh, tcp_chan_t chan);
+	int (*a_init)(tcp_sesh_t sesh);
+	void (*a_fini)(tcp_sesh_t sesh);
+	struct _decoder *a_decode;
+	size_t a_max_dcb;
+	struct tcp_app *a_next;
+	const char *a_label;
+};
+
+void tcp_app_register(struct tcp_app *app);
+void tcp_app_register_dport(struct tcp_app *app, uint16_t dport);
+/* TODO: register content/initiator-chan heuristics for proto detection */
+
 extern struct _decoder _tcpstream_decoder;
 
 #endif /* _P_TCP_HEADER_INCLUDED_ */

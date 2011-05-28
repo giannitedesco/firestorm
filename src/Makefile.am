@@ -45,13 +45,14 @@ firestorm_SOURCES = \
 	ft_tcpflow.c \
 	tcp_reasm.c \
 	\
+	tcp_app.c \
+	stream_http.c \
 	\
 	s_pipeline.c \
 	s_mesg.c \
 	sensor.c
 
 #	sp_smtp.c \
-#	tcp_app.c \
 #	sp_pop3.c \
 #	sp_ftp.c \
 #	\

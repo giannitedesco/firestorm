@@ -18,7 +18,7 @@
 #define ddmesg(x...) do { } while(0);
 #endif
 
-#if 0
+#if 1
 #define dmesg mesg
 #else
 #define dmesg(x...) do { } while(0);
@@ -53,14 +53,14 @@ struct tcp_ptr {
 struct tcp_sbuf {
 	/** Buffer list */
 	struct list_head	s_bufs;
-	struct tcp_ptr		s_contig;
-	struct tcp_ptr		s_eaten;
+	struct tcp_rbuf		*s_contig;
 	/** array of gap descriptors */
 	struct tcp_gap		*s_gap[TCP_REASM_MAX_GAPS];
 	/** begin seq for buffer purposes */
 	uint32_t		s_begin;
 	/** Sequence of first byte not reassembled */
 	uint32_t		s_reasm_begin;
+	uint32_t		s_contig_seq;
 	/** Sequence number of last byte */
 	uint32_t		s_end;
 	/** Number of allocated rbufs */
@@ -245,7 +245,7 @@ static struct tcp_rbuf *contig_buf(struct tcp_session *ss,
 {
 	struct tcp_rbuf *r;
 
-	r = (s->s_contig.p_buf) ? s->s_contig.p_buf : first_buffer(s);
+	r = (s->s_contig) ? s->s_contig : first_buffer(s);
 	return find_buf_fwd(ss, s, r, seq);
 }
 
@@ -289,15 +289,15 @@ static void contig_eat_gaps(struct tcp_sbuf *s,
 
 	if ( g ) {
 		ddmesg(M_DEBUG, " new contig_seq: %u -> %u",
-			s->s_contig.p_seq, g->g_begin);
-		s->s_contig.p_seq = g->g_begin;
+			s->s_contig_seq, g->g_begin);
+		s->s_contig_seq = g->g_begin;
 	}else{
 		ddmesg(M_DEBUG, " new contig_seq: %u -> %u (buffer contig)",
-			s->s_contig.p_seq, seq_end);
+			s->s_contig_seq, seq_end);
 		if ( tcp_after(seq_end, s->s_end) )
-			s->s_contig.p_seq = seq_end;
+			s->s_contig_seq = seq_end;
 		else
-			s->s_contig.p_seq = s->s_end;
+			s->s_contig_seq = s->s_end;
 	}
 }
 
@@ -403,10 +403,10 @@ static int do_inject(struct tcp_session *ss, struct tcp_sbuf *s,
 		seq, seq + len);
 
 	/* Discard everything before contig_seq */
-	if ( tcp_before(seq_end, s->s_contig.p_seq) )
+	if ( tcp_before(seq_end, s->s_contig_seq) )
 		return 1;
-	if ( tcp_before(seq, s->s_contig.p_seq) ) {
-		uint32_t d = tcp_diff(seq, s->s_contig.p_seq);
+	if ( tcp_before(seq, s->s_contig_seq) ) {
+		uint32_t d = tcp_diff(seq, s->s_contig_seq);
 		seq += d;
 		buf += d;
 		len -= d;
@@ -419,14 +419,14 @@ static int do_inject(struct tcp_session *ss, struct tcp_sbuf *s,
 
 	/* Find or allocate buffer for first byte */
 	base = seq_base(s, seq);
-	if ( seq == s->s_contig.p_seq ) {
+	if ( seq == s->s_contig_seq ) {
 		r = contig_buf(ss, s, base);
 		if ( NULL == r )
 			return 0;
 		contig_eat_gaps(s, seq_end);
 		is_contig = 1;
 	}else{
-		assert(tcp_after(seq, s->s_contig.p_seq));
+		assert(tcp_after(seq, s->s_contig_seq));
 		is_contig = 0;
 		r = discontig_buf(ss, s, base);
 		if ( NULL == r )
@@ -479,7 +479,7 @@ static int do_inject(struct tcp_session *ss, struct tcp_sbuf *s,
 		lr = r;
 
 		if ( is_contig )
-			s->s_contig.p_buf = r;
+			s->s_contig = r;
 
 		sseq += clen;
 		buf += clen;
@@ -525,8 +525,8 @@ static struct tcp_sbuf *sbuf_new(struct tcp_session *ss, uint32_t isn)
 		s->s_reasm_begin = isn;
 		s->s_end = isn;
 		INIT_LIST_HEAD(&s->s_bufs);
-		s->s_contig.p_buf = NULL;
-		s->s_contig.p_seq = isn;
+		s->s_contig = NULL;
+		s->s_contig_seq = isn;
 		s->s_num_gaps = 0;
 		s->s_num_rbuf = 0;
 	}
@@ -602,18 +602,18 @@ static size_t contig_bytes(struct tcp_session *sesh, uint8_t to_server)
 	if ( get_chan(to_server) & sesh->reasm_fin_sent && seq == s->snd_nxt )
 		seq--;
 
-	assert(!tcp_before(s->reasm->s_contig.p_seq, s->reasm->s_reasm_begin));
+	assert(!tcp_before(s->reasm->s_contig_seq, s->reasm->s_reasm_begin));
 	if ( tcp_before(seq, s->reasm->s_reasm_begin) ) {
 		dmesg(M_CRIT, "wierd? %u %u", seq, s->reasm->s_reasm_begin);
 		return 0;
 	}
 
-	if ( unlikely(tcp_after(seq, s->reasm->s_contig.p_seq)) ) {
+	if ( unlikely(tcp_after(seq, s->reasm->s_contig_seq)) ) {
 		/* XXX: blame */
 		dmesg(M_CRIT, "missing segment in stream %u-%u, %u rbufs",
-			s->reasm->s_contig.p_seq,
+			s->reasm->s_contig_seq,
 			seq, s->reasm->s_num_rbuf);
-		seq = s->reasm->s_contig.p_seq;
+		seq = s->reasm->s_contig_seq;
 	}
 
 	return tcp_diff(s->reasm->s_reasm_begin, seq);
@@ -642,14 +642,14 @@ static const uint8_t *do_reasm(struct tcp_sbuf *s, size_t sz)
 
 	/* FIXME: avoid buffer copy if buffer is contained in first rbuf */
 
-	if ( tcp_after(s->s_reasm_begin + sz, s->s_contig.p_seq) )
+	if ( tcp_after(s->s_reasm_begin + sz, s->s_contig_seq) )
 		return NULL;
 
 	if ( sz > buf_sz ) {
 		uint8_t *new;
 
 		new = realloc(buf, sz);
-		dmesg(M_INFO, "tcp_stream: realloc to %u bytes %p", sz, new);
+		dmesg(M_INFO, "tcp_stream: realloc to %zu bytes %p", sz, new);
 		if ( NULL == new )
 			return NULL;
 
@@ -688,12 +688,12 @@ static void munch_bytes(struct tcp_sbuf *s, size_t bytes)
 	uint32_t seq_end;
 
 	seq_end = s->s_reasm_begin + bytes;
-	assert(!tcp_after(seq_end, s->s_contig.p_seq));
+	assert(!tcp_after(seq_end, s->s_contig_seq));
 
 	list_for_each_entry_safe(buf, tmp, &s->s_bufs, r_list) {
 		if ( tcp_after(seq_end, rbuf_end_seq(buf)) ) {
-			if ( buf == s->s_contig.p_buf )
-				s->s_contig.p_buf = NULL;
+			if ( buf == s->s_contig )
+				s->s_contig = NULL;
 			rbuf_free(s, buf);
 		}else
 			break;
@@ -734,7 +734,7 @@ static size_t fill_vectors(struct tcp_sbuf *s, size_t bytes,
 		if ( left < sz )
 			sz = left;
 
-		dmesg(M_DEBUG, " vec[%u] is %u bytes", i, sz);
+		dmesg(M_DEBUG, " vec[%zu] is %zu bytes", i, sz);
 		vec[i].v_ptr = cp;
 		vec[i].v_len = sz;
 		i++;
@@ -753,8 +753,8 @@ static int assure_vbuf(struct tcp_sbuf *s, struct ro_vec **vec, size_t *numvec)
 	size_t n;
 
 	r = first_buffer(s);
-	n = tcp_diff(r->r_seq, rbuf_end_seq(s->s_contig.p_buf)) / RBUF_SIZE;
-	dmesg(M_DEBUG, "assuring %u vectors", n);
+	n = tcp_diff(r->r_seq, rbuf_end_seq(s->s_contig)) / RBUF_SIZE;
+	dmesg(M_DEBUG, "assuring %zu vectors", n);
 
 	if ( *numvec >= n )
 		return 1;
