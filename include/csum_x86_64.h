@@ -164,7 +164,6 @@ static inline uint32_t csum_partial(const void *buff, int len, uint32_t sum)
  * Returns the pseudo header checksum the input data. Result is
  * 32bit unfolded.
  */
-#if 0
 static inline uint32_t
 csum_tcpudp_nofold(uint32_t saddr, uint32_t daddr, unsigned short len,
 		   unsigned short proto, uint32_t sum)
@@ -178,25 +177,6 @@ csum_tcpudp_nofold(uint32_t saddr, uint32_t daddr, unsigned short len,
 	      "g" ((len + proto)<<8), "0" (sum));
 	return sum;
 }
-#else
-static inline uint32_t csum_tcpudp_nofold(uint32_t saddr, uint32_t daddr,
-			unsigned short len,
-			unsigned short proto,
-			uint32_t sum)
-{
-	unsigned long long s = sum;
-
-	s += saddr;
-	s += daddr;
-#if __BYTE_ORDER == __BIG_ENDIAN
-	s += proto + len;
-#else
-	s += (proto + len) << 8;
-#endif
-	s += (s >> 32);
-	return (uint32_t)s;
-}
-#endif
 
 
 /**
