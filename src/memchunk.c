@@ -113,7 +113,7 @@ static void do_cache_init(struct _mempool *p, struct _objcache *o,
 	o->o_pool = p;
 	o->o_label = label;
 
-	mesg(M_INFO, "objcache: new: %s/%s (%zu byte)",
+	mesg(M_INFO, "objcache: new: %s/%s (%u byte)",
 		p->p_label, o->o_label, o->o_sz);
 }
 

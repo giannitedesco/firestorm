@@ -11,17 +11,13 @@
 #define MEMCHUNK_MASK	(MEMCHUNK_SIZE - 1)
 
 #define MEMCHUNK_DEBUG_FREE 0
-#define MEMCHUNK_POISON 0
+#define MEMCHUNK_POISON 1
 #define MEMCHUNK_POISON_PATTERN 0x5a
 #define OBJCACHE_DEBUG_FREE 0
-#define OBJCACHE_POISON 0
+#define OBJCACHE_POISON 1
 #define OBJCACHE_POISON_PATTERN 0xa5
 
 struct _objcache {
-	/** Size of objects to allocate */
-	size_t o_sz;
-	/** Number of objects which can be packed in to one chunk */
-	unsigned int o_num;
 	/** Pointer to next object to allocate */
 	uint8_t *o_ptr;
 	/** Pointer to byte after last object in current chunk */
@@ -38,6 +34,10 @@ struct _objcache {
 	struct list_head o_list;
 	/** Text label for this objcache */
 	const char *o_label;
+	/** Number of objects which can be packed in to one chunk */
+	uint16_t o_num;
+	/** Size of objects to allocate */
+	uint16_t o_sz;
 };
 
 /* Full chunks: nowhere, c_next = NULL */
@@ -52,29 +52,29 @@ struct chunk_hdr {
 		struct {
 			struct _objcache *cache;
 			uint8_t *free_list;
-			unsigned int inuse;
 			struct list_head list;
+			uint16_t inuse;
 		}c_o;
 	};
 };
 
 struct _mempool {
 	struct chunk_hdr *p_free;
-	size_t p_numfree;
-	size_t p_reserve;
 	struct list_head p_caches;
 	struct list_head p_list;
 	const char *p_label;
+	unsigned int p_numfree;
+	unsigned int p_reserve;
 };
 
 struct _memchunk {
 	struct _mempool m_gpool;
 	struct chunk_hdr *m_hdr;
-	size_t m_size;
 	uint8_t *m_chunks;
 	struct _objcache m_self_cache;
 	struct _objcache m_pool_cache;
 	struct list_head m_pools;
+	size_t m_size;
 };
 
 #endif /* _FIRESTORM_MEMCHUNK_HEADER_INCLUDED_ */
