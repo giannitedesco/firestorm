@@ -24,7 +24,7 @@ dnl AC_SUBST(LIBTOOL_DEPS)
 
 dnl Set our cflags if we are using gcc
 if test "$GCC" = yes; then
-	CFLAGS="${CFLAGS} -Os -pipe -Wall -Wsign-compare -Wcast-align -Waggregate-return -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wmissing-noreturn -finline-functions"
+	CFLAGS="${CFLAGS} -pipe -Wall -Wsign-compare -Wcast-align -Waggregate-return -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wmissing-noreturn -finline-functions"
 	#-Wmissing-format-attribute"
 fi
 
